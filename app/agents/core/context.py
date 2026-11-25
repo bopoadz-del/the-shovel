@@ -153,24 +153,106 @@ def search_before_refusal_due(
     return bool(declines_for_lack(final_text) or _looks_like_search_preamble(final_text))
 
 
-def search_before_refusal_call(final_text: str, user_message: str, ordinal: int) -> dict[str, Any]:
-    """The search the guard runs: the thing the draft named as missing leads,
-    the question's own terms follow (missing_input.fetch_query). When the
-    draft named nothing searchable, the question itself is the query."""
-    import json
-
+def _refusal_query(final_text: str, user_message: str) -> str:
+    """What a guard round looks for: the thing the draft named as missing
+    leads, the question's own terms follow (missing_input.fetch_query).
+    When the draft named nothing searchable, the question itself."""
     from app.agents.missing_input import fetch_query, names_missing_input
 
     missing = names_missing_input(final_text)
     query = fetch_query(missing, user_message) if missing else (user_message or "").strip()
+    return query[:500]
+
+
+def search_before_refusal_call(final_text: str, user_message: str, ordinal: int) -> dict[str, Any]:
+    """The search the guard runs, on the query ``_refusal_query`` builds."""
+    import json
+
     return {
         "id": f"call_search_first_{ordinal}",
         "type": "function",
         "function": {
             "name": SEARCH_TOOL_NAME,
-            "arguments": json.dumps({"query": query[:500]}),
+            "arguments": json.dumps({"query": _refusal_query(final_text, user_message)}),
         },
     }
+
+
+#: Tool name of the encoded construction knowledge (the curated rules,
+#: thresholds and formulas, each with its own provenance). That knowledge is
+#: not in the project index, so the project search can never find it.
+KNOWLEDGE_TOOL_NAME = "construction_advisor"
+
+#: Sent after the knowledge consultation the guard ran. Says what happened
+#: in the turn and what may follow; it names no entry, value or question.
+KNOWLEDGE_FIRST_NUDGE = (
+    "The draft answer said the asked thing was not found, so the encoded "
+    "construction knowledge was consulted as well (result above). If an "
+    "entry there states what was asked, answer from it and name the source "
+    "its provenance gives, saying it comes from the encoded knowledge and "
+    "not from a project document. If no entry states it, say plainly that "
+    "it was not found in what was searched: the project documents and the "
+    "encoded knowledge."
+)
+
+
+def knowledge_before_refusal_due(
+    final_text: str,
+    *,
+    knowledge_offered: bool,
+    knowledge_consulted: bool,
+    force_synthesis: bool,
+    already_ran: bool,
+    iterations_left: int,
+) -> bool:
+    """May this declining draft end the turn before the encoded knowledge
+    has been consulted?
+
+    D5: a draft saying the asked thing is not in the project documents was
+    let stand after a project search, which cannot reach the encoded
+    knowledge. The decision reads only turn state plus the same pure text
+    test the project search round uses, bounded to ONE round per turn:
+
+      * the draft declines for lack of the asked thing;
+      * the knowledge tool is offered this turn (on the agent's roster, not
+        excluded) and has not been called yet this turn;
+      * the turn is not in forced synthesis, the round has not run, and
+        there is an iteration left to answer from its result.
+
+    No project is needed: the knowledge is the platform's, not the project's.
+    """
+    from app.agents.missing_input import declines_for_lack
+
+    if already_ran or force_synthesis or knowledge_consulted or not knowledge_offered:
+        return False
+    if iterations_left < 2:
+        return False
+    return bool(declines_for_lack(final_text))
+
+
+def knowledge_before_refusal_call(final_text: str, user_message: str, ordinal: int) -> dict[str, Any]:
+    """The knowledge consultation the guard runs, on the query the project
+    search round uses."""
+    import json
+
+    return {
+        "id": f"call_knowledge_first_{ordinal}",
+        "type": "function",
+        "function": {
+            "name": KNOWLEDGE_TOOL_NAME,
+            "arguments": json.dumps({"query": _refusal_query(final_text, user_message)}),
+        },
+    }
+
+
+def _tool_offered(self, name: str, project_id: str | None, excluded_tools: set | frozenset | None) -> bool:
+    """Is ``name`` among the tools this agent offers the model this turn?"""
+    if name in (excluded_tools or ()):
+        return False
+    return any(
+        (t.get("function") or {}).get("name") == name
+        for t in self.tool_definitions(project_id=project_id)
+    )
 
 
 async def _search_before_refusal(
@@ -200,7 +282,7 @@ async def _search_before_refusal(
     )
 
     draft = _sanitize_final_text(raw_content, messages=messages, tool_results=tool_results)
-    if not search_before_refusal_due(
+    if search_before_refusal_due(
         draft,
         has_project=bool(project_id),
         search_calls=search_calls,
@@ -210,32 +292,52 @@ async def _search_before_refusal(
         already_ran=bool(state.get("ran")),
         iterations_left=iterations_left,
     ):
+        try:
+            ready = await _project_is_rag_ready_off_process(project_id)
+        except Exception:  # noqa: BLE001 - unknown readiness: no project search
+            _LOG.warning("search-before-refusal readiness check failed", exc_info=True)
+            ready = False
+        if ready:
+            _LOG.info("search-before-refusal: draft declines with search unused; searching")
+            state["ran"] = state["nudge"] = True
+            return search_before_refusal_call(draft, user_message, search_calls + 1)
+    # The project search is done or cannot run. A refusal still waits on the
+    # encoded knowledge, which that search cannot reach (D5).
+    if not knowledge_before_refusal_due(
+        draft,
+        knowledge_offered=self._tool_offered(KNOWLEDGE_TOOL_NAME, project_id, excluded_tools),
+        knowledge_consulted=any(
+            isinstance(r, dict) and r.get("name") == KNOWLEDGE_TOOL_NAME for r in tool_results
+        ),
+        force_synthesis=force_synthesis,
+        already_ran=bool(state.get("kb_ran")),
+        iterations_left=iterations_left,
+    ):
         return None
-    try:
-        if not await _project_is_rag_ready_off_process(project_id):
-            return None
-    except Exception:  # noqa: BLE001 - unknown readiness: let the draft stand
-        _LOG.warning("search-before-refusal readiness check failed", exc_info=True)
-        return None
-    _LOG.info("search-before-refusal: draft declines with search unused; searching")
-    state["ran"] = state["nudge"] = True
-    return search_before_refusal_call(draft, user_message, search_calls + 1)
+    _LOG.info("knowledge-before-refusal: draft declines with knowledge unconsulted; consulting")
+    state["kb_ran"] = state["kb_nudge"] = True
+    return knowledge_before_refusal_call(draft, user_message, search_calls + 1)
 
 
 def _search_first_nudges(self, state: dict[str, Any]) -> list[dict[str, Any]]:
-    """The instruction owed after the guard's search result, once."""
-    if not state.get("nudge"):
-        return []
-    state["nudge"] = False
+    """The instruction owed after each guard round's result, once per round."""
     # The platform wrote this bubble, not the operator: it carries the
     # platform marker so every operator-text reader (_latest_operator_ask,
     # _operator_user_text, the provenance tool-run parser) skips it.
     from app.agents.runtime import _PREDISPATCH_PREFIX
 
-    return [{
-        "role": "user",
-        "content": f"{_PREDISPATCH_PREFIX} {SEARCH_TOOL_NAME} ran. {SEARCH_FIRST_NUDGE}",
-    }]
+    owed: list[dict[str, Any]] = []
+    for flag, tool_name, nudge in (
+        ("nudge", SEARCH_TOOL_NAME, SEARCH_FIRST_NUDGE),
+        ("kb_nudge", KNOWLEDGE_TOOL_NAME, KNOWLEDGE_FIRST_NUDGE),
+    ):
+        if state.get(flag):
+            state[flag] = False
+            owed.append({
+                "role": "user",
+                "content": f"{_PREDISPATCH_PREFIX} {tool_name} ran. {nudge}",
+            })
+    return owed
 
 
 def _intent_hard_excludes(self, messages: list[dict[str, Any]]) -> tuple[set, str]:
@@ -261,6 +363,14 @@ def _intent_hard_excludes(self, messages: list[dict[str, Any]]) -> tuple[set, st
         excluded |= _inline_boq_hard_excludes(op)
     except Exception:  # noqa: BLE001
         _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # A template tool that cannot take the ask as written is not offered:
+    # the model must not reach a deliverable the predispatch already declined.
+    try:
+        from app.core.action_router import template_actions_declining
+        op = _latest_operator_ask(messages) or ""
+        excluded |= template_actions_declining(op)
+    except Exception:  # noqa: BLE001
+        _LOG.debug("template hard-exclude skipped", exc_info=True)
     return excluded, op
 
 
@@ -305,6 +415,7 @@ def _build_messages(
         if cm_fragment:
             msgs.append({"role": "system", "content": cm_fragment})
 
+    earlier_asks: list[str] = []
     for turn in (history or [])[-MAX_HISTORY_TURNS:]:
         role = (turn.get("role") or "user").lower()
         if role not in ("user", "assistant"):
@@ -313,5 +424,15 @@ def _build_messages(
         if not content:
             continue
         msgs.append({"role": role, "content": content})
+        if role == "user":
+            earlier_asks.append(content)
+    # A follow-up that only changes figures the user stated earlier gets the
+    # question it amends and the changed inputs, so it is worked again rather
+    # than answered from the earlier (now out of date) answer in the thread.
+    from app.agents.amended_inputs import amendment_note
+    from app.agents.runtime import _unwrap_rag_folded_operator_text as _operator
+    note = amendment_note(_operator(user_message), [_operator(a) for a in earlier_asks])
+    if note:
+        msgs.append({"role": "system", "content": note})
     msgs.append({"role": "user", "content": user_message})
     return msgs

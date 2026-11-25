@@ -136,6 +136,32 @@ def available_assets() -> dict[str, list[str]]:
     return {asset: list(ccys.keys()) for asset, ccys in _CARD["cards"].items()}
 
 
+def card_source() -> str:
+    """The rate-card's own provenance line, so a priced answer can state it."""
+    meta = _CARD.get("_meta") or {}
+    return str(meta.get("source") or "")
+
+
+def resolve_card(asset_type: Any, currency: Any = None) -> tuple[str | None, str | None]:
+    """Match a caller's asset type and currency to a card in the rate-card.
+
+    Matching ignores case and surrounding blanks, because a chat caller writes
+    "data center" for the card "Data Center". With no currency given, the
+    card's first currency is used, as the price-boq endpoint does. Returns
+    ``(asset, currency)``; either is None when it does not name a card, and the
+    caller reports ``available_assets()`` instead of guessing one."""
+    want_asset = str(asset_type or "").strip().casefold()
+    asset = next((a for a in _CARD["cards"] if a.casefold() == want_asset), None)
+    if asset is None:
+        return None, None
+    currencies = list(_CARD["cards"][asset].keys())
+    want_ccy = str(currency or "").strip().casefold()
+    if not want_ccy:
+        return asset, (currencies[0] if currencies else None)
+    ccy = next((c for c in currencies if c.casefold() == want_ccy), None)
+    return asset, ccy
+
+
 def _build_lookup(asset: str, ccy: str) -> tuple[dict[tuple[str, str], tuple[float, int]],
                                                   dict[str, list[tuple[float, int, str]]],
                                                   list[tuple[float, int, str]]]:
@@ -180,6 +206,29 @@ def _unit_class(unit: str) -> str | None:
     return _UNIT_CLASS.get(unit)
 
 
+# Units of one class are not one unit: a mass rate per tonne is 1,000 times a
+# rate per kilogram. A unit listed here carries its size in the class's base
+# unit, so a pooled rate can be restated per the line's unit before the median.
+# A unit with no listed size (e.g. 'ton', metric or short) is never converted:
+# it pools only with itself, and with no other scaled unit of its class.
+_UNIT_SCALE: dict[str, float] = {
+    "kg": 1.0, "t": 1000.0, "mt": 1000.0, "tonne": 1000.0,
+}
+
+
+def _rate_factor(line_unit: str, pooled_unit: str) -> float | None:
+    """Multiplier restating a rate per ``pooled_unit`` as a rate per
+    ``line_unit`` (same class assumed). None when the two cannot be compared
+    because exactly one of them has a known size."""
+    line_size = _UNIT_SCALE.get(line_unit)
+    pooled_size = _UNIT_SCALE.get(pooled_unit)
+    if line_size is None and pooled_size is None:
+        return 1.0  # no sizes known in this class: legacy same-class pooling
+    if line_size is None or pooled_size is None:
+        return None
+    return line_size / pooled_size
+
+
 def _lookup(cat, unit, exact, bycat, byasset):
     """Resolve a rate for (category, unit). Returns (rate, n, rate_source).
 
@@ -202,7 +251,15 @@ def _lookup(cat, unit, exact, bycat, byasset):
     def _pool(vals):
         if cls is None:
             return vals
-        return [v for v in vals if _unit_class(v[2]) == cls]
+        pooled = []
+        for rate, n, pooled_unit in vals:
+            if _unit_class(pooled_unit) != cls:
+                continue
+            factor = _rate_factor(unit, pooled_unit)
+            if factor is None:
+                continue
+            pooled.append((rate * factor, n, pooled_unit))
+        return pooled
 
     pool = _pool(bycat.get(cat, []))
     if pool:

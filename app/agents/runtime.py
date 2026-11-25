@@ -2454,6 +2454,31 @@ def _message_wants_cash_flow(text: str) -> bool:
     ))
 
 
+def _message_supplies_period_series(text: str) -> bool:
+    """True when the message writes out its own run of three or more figures.
+    One reader for every path: ``app.core.action_router``."""
+    from app.core.action_router import message_supplies_period_series
+    return message_supplies_period_series(text)
+
+
+def _message_wants_cash_flow_forecast(text: str) -> bool:
+    """True when ``cash_flow_forecast`` can take the ask as written.
+
+    That tool builds a TEMPLATE curve from one money total and a duration.
+    When the user has typed the period-by-period figures themselves, the
+    template can neither read them (it stops on "I need the contract
+    value" when no single money total is written) nor honour them (it
+    would print its own curve, not theirs). Such an ask is a calculation
+    on the user's own series and is left to the calculators and the
+    model. The cash-flow wording still counts as cash flow everywhere else
+    (``_message_wants_cash_flow``), so other drafts stay excluded.
+    """
+    if not _message_wants_cash_flow(text):
+        return False
+    from app.core.action_router import template_declines_ask
+    return not template_declines_ask("cash_flow_forecast", text)
+
+
 def _message_wants_om_manual(text: str) -> bool:
     return bool(re.search(
         r"operations and maintenance|o\s*&\s*m\b|o and m|maintenance manual",
@@ -2760,7 +2785,7 @@ async def _predispatch_remaining_deliverables(
     candidates = (
         (
             "AGENT_CASH_FLOW_PREDISPATCH",
-            _message_wants_cash_flow,
+            _message_wants_cash_flow_forecast,
             "cash_flow_forecast",
             _format_cash_flow,
             "Present this cash-flow S-curve in full. Do not run drawing_qto.",
@@ -5601,7 +5626,7 @@ def _forced_specific_tool(messages: list[dict[str, Any]], available: set) -> str
         return "resource_histogram"
     if "look_ahead" in available and _message_wants_look_ahead(text):
         return "look_ahead"
-    if "cash_flow_forecast" in available and _message_wants_cash_flow(text):
+    if "cash_flow_forecast" in available and _message_wants_cash_flow_forecast(text):
         return "cash_flow_forecast"
     wants_procurement = _message_wants_procurement_list(text)
     if "procurement_list_generator" in available and wants_procurement:
@@ -9667,10 +9692,24 @@ _DERIVATION_START_RE = re.compile(rf"(?<![\w.]){_DERIVATION_NUM}")
 _DERIVATION_TERM_RE = re.compile(
     rf"{_DERIVATION_NUM}(?:\s*{_DERIVATION_OP}\s*{_DERIVATION_NUM})*"
 )
-_DERIVATION_PLUS_RE = re.compile(r"\s*\+\s*")
+# An addend is added or taken away. Working that nets deductions off a
+# gross ("2,880,000 − 144,000 − 288,000 = …") is a sum as much as one that
+# adds them, and reading only "+" left every such line unchecked. The hyphen
+# and the minus sign count; an en or em dash does not (a range or an aside).
+_DERIVATION_PLUS_RE = re.compile(r"\s*([+\-−])\s*")
+# A currency code or sign written before a figure ("= SAR 3,600",
+# "+ USD 900", "= $ 12") is the unit of that figure, not words that end the
+# working. Three capitals is the shape of a currency code; nothing names one.
+_DERIVATION_CURRENCY_RE = re.compile(r"(?:[A-Z]{3}|US\$|[$€£¥])\s*(?=\d)")
 _DERIVATION_EQ_RE = re.compile(r"\s*=(?!=)\s*")
-_DERIVATION_NUMBER_RE = re.compile(rf"{_DERIVATION_NUM}(?![\d.])")
-_DERIVATION_HAS_OP_RE = re.compile(rf"{_DERIVATION_OP}|\+")
+# A figure ends where no further digit group follows it. The old end, "not
+# followed by a digit or a point", refused "= 23,436." at the full stop that
+# ends the sentence and backtracked to "23" -- then accused correct working
+# ("75.60 x 310 is 23,436, not 23"). A point or comma ends the figure unless
+# a digit follows it.
+_DERIVATION_NUMBER_RE = re.compile(rf"{_DERIVATION_NUM}(?!\d|[.,]\d)")
+_DERIVATION_HAS_OP_RE = re.compile(rf"{_DERIVATION_OP}|[+\-−]")
+_DERIVATION_SUM_OP_RE = re.compile(r"[+\-−]")
 _DERIVATION_MAX_NOTES = 3
 
 
@@ -9757,6 +9796,12 @@ def _eval_single_operator_term(expr: str) -> float | None:
     return computed
 
 
+def _skip_currency(text: str, pos: int) -> int:
+    """``pos`` moved past a currency code or sign that leads a figure."""
+    match = _DERIVATION_CURRENCY_RE.match(text, pos)
+    return match.end() if match else pos
+
+
 def _read_term(text: str, pos: int) -> tuple[int, float | None] | None:
     match = _DERIVATION_TERM_RE.match(text, pos)
     if match is None:
@@ -9788,14 +9833,16 @@ def _read_side(
         plus = _DERIVATION_PLUS_RE.match(text, pos)
         if plus is None:
             break
-        nxt = _read_term(text, plus.end())
+        nxt = _read_term(text, _skip_currency(text, plus.end()))
         if nxt is None:
             break
         pos, nxt_val = nxt
         if val is None or nxt_val is None:
             val = None
-        else:
+        elif plus.group(1) == "+":
             val = val + nxt_val
+        else:
+            val = val - nxt_val
     return (text[start:pos], val), pos
 
 
@@ -9820,23 +9867,42 @@ def _derivation_chain_mismatches(
         eq = _DERIVATION_EQ_RE.match(text, pos)
         if eq is None:
             break
-        allow_sum = "+" in sides[-1][0]
-        nxt = _read_side(text, eq.end(), allow_sum=allow_sum)
+        allow_sum = _DERIVATION_SUM_OP_RE.search(sides[-1][0]) is not None
+        nxt = _read_side(text, _skip_currency(text, eq.end()), allow_sum=allow_sum)
         if nxt is None:
             break
         sides.append(nxt[0])
         pos = nxt[1]
     if len(sides) < 2:
         return None
-    for (lexpr, lval), (_rexpr, rval) in zip(sides, sides[1:]):
+    for (lexpr, lval), (rexpr, rval) in zip(sides, sides[1:]):
         if lval is None or rval is None:
             continue
         if _DERIVATION_HAS_OP_RE.search(lexpr) is None:
             continue
         tolerance = max(abs(lval) * 0.005, 0.01)
-        if abs(rval - lval) > tolerance:
-            out.append((lexpr.strip(), rval, lval))
+        if abs(rval - lval) <= tolerance:
+            continue
+        if _derivation_percent_points(lexpr, rexpr) and abs(rval * 100.0 - lval) <= tolerance:
+            continue
+        out.append((lexpr.strip(), rval, lval))
     return pos
+
+
+def _derivation_percent_points(lexpr: str, rexpr: str) -> bool:
+    """True when a lone result's percent sign may name points, not hundredths.
+
+    "24/30 = 80%" states hundredths (0.8); "24 + 21 + 24 = 69.0 %" states
+    points (69). When the left side carries no percent of its own, both
+    readings are the working's, so a result that agrees under either is not
+    accused -- the same rule that skips a mixed "2 x 3 / 4" rather than guess.
+    A percent factor on the left ("5% x 200 = 10") fixes the scale: hundredths.
+    """
+    return (
+        "%" in rexpr
+        and "%" not in lexpr
+        and _DERIVATION_HAS_OP_RE.search(rexpr) is None
+    )
 
 
 def derivation_mismatches(text: str) -> list[tuple[str, float, float]]:
@@ -13166,6 +13232,7 @@ class Agent:
     _fetch_named_missing_input = _core_context._fetch_named_missing_input
     _search_before_refusal = _core_context._search_before_refusal
     _search_first_nudges = _core_context._search_first_nudges
+    _tool_offered = _core_context._tool_offered
     _intent_hard_excludes = _core_context._intent_hard_excludes
 
     chat_stream = _core_loop.chat_stream

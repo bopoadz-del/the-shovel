@@ -4,7 +4,9 @@ Owner order (BUILD 0, 15 Nov). Every rule is structural; none names a
 question, a formula, a project or a document.
 
 1. ANSWER FIRST. On a turn that computed, the first line carries a figure.
-   Narration of what was searched never opens an answer.
+   Narration of what was searched never opens an answer, on any turn: a
+   narration lead that is process only goes (one that reports an absence
+   is the refusal itself and stays, rule 5).
 2. LENGTH FOLLOWS THE QUESTION. Offers of further help, closing summaries,
    restatements of the question and "notes" blocks are padding and go. A
    note survives only when it is an assumption the result depends on: a line
@@ -67,14 +69,93 @@ _SOURCE_LINE_RE = re.compile(
 
 _FILE_EXTS = r"pdf|docx?|xlsx?|xlsm|csv|txt|md|pptx?|dwg|dxf|ifc|xer|xml|json|zip|rar|png|jpe?g"
 #: A parenthesised or bracketed citation that names a file:
-#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ.xlsx]``.
-_INLINE_FILE_CITE_RE = re.compile(
-    rf"[ \t]*[(\[](?:[ \t]*sources?[ \t]*:)?[ \t]*(?P<body>[^()\[\]\n]{{0,200}}?\.(?:{_FILE_EXTS})\b[^()\[\]\n]{{0,60}}?)[)\]]",
-    re.IGNORECASE,
-)
+#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ (Priced).xlsx]``.
+_SOURCE_PREFIX_RE = re.compile(r"^[ 	]*sources?[ 	]*:", re.IGNORECASE)
+_CITE_BODY_MAX = 260
+_CLOSE = {"(": ")", "[": "]"}
+
+
+def _group_end(line: str, start: int) -> int:
+    """Index of the bracket closing the one at ``start``, or -1. Round and
+    square brackets nest inside each other; a mismatched close ends the
+    search (the group is not a citation)."""
+    stack = [_CLOSE[line[start]]]
+    for i in range(start + 1, min(len(line), start + 2 + _CITE_BODY_MAX)):
+        ch = line[i]
+        if ch in _CLOSE:
+            stack.append(_CLOSE[ch])
+        elif ch in ")]":
+            if ch != stack.pop():
+                return -1
+            if not stack:
+                return i
+    return -1
+
+
+def _names_a_file(body: str) -> bool:
+    """True when the group's own text (not a group nested in it) carries a
+    file extension: ``Bill (Priced).xlsx`` names a file; ``the bill [Bill.xlsx]
+    shows`` does not, its nested group does."""
+    depth = 0
+    flat = []
+    for ch in body:
+        if ch in ")]":
+            depth = max(depth - 1, 0)
+        flat.append(ch if depth == 0 else " ")
+        if ch in _CLOSE:
+            depth += 1
+    return bool(_FILE_NAME_END_RE.search("".join(flat)))
+
+
+def _inline_citations(line: str, markers: "_Markers") -> str:
+    """Every bracketed citation that names a file, as its marker. The group
+    is read by its balanced brackets, so a file name that carries its own
+    brackets (``Bill of Quantities (Priced).xlsx``, ``Drawings (6 of 7).pdf``)
+    is one citation, not text the recogniser stops at."""
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        end = _group_end(line, i) if ch in _CLOSE else -1
+        if end > 0:
+            inner = line[i + 1:end]
+            labelled = bool(_SOURCE_PREFIX_RE.match(inner))
+            body = _SOURCE_PREFIX_RE.sub("", inner, count=1).strip()
+            if body and len(body) <= _CITE_BODY_MAX and _names_a_file(body):
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + markers.marker(body)]
+                i = end + 1
+                continue
+            if labelled and len(body) <= _CITE_BODY_MAX:
+                # A group the writer labelled as its source but that names no
+                # file ("[source: Bill of Quantities, Bill No. 4]", "[source:
+                # 1]") is still a citation, never prose: it becomes the marker
+                # of the one Sources row its words name, or, when no single
+                # row backs it, it leaves the text -- an attribution nothing
+                # in the turn backs is not printed, and none is guessed.
+                tag = markers.for_title(body)
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + tag] if tag else [head]
+                i = end + 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out).rstrip()
+
+
 _PAGE_RE = re.compile(r"(?:,|\s)\s*(?P<sec>(?:pp?\.|pages?|section|clause|§)\s*[\w.\-–, ]+?)\s*$", re.IGNORECASE)
 _PARENS_TAIL_RE = re.compile(r"\((?P<inner>[^()]*)\)\s*$")
 _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
+#: What may stand between a file name and the locator after it, in any
+#: script: Latin, Arabic and full-width commas and semicolons, a colon, a
+#: dash, a space. Punctuation only, no word of any language.
+_LOCATOR_LEAD = " \t,;:،؛，；—–-"
+#: The colons a label ends with; a file name holds none.
+_LABEL_COLONS = ":："
+#: Where a document named in words ends and its locator begins: a comma or
+#: semicolon of any script, or a dash with space on both sides. Punctuation
+#: only, no word of any language.
+_TITLE_SPLIT_RE = re.compile(r"[ \t]*[,;،؛，；][ \t]*|[ \t]+[—–-][ \t]+")
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -101,11 +182,21 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     named = None
     for named in _FILE_NAME_END_RE.finditer(text):
         pass
-    start = named.end() if named else 0
-    sec = _PAGE_RE.search(text, start) if kind == "document" else None
-    if sec:
-        section = sec.group("sec").strip()
-        text = text[: sec.start()].strip().rstrip(",")
+    if named and kind == "document":
+        # Read by structure, so it holds in every language. A file name
+        # holds no colon, so a label ahead of it ("Source:", or the same
+        # word in Arabic) ends at the last colon before the name. The name
+        # ends at its extension, so what follows it, past the separating
+        # punctuation, is its locator, whatever words it is written in.
+        head = text[: named.end()]
+        cut = max(head.rfind(c) for c in _LABEL_COLONS)
+        section = text[named.end():].strip(_LOCATOR_LEAD).strip()
+        text = head[cut + 1:].strip()
+    elif kind == "document":
+        sec = _PAGE_RE.search(text)
+        if sec:
+            section = sec.group("sec").strip()
+            text = text[: sec.start()].strip().rstrip(",")
     entry: dict[str, Any] = {
         "document": text,
         "section": section,
@@ -127,7 +218,9 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _name_key(name: str) -> str:
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE)
-    return re.sub(r"[^a-z0-9]+", "", stem.lower())
+    # Letters and digits of any script: an Arabic name keys by its own
+    # letters, not to the empty key every non-Latin name used to share.
+    return re.sub(r"[\W_]+", "", stem.casefold())
 
 
 @dataclass
@@ -146,6 +239,24 @@ class _Markers:
         entry["marker"] = len(self.entries) + 1
         self.entries.append(entry)
         return f"[{entry['marker']}]"
+
+    def for_title(self, body: str) -> str:
+        """The marker for a citation that names its document in words, not
+        by file name: the one Sources row whose name holds those words. The
+        whole text is tried first, then its lead before the first separator
+        with the rest as the locator. A text with no word in it, or whose
+        words fit no row or more than one document, has no marker ("")."""
+        parts = _TITLE_SPLIT_RE.split(body.strip(), maxsplit=1)
+        lead, rest = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+        for title, section in ((body.strip(), ""), (lead, rest)):
+            key = _name_key(title)
+            if not title or not _doc_words(title):
+                continue
+            hits = [r for r in self.rows if key and key in _name_key(str(r.get("doc_name") or ""))]
+            if len({str(r.get("doc_name")) for r in hits}) == 1:
+                row = hits[0]
+                return self.for_row(dict(row, page_or_section=section or row.get("page_or_section") or ""))
+        return ""
 
     def for_row(self, row: dict[str, Any]) -> str:
         """The marker for one evidence row (its document and section)."""
@@ -166,7 +277,7 @@ def _doc_words(name: str) -> str:
     """A document's name as words for a sentence (its file extension off);
     empty when the name holds no word at all."""
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE).strip()
-    return stem if re.search(r"[A-Za-z]{2,}", stem) else ""
+    return stem if re.search(r"[^\W\d_]{2,}", stem) else ""
 
 
 def _nameable(c: dict[str, Any]) -> bool:
@@ -221,8 +332,10 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     * A sentence that states only ONE of a conflict's differing values for
       that thing. Read by the typed values (``evidence_conflicts.extract``/
       ``same``, citation spans blanked); a sentence about another thing (none
-      of the thing's words) and a sentence stating two or more of the values
-      stay.
+      of the thing's words), a sentence stating two or more of the values and
+      a sentence that also states a typed value which is none of the
+      conflict's values (a result worked from it, a second quantity: news the
+      conflict line does not carry) stay.
     * A sentence asserting that the documents agree
       (``evidence_conflicts.asserts_agreement``: an agreement word with no
       negation just before it) about that thing: it states one or more of the
@@ -249,7 +362,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
-        sentences = _SENTENCE_RE.findall(line[len(lead):])
+        sentences = _sentences(line[len(lead):])
         kept = []
         for sent in sentences:
             vals = extract(sent)
@@ -258,7 +371,12 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
             for kind, classes, thing, docs in rules:
                 hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
                 about = bool(thing & _terms(sent))
-                if len(hits) == 1 and about:
+                # A typed value the conflict line does not carry (a result
+                # worked from the value, a second quantity) is news, not a
+                # restatement: only the competing value is superseded, so
+                # the sentence holding it stays.
+                more = any(not any(same(x, k) for k in classes) for x in vals)
+                if len(hits) == 1 and about and not more:
                     gone = True
                 elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
                     gone = True
@@ -295,7 +413,7 @@ def _move_citations(text: str, markers: _Markers) -> str:
     for line in lines:
         m = _SOURCE_LINE_RE.match(line)
         if not m:
-            out.append(_INLINE_FILE_CITE_RE.sub(lambda c: " " + markers.marker(c.group("body")), line).rstrip())
+            out.append(_inline_citations(line, markers))
             continue
         tags = [t for t in dict.fromkeys(markers.marker(p) for p in _split_parts(m.group("body"))) if t]
         if not tags:
@@ -341,9 +459,62 @@ _LEAD_IN_RE = re.compile(
     r"^(?:according\s+to|based\s+on|from|per|in)\s+(?:the\s+)?[^,]*?(?:" + "|".join(_MACHINE_TERMS) + r")[^,]*,\s*",
     re.IGNORECASE,
 )
-#: A sentence ends at ``.``/``!``/``?`` followed by space or the end; a point
-#: inside a figure (``12.5``) or a name (``p.12``) does not end it.
-_SENTENCE_RE = re.compile(r"(?:[^.!?\n]|[.!?](?![.!?]*(?:\s|$)))+(?:[.!?]+(?=\s|$)|$)")
+_OPEN_MARKS = {"(": ")", "[": "]", "“": "”"}
+_CLOSE_MARKS = {v: k for k, v in _OPEN_MARKS.items()}
+
+
+def _paired(text: str) -> set[str]:
+    """The opening marks whose pairs close in ``text`` (a straight ``"``
+    pairs with itself). A mark left open is not trusted to hold a sentence
+    together: an unpaired mark is ordinary punctuation."""
+    out = {o for o, c in _OPEN_MARKS.items() if text.count(o) == text.count(c)}
+    if text.count('"') % 2 == 0:
+        out.add('"')
+    return out
+
+
+def _sentences(text: str) -> list[str]:
+    """The sentences of one line. A sentence ends at ``.``/``!``/``?``
+    followed by space or the end; a point inside a figure (``12.5``) or a name
+    (``p.12``) does not end it, and neither does one inside a paired bracket
+    or quotation -- ``(e.g. "A", "B")`` is part of the sentence around it, so
+    no rule that keeps or drops whole sentences can leave half of a quoted or
+    bracketed clause standing as a sentence of its own."""
+    paired = _paired(text)
+    out: list[str] = []
+    stack: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"' and '"' in paired:
+            if stack and stack[-1] == '"':
+                stack.pop()
+            else:
+                stack.append('"')
+        elif ch in _OPEN_MARKS and ch in paired:
+            stack.append(ch)
+        elif ch in _CLOSE_MARKS and _CLOSE_MARKS[ch] in paired and stack and stack[-1] == _CLOSE_MARKS[ch]:
+            stack.pop()
+        # A stop ends the sentence; so does a closing mark right after one
+        # (``"... stop." Then``).
+        if ch in ".!?" or (i and text[i - 1] in ".!?" and (ch == '"' or ch in _CLOSE_MARKS)):
+            j = i + 1
+            while j < n and text[j] in ".!?":
+                j += 1
+            if not stack and (j == n or text[j].isspace()):
+                if text[start:j].strip():
+                    out.append(text[start:j])
+                start = j
+            i = j
+            continue
+        i += 1
+    if text[start:].strip():
+        out.append(text[start:])
+    return out
+
+
 _FIGURE_RE = re.compile(r"\d")
 _MARKER_RE = re.compile(r"\[\d+\]")
 #: A figure with the unit word that follows it: ``45 kN·m``, ``12.6 m³``, ``10%``.
@@ -384,6 +555,87 @@ def _strip_machinery_sentence(sentence: str) -> str:
     return s
 
 
+#: A word that says a thing came out of the search, used to describe it:
+#: "the retrieved rows", "text retrieved from it". Such a sentence often
+#: carries meaning a reader needs (what was absent, what the answer rests
+#: on), so the word is rewritten in place rather than the sentence dropped.
+_SEARCH_PARTICIPLE = r"(?:retrieved|fetched)"
+#: Where a noun phrase after the participle ends: punctuation, a citation,
+#: or a word that starts a clause or a prepositional phrase.
+_NP_END = (
+    r"(?=\s*(?:[\[\](),.;:!?\"“”—–]|$)|\s+(?:for|from|of|in|on|at|by|with|to|under|about|is|are|was|were|be|been|"
+    r"came|come|comes|show|shows|showed|contain|contains|cover|covers|give|gives|hold|holds|list|lists|"
+    r"and|or|but|that|which|where|so|as)\b)"
+)
+_NP_FUNCTION_WORD = (
+    r"(?:for|from|of|in|on|at|by|with|to|under|about|out|is|are|was|were|be|been|and|or|but|that|which|it|them)\b"
+)
+#: Adjective use: the participle stands before its noun phrase, which never
+#: opens on a function word.
+_PARTICIPLE_NP_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"\s+(?!" + _NP_FUNCTION_WORD + r")"
+    r"((?:[A-Za-z][\w'-]*\s+){0,2}?[A-Za-z][\w'-]*)" + _NP_END,
+    re.IGNORECASE,
+)
+#: After its noun, pointing at a document the sentence already names (a
+#: pronoun or a citation): ``the note retrieved from it``.
+_PARTICIPLE_FROM_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"(?=\s+(?:from|out\s+of)\s+(?:it|them|this|that|these|those|\[))", re.IGNORECASE)
+#: What may stand before an adjective use. After a form of "be" or "have"
+#: the participle is a verb ("the sample was retrieved"), not the search.
+_DETERMINER_BEFORE_RE = re.compile(
+    r"(?:^|[.!?:;(\-–—]\s*|\b(?:the|these|those|this|that|any|all|no|its|their|our|of|in|from|among)\s+)$",
+    re.IGNORECASE,
+)
+#: A search-unit noun is itself machinery; in the reader's words it is a document.
+_SEARCH_UNIT_RE = re.compile(r"\b(?:excerpt|passage|chunk|snippet)(s?)\b|\bcontext\b", re.IGNORECASE)
+#: Quoted text and bracketed spans (citations, file names) are the documents'
+#: own words: they are never rewritten.
+_VERBATIM_RE = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|\[[^\]\n]*\]")
+
+
+def _reader_unit(m: re.Match) -> str:
+    """A search-unit noun as the reader names it: a document."""
+    if m.group(0).lower() == "context":
+        return "documents"
+    return "document" + (m.group(1) or "")
+
+
+def _reader_noun(phrase: str) -> str:
+    return _SEARCH_UNIT_RE.sub(lambda m: _reader_unit(m), phrase)
+
+
+def _participle_np(m: re.Match) -> str:
+    """One adjective use of a search participle, in the reader's words."""
+    if not _DETERMINER_BEFORE_RE.search(m.string[:m.start()]):
+        # After a verb such as "was": the participle is a verb, not the search.
+        return m.group(0)
+    head = _reader_noun(m.group(1)) + " I read"
+    # A participle that opened a sentence hands its capital to the noun.
+    return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
+
+
+def _rewrite_search_words(segment: str) -> str:
+    segment = _PARTICIPLE_FROM_RE.sub("read", segment)
+    return _PARTICIPLE_NP_RE.sub(lambda m: _participle_np(m), segment)
+
+
+def _search_words_in_place(text: str) -> str:
+    """Each search participle in the reader's words, everywhere outside
+    quotes and brackets: ``not in the retrieved rows`` becomes ``not in the
+    rows I read`` -- the scope of the claim stays, the machinery goes, and a
+    negative sentence still says what was absent. A sentence is never
+    dropped here and no figure is touched."""
+    out: list[str] = []
+    last = 0
+    for m in _VERBATIM_RE.finditer(text):
+        out.append(_rewrite_search_words(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_rewrite_search_words(text[last:]))
+    return "".join(out)
+
+
 def _strip_machinery(text: str) -> str:
     out: list[str] = []
     for line in text.split("\n"):
@@ -392,14 +644,16 @@ def _strip_machinery(text: str) -> str:
             continue
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
         body = line[len(lead):]
-        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _SENTENCE_RE.findall(body)) if k]
+        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _sentences(body)) if k]
         new = lead + " ".join(kept)
         if _figures(_MACHINE_RE.sub("", line)) - _figures(new):
             # Removing the machinery would lose a figure: the line stays as written.
             out.append(line)
         elif kept:
             out.append(new)
-    return "\n".join(out)
+    # What stays is in the reader's words: a search participle left in a kept
+    # sentence (a refusal keeps its sentences) is rewritten, not kept.
+    return "\n".join(_search_words_in_place(line) for line in out)
 
 
 # ── Rule 2: padding ─────────────────────────────────────────────────────────
@@ -466,7 +720,7 @@ def _drop_padding(text: str, computed: bool = True) -> str:
             continue
         if in_notes and not _changes_result(line, working, computed):
             continue
-        sentences = [s.strip() for s in _SENTENCE_RE.findall(bare)] or [bare]
+        sentences = [s.strip() for s in _sentences(bare)] or [bare]
         kept = [s for s in sentences if not (_OFFER_RE.match(s) or _RESTATE_RE.match(s))]
         if not kept:
             continue
@@ -479,6 +733,49 @@ def _drop_padding(text: str, computed: bool = True) -> str:
             line = lead + " ".join(kept)
         out.append(line)
     return "\n".join(out)
+
+
+#: A sentence addressed to the reader that asks them for the next step:
+#: an imperative to supply or direct something ("Upload the priced BOQ and
+#: I'll price it", "point me at that file"), optionally after a condition
+#: ("If the pipework is billed elsewhere, point me at that file and I'll pull
+#: the line") or a "please"; or the writer's own offer made conditional on
+#: the reader ("I can pull the line if you send the file").
+#: An imperative to supply something counts only when the sentence names
+#: the writer as the one who receives it or acts next ("... and I'll pull
+#: the line", "send it to me"): "Send the notice to the Engineer" is an
+#: instruction the answer gives, not a request for the writer.
+_REQUEST_RE = re.compile(
+    r"^(?:(?:if|once|when|where|should)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?(?:please[ \t]+|just[ \t]+)?"
+    r"(?:(?:point|tell|give|show)\s+me|let\s+me\s+know"
+    r"|(?:upload|re-?upload|share|send|provide|attach|forward)\b[^.!?]*\b(?:me|i'll|i\s+(?:can|will|could))\b)\b"
+    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def _is_request_paragraph(par: str) -> bool:
+    """Every sentence of the paragraph asks the reader for a next step (or
+    offers further help), and it states no figure and carries no citation
+    marker -- it adds nothing the reader can use from this answer."""
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(par):
+        return False
+    sentences = [s.strip() for ln in par.split("\n")
+                 for s in _sentences(_BULLET_RE.sub("", ln).strip().lstrip("*_ ").strip()) if s.strip()]
+    return bool(sentences) and all(_REQUEST_RE.match(s) or _OFFER_RE.match(s) for s in sentences)
+
+
+def _drop_closing_request(text: str) -> str:
+    """Rule 2, every kind of answer: a closing paragraph that only asks the
+    reader for a next step ("upload X", "point me at the file and I'll pull
+    the line") and states no figure and no marker is padding and goes. The
+    answer before it stays; an answer that is nothing but such a paragraph
+    stays as written. A turn that ends on its own question for inputs a
+    step still needs (``asking``) never reaches this rule."""
+    pars = re.split(r"\n[ \t]*\n", text.strip())
+    while len(pars) > 1 and _is_request_paragraph(pars[-1]):
+        pars.pop()
+    return "\n\n".join(pars)
 
 
 # ── Rule 1: answer first ────────────────────────────────────────────────────
@@ -499,6 +796,47 @@ def _answer_first(text: str, computed: bool) -> str:
         return text
     head = lines.pop(fig)
     return "\n".join([head] + lines)
+
+
+#: A sentence that opens on the writer's own search: "I searched ...",
+#: "I looked through ...", "I reviewed ...". It tells the reader what was
+#: done, not what is so.
+_NARRATION_LEAD_RE = re.compile(
+    r"^(?:\*\*)?I\s+(?:searched|looked(?:\s+(?:through|for|in|at|over))?|checked|reviewed|went\s+through|"
+    r"scanned|queried)\b",
+    re.IGNORECASE,
+)
+
+
+def _narration_first(text: str) -> str:
+    """Narration of the search never opens an answer, on any kind of turn.
+
+    The first sentence of the first line is read. When it narrates the
+    writer's search, states no figure and reports nothing absent, it is
+    process only and goes, so the sentence after it opens the answer.
+
+    It stays when it states a figure (it is the answer already), when it
+    reports something absent (that is the refusal itself, rule 5), when it
+    introduces what follows (ends in ``:``), or when it is the whole
+    answer."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    sentences = _sentences(lines[first].strip())
+    if not sentences:
+        return text
+    lead = sentences[0].strip()
+    if (not _NARRATION_LEAD_RE.match(lead) or _FIGURE_RE.search(_MARKER_RE.sub("", lead))
+            or _NEGATIVE_RE.search(lead) or lead.rstrip("*_ ").endswith(":")):
+        return text
+    rest = " ".join(s.strip() for s in sentences[1:]).strip()
+    if rest:
+        lines[first] = rest
+        return "\n".join(lines)
+    if any(ln.strip() for ln in lines[first + 1:]):
+        return "\n".join(lines[:first] + lines[first + 1:])
+    return text
 
 
 def _tidy(text: str) -> str:
@@ -544,7 +882,9 @@ def apply(
         if not asking:
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
+            body = _drop_closing_request(body)
             body = _answer_first(body, computed)
+            body = _narration_first(body)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 

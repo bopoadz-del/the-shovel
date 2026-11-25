@@ -17,6 +17,14 @@ _FIG_NUM = r"([0-9][0-9,.]*[0-9]|[0-9])"
 # label from grabbing a figure that belongs to a later clause.
 _FIG_GAP = r"[^0-9%]{0,30}?"
 _FIG_PCT = r"([0-9]+(?:\.[0-9]+)?)\s*(?:%|percent)"
+# A word placing an amount before the current period ("previous",
+# "previously", "prior", "earlier", "already").
+_BEFORE_WORD = r"(?:previous(?:ly)?|prior|earlier|already)"
+# A word stating an amount as a running total from the start of the works
+# ("to date", "cumulative"), and the nouns that name a valuation of work.
+_TO_DATE_WORD = r"(?:to\s+date|cumulative)"
+_VALUE_NOUN = (r"(?:valuation|value(?:\s+of\s+(?:the\s+)?works?(?:\s+done)?)?"
+               r"|work\s+done|work\s+valued)")
 
 
 _CCY = r"(?:sar|aed|usd|qar|omr|bhd|kwd|\$)"
@@ -241,11 +249,11 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     t = str(text).lower()
 
     def _amount(pattern: str) -> Optional[float]:
-        m = re.search(pattern, t)
+        # A % right after the number means it is a rate, not an amount: the
+        # label's amount is the next figure that is not a rate, if any.
+        m = next((hit for hit in re.finditer(pattern, t)
+                  if not t[hit.end(1):].lstrip().startswith(("%", "percent"))), None)
         if not m:
-            return None
-        # A % right after the number means it is a rate, not an amount.
-        if t[m.end(1):].lstrip().startswith(("%", "percent")):
             return None
         base = _parse_money_str(m.group(1))
         if base is None:
@@ -314,19 +322,43 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     )
     if v is not None:
         out["advance_recovery_percent"] = v
-    else:
-        v = _amount(rf"advance(?:\s+payment)?(?:\s+recover\w*)?{_FIG_GAP}{_FIG_NUM}")
-        if v:
-            out["advance_payment"] = v
+    # The advance amount is read whether or not a recovery rate was stated:
+    # an ask giving both must not lose the advance (recovery would be 0).
+    v = _amount(rf"advance(?:\s+payment)?(?:\s+recover\w*)?{_FIG_GAP}{_FIG_NUM}")
+    if v:
+        out["advance_payment"] = v
+    # The advance's own size, never its recovery rate: a "recover" word
+    # between the label and the rate (or right after the label, when the
+    # rate comes first) makes it the recovery rate, read above.
+    _not_recovery = r"(?![^0-9%]{0,30}?recover)"
     v = (
-        _percent(rf"advance(?:\s+payment)?{_FIG_GAP}{_FIG_PCT}")
-        or _percent(rf"{_FIG_PCT}\s+advance(?:\s+payment)?")
+        _percent(rf"advance(?:\s+payment)?{_not_recovery}{_FIG_GAP}{_FIG_PCT}")
+        or _percent(rf"{_FIG_PCT}\s+advance(?!\s+(?:payment\s+)?recover)")
     )
     if v is not None:
         out["advance_percent"] = v
-    v = _amount(rf"previous\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
-    if v:
+    # The amount certified before this period is named by a word saying
+    # "before" next to a form of "certify", in either order and in any of
+    # its inflections: "previous certificates", "previously certified",
+    # "prior certification", "certified previously". Reading only the one
+    # spelling "previous certif..." dropped the adverb form, and the
+    # certificate then ran with nothing certified before.
+    v = _amount(rf"\b{_BEFORE_WORD}\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
+    if v is None:
+        v = _amount(rf"\bcertif\w*\s+{_BEFORE_WORD}{_FIG_GAP}{_FIG_NUM}")
+    # A stated nil ("previously certified 0") is a stated amount, not a gap.
+    if v is not None:
         out["previous_certified"] = v
+    # A valuation the ask writes as a running total ("valuation to date",
+    # "cumulative value of work done") already holds what earlier
+    # certificates covered. Read it as the gross, and mark it: the payment
+    # for this period then depends on the amount certified before, which
+    # the certificate asks for rather than taking as nil.
+    v = (_amount(rf"\b(?:gross\s+)?{_VALUE_NOUN}\s+{_TO_DATE_WORD}{_FIG_GAP}{_FIG_NUM}\s*{_SFX}")
+         or _amount(rf"\b{_TO_DATE_WORD}\s+(?:gross\s+)?{_VALUE_NOUN}{_FIG_GAP}{_FIG_NUM}\s*{_SFX}"))
+    if v:
+        out.setdefault("gross_valuation", v)
+        out["gross_to_date"] = True
     return out
 
 
@@ -687,6 +719,13 @@ class ConstructionBoqMixin:
                               or fig.get("work_done_percent", 0)) / 100.0
         previous_certified = float(p.get("previous_certified") or data.get("previous_certified", 0)
                                    or fig.get("previous_certified", 0))
+        # The amount certified before is stated when the ask writes it (a
+        # nil included) or a caller passes a figure for it. A zero a caller
+        # fills in on its own is not the operator's statement.
+        previous_stated = "previous_certified" in fig or any(
+            isinstance(src, dict) and src.get("previous_certified") not in _IPC_EMPTY
+            for src in (p, data)
+        )
         # The stated retention wins wherever it was given (params or the
         # envelope); 0 is a stated value, not a missing one.
         stated_retention = next(
@@ -708,6 +747,15 @@ class ConstructionBoqMixin:
             advance_payment = round(contract_value * (advance_pct / 100.0), 2)
         advance_recovery_pct = float(p.get("advance_recovery_percent",
                                            fig.get("advance_recovery_percent", 20))) / 100.0
+        # A rate the certificate took from its own default, not from the ask
+        # or the args, is named -- never silent. Recovery counts only when an
+        # advance is being recovered; with none it moves no figure.
+        assumed = []
+        if stated_retention is None and "retention_percent" not in fig:
+            assumed.append(("retention_percent", "retention", retention_pct))
+        if (advance_payment > 0 and "advance_recovery_percent" not in p
+                and "advance_recovery_percent" not in fig):
+            assumed.append(("advance_recovery_percent", "advance recovery", advance_recovery_pct))
         payment_period = p.get("payment_period", "Current Period")
         contractor = p.get("contractor_name", p.get("contractor", data.get("contractor_name", "Contractor")))
 
@@ -727,6 +775,25 @@ class ConstructionBoqMixin:
             parts = measured_works + materials_on_site
             if direct_gross <= 0 or abs(direct_gross - measured_works) < 0.01:
                 direct_gross = parts
+        if direct_gross > 0 and fig.get("gross_to_date") and not previous_stated:
+            # The valuation is a running total and nothing says what earlier
+            # certificates covered: this period's payment cannot be worked
+            # out without it, and nil is not a figure the operator gave. Ask
+            # for that one input, in the same envelope as the gate below.
+            return {
+                "status": "error",
+                "error": (
+                    "The valuation given is to date; the amount certified "
+                    "before this period was not supplied"
+                ),
+                "needs_input": True,
+                "missing": ["previous_certified"],
+                "question": (
+                    "The valuation you gave is to date. What amount was "
+                    "certified on earlier payment certificates, so I can "
+                    "work out this period's payment?"
+                ),
+            }
         if contract_value <= 0:
             if direct_gross > 0:
                 gross_valuation = round(direct_gross, 2)
@@ -769,10 +836,19 @@ class ConstructionBoqMixin:
         )
         cumulative_certified = round(previous_certified + net_this_period, 2)
         remaining_balance = round(contract_value - cumulative_certified, 2)
+        defaults_used = [
+            {"parameter": key, "label": label, "value": round(rate * 100, 4), "unit": "%"}
+            for key, label, rate in assumed
+        ]
+        assumed_line = (
+            " Assumed, not given: "
+            + "; ".join(f"{row['label']} {row['value']:g}%" for row in defaults_used) + "."
+        ) if defaults_used else ""
 
         return {
             "status": "success",
             "action": "payment_certificate",
+            "defaults_used": defaults_used,
             "certificate": {
                 "period": payment_period,
                 "contractor": contractor,
@@ -802,6 +878,7 @@ class ConstructionBoqMixin:
             "certificate_summary": (
                 f"IPC – {payment_period}: {round(work_done_pct * 100, 1)}% complete. "
                 f"Gross: {gross_valuation:,.2f}. Net due: {net_this_period:,.2f}."
+                + assumed_line
             ),
         }
     async def procurement_list_generator(self, input_data: Any, params: Dict) -> Dict:
@@ -2636,20 +2713,79 @@ class ConstructionBoqMixin:
             return {"status": "error", "error": "boq_processor block unavailable"}
         return await block.process(input_data, params)
     async def benchmark_lookup(self, input_data: Any, params: Dict) -> Dict:
-        """Historical benchmark lookup — delegates to the historical_benchmark block.
+        """Rate lookup: the typed rate-card first, the historical book second.
 
-        The block ships a small, conservative, region-adjusted rate book for
-        common construction items. Unknown items return an honest error so the
-        caller can supply supplier quotes or add a custom rate.
+        This is the action behind the commercial hat's ``rate_card_lookup``,
+        so it prices from the same card (``app.lib.boq_pricing``) the
+        price-boq endpoint uses:
+
+        - a bill (``line_items`` or a BOQ ``file_path``) is priced line by
+          line from the card for the named ``asset_type``; each line keeps
+          its ``rate_source`` and sample size, and a line with no comparable
+          rate stays NO RATE (never invented);
+        - a single ``item`` with an ``asset_type`` is priced from the card
+          when the card has a comparable rate;
+        - otherwise the historical_benchmark block answers, labelled
+          indicative, with the card's asset types listed so the caller can
+          ask for a card price.
+
+        No asset type is ever guessed: a bill without one returns the card's
+        valid asset types instead of a priced total.
         """
+        data = input_data if isinstance(input_data, dict) else {}
+        p = params or {}
+
+        def _arg(key: str) -> Any:
+            value = p.get(key)
+            return value if value not in (None, "", []) else data.get(key)
+
+        from app.lib import boq_pricing
+
+        asset_arg = _arg("asset_type")
+        asset, currency = boq_pricing.resolve_card(asset_arg, _arg("currency"))
+        line_items = _arg("line_items")
+        file_path = _arg("file_path")
+        if line_items or file_path:
+            return await self._price_bill_from_rate_card(
+                line_items, file_path, asset, currency, asset_arg, boq_pricing,
+            )
+        item = _arg("item") or ""
+        if item and asset and currency:
+            # A stated quantity is kept as given, 0 included; only a missing
+            # one defaults to a single unit.
+            quantity = _arg("quantity")
+            if quantity in (None, ""):
+                quantity = 1
+            priced, _summary = boq_pricing.price_line_items(
+                [{"description": item, "unit": _arg("unit") or "",
+                  "quantity": quantity}],
+                asset, currency,
+            )
+            line = priced[0]
+            if line["rate_source"] != "NO RATE":
+                return {
+                    "status": "success",
+                    "item": item,
+                    "unit": line["unit"],
+                    "unit_rate": line["rate"],
+                    "currency": currency,
+                    "asset_type": asset,
+                    "rate_source": line["rate_source"],
+                    "n": line["n"],
+                    "work_category": line["work_category"],
+                    "rate_basis": (
+                        f"rate card {asset}/{currency}: median of observed "
+                        "rates, an ESTIMATE, not a tendered price"
+                    ),
+                    "card_source": boq_pricing.card_source(),
+                }
+
         block = self._get_historical_benchmark_block()
         if block is None:
             return {
                 "status": "error",
                 "error": "historical_benchmark block unavailable",
             }
-        data = input_data if isinstance(input_data, dict) else {}
-        p = params or {}
         lookup_params = {
             "action": "lookup",
             "item": p.get("item") or data.get("item", ""),
@@ -2657,4 +2793,69 @@ class ConstructionBoqMixin:
             "location": p.get("location") or data.get("location", "US National Average"),
             "project_type": p.get("project_type") or data.get("project_type", "general_building"),
         }
-        return await block.process(data, lookup_params)
+        result = await block.process(data, lookup_params)
+        if isinstance(result, dict) and result.get("status") == "success":
+            result = {
+                **result,
+                "rate_basis": (
+                    "historical benchmark book (indicative), not the rate card"
+                ),
+                "rate_card_asset_types": boq_pricing.available_assets(),
+            }
+        return result
+
+    async def _price_bill_from_rate_card(
+        self, line_items: Any, file_path: Any, asset: Optional[str],
+        currency: Optional[str], asset_arg: Any, boq_pricing: Any,
+    ) -> Dict:
+        """Price a bill from the rate card: the chat twin of price-boq."""
+        options = boq_pricing.available_assets()
+        if not asset or not currency:
+            named = f" '{asset_arg}'" if asset_arg else ""
+            return {
+                "status": "error",
+                "error": (
+                    f"The rate card has no asset type{named} with that "
+                    "currency. Name one of the card's asset types to price "
+                    "this bill."
+                ),
+                "missing": ["asset_type"] if not asset else ["currency"],
+                "rate_card_asset_types": options,
+            }
+        if not line_items:
+            block = self._resolve_block("boq_processor")
+            if block is None:
+                return {"status": "error", "error": "boq_processor block unavailable"}
+            parsed = await block.process({"file_path": file_path}, {})
+            line_items = (parsed or {}).get("line_items") or []
+            if not line_items:
+                return {
+                    "status": "error",
+                    "error": (
+                        "No bill lines could be read from that file; a digital "
+                        "or spreadsheet BOQ is needed."
+                    ),
+                }
+        if not isinstance(line_items, list):
+            return {"status": "error", "error": "line_items must be a list of bill lines"}
+        lines = []
+        for raw in line_items:
+            if not isinstance(raw, dict):
+                continue
+            lines.append({
+                **raw,
+                "quantity": raw.get("quantity", raw.get("qty")),
+            })
+        if not lines:
+            return {"status": "error", "error": "line_items held no bill lines"}
+        priced, summary = boq_pricing.price_line_items(lines, asset, currency)
+        return {
+            "status": "success",
+            "priced_items": priced,
+            "summary": summary,
+            "rate_basis": (
+                f"rate card {asset}/{currency}: medians of observed rates, an "
+                "ESTIMATE, not tendered prices; NO RATE lines are left unpriced"
+            ),
+            "card_source": boq_pricing.card_source(),
+        }

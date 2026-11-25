@@ -34,6 +34,7 @@ the chunk text's own length and boundaries.
 """
 from __future__ import annotations
 
+import calendar
 import itertools
 import os
 import re
@@ -47,6 +48,11 @@ HEADING_RESERVE = 120
 
 # One id per split parent, unique for the process: pieces of one parent share it.
 _SPLIT_PARENT_IDS = itertools.count(1)
+
+
+def new_split_parent() -> int:
+    """A fresh split-parent id, for a caller whose own splitter cut the pieces."""
+    return next(_SPLIT_PARENT_IDS)
 
 # Coarsest boundary first. Each pattern matches the separator between pieces.
 _BOUNDARIES = (
@@ -111,18 +117,29 @@ def split_oversize(text: str, ceiling: int, _level: int = 0) -> list[str]:
 
 def _merge_pairs(
     pairs: list[tuple[str, int | None]], floor: int, ceiling: int,
+    piece_ceiling: int | None = None,
 ) -> list[tuple[str, int | None]]:
     """Join each pair shorter than ``floor`` to a neighbour when it still fits.
 
     Pairs are ``(text, split_parent)``; a joined pair keeps a parent id.
+    ``piece_ceiling`` (optional) bounds a join that keeps a parent id: that
+    join is a split piece, which is still given its heading line, so it may
+    not refill the room the cut kept free for that line.
     """
+    def _limit(parent: int | None) -> int:
+        if parent is not None and piece_ceiling is not None:
+            return piece_ceiling
+        return ceiling
+
     out: list[tuple[str, int | None]] = []
     carry: tuple[str, int | None] | None = None
     for chunk, parent in pairs:
         if carry is not None:
             joined = f"{carry[0]}\n{chunk}"
-            if ceiling <= 0 or len(joined) <= ceiling:
-                chunk, parent = joined, parent if parent is not None else carry[1]
+            kept = parent if parent is not None else carry[1]
+            limit = _limit(kept)
+            if limit <= 0 or len(joined) <= limit:
+                chunk, parent = joined, kept
             else:
                 out.append(carry)
             carry = None
@@ -131,7 +148,11 @@ def _merge_pairs(
         else:
             out.append((chunk, parent))
     if carry is not None:
-        if out and (ceiling <= 0 or len(out[-1][0]) + 1 + len(carry[0]) <= ceiling):
+        kept = carry[1]
+        if out and out[-1][1] is not None:
+            kept = out[-1][1]
+        limit = _limit(kept)
+        if out and (limit <= 0 or len(out[-1][0]) + 1 + len(carry[0]) <= limit):
             last, last_parent = out[-1]
             out[-1] = (
                 f"{last}\n{carry[0]}",
@@ -177,7 +198,10 @@ def bound_chunks(
             split.extend((part, parent) for part in parts)
         else:
             split.append((chunk, None))
-    out = _merge_pairs(split, floor, ceiling)
+    # A join that stays a split piece keeps the heading room the cut kept.
+    out = _merge_pairs(
+        split, floor, ceiling, piece_ceiling=cut if cut < ceiling else None,
+    )
     if stats is not None:
         stats["split_from"] = stats.get("split_from", 0) + split_from
         stats["merged"] = stats.get("merged", 0) + (len(split) - len(out))
@@ -210,6 +234,25 @@ def bound_units_with_pages(
 # numbered ("3.2 Concrete"), a markdown heading, or mostly capitals.
 _NUMBERED_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*|[A-Z])[.)]?\s+\S")
 _MAX_HEADING_WORDS = 14
+# Month names and abbreviations from the standard calendar table, lowercased.
+_MONTH_WORDS = frozenset(
+    m.lower() for m in (*calendar.month_name, *calendar.month_abbr) if m
+)
+_DAY_OR_YEAR = re.compile(r"^\d{1,4}(?:st|nd|rd|th)?$", re.IGNORECASE)
+
+
+def _is_date_line(text: str) -> bool:
+    """True when every word of ``text`` is a day, a year or a month name.
+
+    A letter or a set of minutes opens on its date ("12 March 2026"), and a
+    day number in front of a word passes the numbered heading rule. A date
+    names when the page was written, not what it is about.
+    """
+    words = [w.strip(".,") for w in text.split()]
+    words = [w for w in words if w]
+    months = sum(1 for w in words if w.lower() in _MONTH_WORDS)
+    numbers = sum(1 for w in words if _DAY_OR_YEAR.match(w))
+    return months >= 1 and numbers >= 1 and months + numbers == len(words)
 
 
 def _is_heading_line(line: str) -> bool:
@@ -217,6 +260,8 @@ def _is_heading_line(line: str) -> bool:
     if not text or len(text) >= HEADING_RESERVE or text[-1] in ".,;":
         return False
     if len(text.split()) > _MAX_HEADING_WORDS:
+        return False
+    if _is_date_line(text):
         return False
     letters = [ch for ch in text if ch.isalpha()]
     if len(letters) < 3:
@@ -229,11 +274,15 @@ def _is_heading_line(line: str) -> bool:
 def heading_line_for_page(
     page_text: str,
     title_block: Callable[[str], dict[str, Any]] | None = None,
+    running: Callable[[str], bool] | None = None,
 ) -> str:
     """The line a piece of this page is filed under ("" when there is none).
 
     A drawing sheet is named by its title block (number and title, read by
-    ``title_block``); any other page by its first heading-like line.
+    ``title_block``); any other page by its first heading-like line that is
+    not page furniture (``running``: a line the document repeats on most of
+    its pages). A page whose only heading-like lines are furniture keeps the
+    first of them.
     """
     if not page_text or not page_text.strip():
         return ""
@@ -245,10 +294,34 @@ def heading_line_for_page(
         ]
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
+    first = ""
     for line in page_text.splitlines():
         if _is_heading_line(line):
-            return line.strip()
-    return ""
+            if running is None or not running(line):
+                return line.strip()
+            first = first or line.strip()
+    return first
+
+
+def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] | None:
+    """The document's page furniture among its heading-like lines, or None.
+
+    The same repetition rule the bill reader strips running headers by
+    (``bill_table_geometry.running_lines``): a line that repeats, digits
+    masked, on more than half of at least ``MIN_RUNNING_PAGES`` pages. A
+    running header names the document, not the page, so it cannot tell one
+    page's pieces from another's.
+    """
+    from app.core.bill_table_geometry import _Label, running_lines
+
+    labels = [
+        _Label(text=line.strip(), left=0.0, height=0.0, page=page)
+        for page, body in page_texts.items()
+        for line in body.splitlines()
+        if _is_heading_line(line)
+    ]
+    found = running_lines(labels, len(page_texts))
+    return found.holds if found.masks else None
 
 
 def page_heading_lines(
@@ -260,10 +333,14 @@ def page_heading_lines(
     starts = sorted(
         ((int(p), int(o)) for p, o in (page_starts or [])), key=lambda s: s[1]
     )
-    out: dict[int, str] = {}
+    bodies: dict[int, str] = {}
     for idx, (page, offset) in enumerate(starts):
         end = starts[idx + 1][1] if idx + 1 < len(starts) else len(text)
-        line = heading_line_for_page(text[offset:end], title_block)
+        bodies[page] = text[offset:end]
+    running = _running_heading_lines(bodies)
+    out: dict[int, str] = {}
+    for page, body in bodies.items():
+        line = heading_line_for_page(body, title_block, running)
         if line:
             out[page] = line
     return out

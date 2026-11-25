@@ -28,7 +28,7 @@ after(() => server.close())
 const { default: SourcesList } = await server.ssrLoadModule('/src/chat/SourcesList.tsx')
 const { default: ChatBubble } = await server.ssrLoadModule('/src/chat/ChatBubble.tsx')
 const { SOURCE_CLASS_LABELS } = await server.ssrLoadModule('/src/chat/sourceClassLabels.ts')
-const { activityForTool } = await server.ssrLoadModule('/src/chat/userFacingText.ts')
+const { activityLine, WORKING_LINE } = await server.ssrLoadModule('/src/chat/userFacingText.ts')
 
 // jsdom for the W3 click and tab tests below; every module is loaded here,
 // before the first test runs (a later top-level await lets the runner
@@ -155,11 +155,45 @@ test('a tool status shows words, not the tool id or a key=value list', () => {
   assert.doesNotMatch(text, KEY_VALUE)
 })
 
-test('a tool with no dedicated sentence is still plain words', () => {
-  const line = activityForTool('generate_wbs')
-  assert.match(line, /generate wbs/)
-  assert.doesNotMatch(line, SNAKE)
-  assert.doesNotMatch(line, KEY_VALUE)
+// W4: while a tool runs the line names the kind of work, never the tool,
+// its arguments or the model's query. Each case builds its own invented
+// event: a made-up tool id, query and agent name.
+test('a running tool shows the server label, never its name, arguments or query', () => {
+  const evt = {
+    type: 'tool_call',
+    tool: 'tally_widget_rows',
+    name: 'tally_widget_rows',
+    args_preview: JSON.stringify({ query: 'orange gaskets on level nine', agent_name: 'night_crew' }),
+    stage: 'searching',
+    label: 'Looking it up…',
+  }
+  const line = activityLine(evt)
+  assert.equal(line, 'Looking it up…')
+  for (const word of ['tally', 'widget', 'orange', 'gaskets', 'night', 'crew']) {
+    assert.doesNotMatch(line, new RegExp(word, 'i'))
+  }
+})
+
+test('a running tool with no label is shown as plain work, not by its name', () => {
+  for (const evt of [
+    { type: 'tool_call', tool: 'tally_widget_rows', args_preview: '{"query": "orange gaskets"}' },
+    { type: 'tool_call', tool: 'tally_widget_rows', label: '   ' },
+    { type: 'tool_call', tool: 'tally_widget_rows', label: 7 },
+  ]) {
+    const line = activityLine(evt)
+    assert.equal(line, WORKING_LINE)
+    assert.doesNotMatch(line, /tally|widget|orange/i)
+    assert.doesNotMatch(line, SNAKE)
+  }
+})
+
+test('the running-tool line in the bubble is the label, rendered as the user reads it', () => {
+  const html = renderToStaticMarkup(React.createElement(ChatBubble, {
+    message: { id: 'w4', role: 'assistant', content: '', streaming: true,
+      toolStatus: activityLine({ type: 'tool_call', tool: 'tally_widget_rows', label: 'Calculating…' }) },
+  }))
+  assert.match(html, /Calculating…/)
+  assert.doesNotMatch(html, /tally|widget/i)
 })
 
 // ── W3: citations live in the side panel only ──────────────────────────────
@@ -211,7 +245,22 @@ for (const [i, c] of W3_CASES.entries()) {
     for (const cite of c.citations) assert.ok(!text.includes(cite.document), `answer shows ${cite.document}`)
     assert.doesNotMatch(text, /\bsources?\s*:/i)
     assert.doesNotMatch(text, /documents indexed/i)
-    assert.doesNotMatch(text, /\[\d+\]/, 'a bare [n] is left in the text')
+  })
+
+  test(`W3 case ${i}: each marker control reads [n] and is named Source n`, () => {
+    const host = dom.window.document.createElement('div')
+    host.innerHTML = bubble(c)
+    for (const cite of c.citations) {
+      const btn = host.querySelector(`button[data-citation-marker="${cite.marker}"]`)
+      assert.ok(btn, `marker ${cite.marker} is not a control`)
+      assert.equal(btn.textContent, `[${cite.marker}]`)
+      assert.equal(btn.getAttribute('aria-label'), `Source ${cite.marker}`)
+    }
+    // every [n] left in the text is one of the controls, none is loose
+    const loose = [...host.querySelectorAll('.chat-bubble__markdown')]
+      .map((el) => { const k = el.cloneNode(true); k.querySelectorAll('button').forEach((b) => b.remove()); return k.textContent })
+      .join(' ')
+    assert.doesNotMatch(loose, /\[\d+\]/, 'a bare [n] is left in the text')
   })
 
   test(`W3 case ${i}: the panel shows every entry by its marker with document, section, passage and tier`, () => {
@@ -281,6 +330,21 @@ for (const [i, c] of W3_CASES.entries()) {
       await view.click(markerButton(cite.marker))
     }
     assert.deepEqual(got, c.citations.map((cite) => cite.marker))
+    view.unmount()
+  })
+
+  test(`W3 case ${i}: the copied answer keeps each marker as [n], never a bare digit`, async () => {
+    const view = await mountLive(React.createElement(ChatBubble, {
+      message: { id: `c${i}`, role: 'assistant', content: c.content, citations: c.citations, coverage: c.coverage },
+    }))
+    const answer = view.container.querySelector('.chat-bubble__markdown')
+    const range = dom.window.document.createRange()
+    range.selectNodeContents(answer)
+    const copied = range.toString().replace(/\s+/g, ' ').trim()
+    assert.equal(copied, c.content.replace(/\s+/g, ' ').trim())
+    for (const cite of c.citations) {
+      assert.ok(copied.includes(`[${cite.marker}]`), `copied text lacks [${cite.marker}]`)
+    }
     view.unmount()
   })
 }

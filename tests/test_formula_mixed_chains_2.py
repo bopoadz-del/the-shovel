@@ -144,11 +144,6 @@ def test_engine_2_cost_loaded_workbook_cpm(spec, hand):
     assert {i: (t["es"], t["ef"], t["ls"], t["lf"]) for i, t in times.items()} == hand["times"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect (not an engine): ConstructionContainer._calculate_cpm does no forward or "
-    "backward pass; it reads total_float and start/finish dates from the input. Given only "
-    "durations and predecessors it marks every activity critical (all floats default to 999) "
-    "and returns duration 0, so the same network does not give the same answer"))
 @pytest.mark.parametrize("spec, hand", NETWORKS)
 def test_engine_3_container_schedule_cpm(spec, hand):
     from app.containers.construction import ConstructionContainer

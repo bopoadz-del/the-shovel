@@ -14,6 +14,7 @@ Every test builds its own input; no document text.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import functools
 import os
 import re
@@ -41,6 +42,27 @@ _REPO = Path(__file__).resolve().parents[1]
 def _gil_holding_call(n: int) -> None:
     """One C call that never releases the GIL: a backtracking regex."""
     re.fullmatch(r"(x+x+)+y", "x" * n)
+
+
+#: The OS sleep, resolved once: loading a library releases the GIL, so it
+#: never happens inside a hold. ``ctypes.PyDLL`` (unlike ``CDLL``) keeps the
+#: GIL across each call.
+if sys.platform == "win32":
+    _os_sleep_ms = ctypes.PyDLL("kernel32").Sleep
+else:
+    _os_usleep = ctypes.PyDLL(None).usleep
+
+
+def _gil_holding_wait(seconds: float) -> None:
+    """One C call that never releases the GIL and lasts ``seconds`` on any
+    runner. ``_size_for`` only bounds a hold from BELOW -- the regex's cost
+    roughly doubles per character, so a size calibrated to 0.12 s can run
+    0.3 s on a slower runner -- which is enough for a hold that must outlast
+    a delay, never for one that must stay under it."""
+    if sys.platform == "win32":
+        _os_sleep_ms(ctypes.c_uint32(round(seconds * 1000)))
+    else:
+        _os_usleep(ctypes.c_uint32(round(seconds * 1_000_000)))
 
 
 def _size_for(seconds: float) -> int:
@@ -624,17 +646,24 @@ def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop
     assert (mon.live_near_misses > 0) is near, mon.live_near_misses
 
 
-@pytest.mark.parametrize("hold_s,wake_late", [(0.12, False), (0.45, True)])
+@pytest.mark.parametrize("hold_s,wake_late", [(0.2, False), (0.45, True)])
 @own_process
 def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
     """Serving a heartbeat re-arms the timer (``_serve``), so the monitor's
-    late return is measured from the serve. Here the loop serves ~240 ms after
+    late return is measured from the serve. Here the loop serves ~200 ms after
     the post (under live_ms 300) and then holds the GIL, which keeps the
     monitor from returning. A hold shorter than live_ms after the serve is
     nothing at all: a timer still running from the post fired inside it and
     counted a near miss the loop never had. A hold longer than live_ms after
-    the serve is a WAKE_LATE dump naming the holder."""
-    n = _size_for(hold_s)
+    the serve is a WAKE_LATE dump naming the holder.
+
+    CI 06:49Z 22 Nov (c878987c): the short case dumped WAKE_LATE. Its hold
+    was a regex sized to "at least 0.12 s", and one size step more is ~0.3 s
+    -- past live_ms. The hold is now exactly ``hold_s`` (``_gil_holding_wait``)
+    and each instant sits >= 80 ms from the 300 ms delay it is judged
+    against: serve ~0.2 s after the post; a timer left running from the post
+    fires ~0.1 s into the 0.2 s hold; the serve's timer is due 0.1 s after
+    the short hold ends and 0.15 s before the long one does."""
 
     async def run():
         loop = asyncio.get_running_loop()
@@ -645,9 +674,9 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
             done = asyncio.Event()
 
             def late_then_hold():
-                time.sleep(0.25)  # late, the GIL free: the post lands now
+                time.sleep(0.2)  # late, the GIL free: the post lands now
                 # Runs after the heartbeat's _serve, queued during the sleep.
-                loop.call_soon(lambda: (_gil_holding_call(n), done.set()))
+                loop.call_soon(lambda: (_gil_holding_wait(hold_s), done.set()))
 
             loop.call_soon(late_then_hold)
             await done.wait()
@@ -658,7 +687,7 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
     mon = asyncio.run(run())
     assert mon.stalls == [], mon.stalls[:1]
     if wake_late:
-        assert any(d.startswith("WAKE_LATE ") and "_gil_holding_call" in d
+        assert any(d.startswith("WAKE_LATE ") and "_gil_holding_wait" in d
                    for _, d in mon.live_dumps), mon.live_dumps
     else:
         assert mon.live_near_misses == 0, mon.live_near_misses

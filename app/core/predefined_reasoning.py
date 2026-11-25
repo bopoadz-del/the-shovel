@@ -509,6 +509,14 @@ DELIVER_REGISTRY = {
     "resource_histogram": deliver_histogram,
 }
 
+# action -> the session key its DELIVER renders from. When the plan ran and
+# this key is still empty, the workflow built nothing: its answer would be the
+# renderer's one "could not build" line, and the turn must not end on it.
+RESULT_KEY_REGISTRY = {
+    "generate_wbs": "schedule_summary",
+    "resource_histogram": "manpower",
+}
+
 
 def _render_container_result(action: str, result: Any) -> str:
     """Turn a container action's return value into a human-readable answer.
@@ -824,8 +832,12 @@ async def run_workflow(action: str, context: Dict[str, Any],
         from app.core.conversation_wbs import stage_conversation_wbs
         stage_conversation_wbs(str(cid), wbs)
     export = _export_descriptor(context) if deliverable else None
+    built = bool(session.data.get(RESULT_KEY_REGISTRY.get(action, "schedule_summary")))
     return {
         "handled": True,
+        "built": built,
+        "unbuilt_reasons": [] if built else [
+            f"{r.type}: {r.error}" for r in run.step_results if r.status == "error"],
         "status": run.status,
         "answer": answer,
         "deliverable": deliverable,

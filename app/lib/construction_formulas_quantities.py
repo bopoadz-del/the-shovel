@@ -86,6 +86,70 @@ def dimension_chains(text: str) -> list[list[tuple[float, str | None]]]:
         chains.append(list(zip(numbers, _chain_units([groups[i] for i in (1, 3, 5)]))))
     return chains
 
+
+@functools.lru_cache(maxsize=1)
+def _plan_pair_re() -> re.Pattern[str]:
+    from app.agents.base.formulas.construction_formulas_planning import _FAMILIES
+
+    units = "|".join(re.escape(u) for u in sorted(_FAMILIES["length"], key=len, reverse=True))
+    # A whole figure only: never the first digits of a longer one.
+    dim = rf"({SIGNED_FIGURE})(?![\d.,]?\d)(?:\s*({units})(?![A-WYZa-wyz0-9]))?"
+    # Not the head or tail of a longer chain: no separator before the first
+    # figure and none after the second.
+    return re.compile(
+        rf"(?<![A-Za-z0-9.,])(?<![x×*]\s)(?<![x×*]){dim}{_CHAIN_SEP}{dim}"
+        rf"(?!\s*(?:[x×*]|by(?![A-Za-z]))\s*\d)",
+        re.IGNORECASE,
+    )
+
+
+def plan_size_pairs(text: str) -> list[tuple[float, float]]:
+    """Every two-figure plan size ("24 m by 12 m", "30 x 20 m") in ``text``,
+    in metres. A pair needs a length unit written on at least one figure; a
+    bare figure takes the unit written on the other."""
+    from app.agents.base.formulas.construction_formulas_planning import convert_units
+
+    pairs = []
+    for match in _plan_pair_re().finditer(text or ""):
+        groups = match.groups()
+        units = _chain_units([groups[1], groups[3]])
+        if not all(units):
+            continue
+        numbers = [float(groups[i].replace(",", "")) for i in (0, 2)]
+        length, width = (
+            convert_units(n, u, "m")["value_out"] for n, u in zip(numbers, units)
+        )
+        pairs.append((length, width))
+    return pairs
+
+
+@functools.lru_cache(maxsize=1)
+def _third_dimension_re() -> re.Pattern[str]:
+    from app.agents.base.formulas.construction_formulas_planning import _FAMILIES
+
+    units = "|".join(re.escape(u) for u in sorted(_FAMILIES["length"], key=len, reverse=True))
+    fig = rf"({SIGNED_FIGURE})(?![\d.,]?\d)\s*({units})(?![A-Za-z0-9])"
+    return re.compile(
+        rf"(?<![A-Za-z0-9.,]){fig}\s*(?:thick|deep|high)\b"
+        rf"|\b(?:thickness|depth|height)\s*(?:of|is|=|:)?\s*{fig}",
+        re.IGNORECASE,
+    )
+
+
+def third_dimension_metres(text: str) -> list[float]:
+    """Every thickness / depth / height ``text`` writes with a length unit
+    ("250 mm thick", "depth 1.2 m"), in metres, distinct values only."""
+    from app.agents.base.formulas.construction_formulas_planning import convert_units
+
+    found: list[float] = []
+    for match in _third_dimension_re().finditer(text or ""):
+        groups = match.groups()
+        number, unit = (groups[0], groups[1]) if groups[0] else (groups[2], groups[3])
+        value = convert_units(float(number.replace(",", "")), unit, "m")["value_out"]
+        if value not in found:
+            found.append(value)
+    return found
+
 # A waste percentage the operator stated out loud. The number has to BELONG to
 # the waste -- a contract full of percentages (retention 5%, advance recovery
 # 15%, compaction 95%) must not donate one -- so both spellings bind the figure
@@ -146,7 +210,7 @@ def format_concrete_volume_line(inner: dict) -> str:
         factor = 1.0 + waste
         net_s = _format_volume_figure(net)
         return (
-            f"Concrete volume including documented {pct:.0f}% waste: "
+            f"Concrete volume including documented {pct:g}% waste: "
             f"{vol_s} m³ (net {net_s} × {factor:g})."
         )
     return f"Concrete volume: {vol_s} m³."
@@ -279,6 +343,36 @@ def _dims_match_each(params: dict, each: tuple[float, float, float]) -> bool:
             return False
     return all(abs(a - b) <= 1e-6 for a, b in zip(got, each))
 
+@functools.lru_cache(maxsize=1)
+def _volume_operand_keys() -> frozenset[str]:
+    """The size inputs ``concrete_volume`` declares: its metre parameters.
+
+    Read from the calculator's own signature, with each name's bare stem
+    (``thickness`` for ``thickness_m``), so a new shape input counts as an
+    operand without a list here.
+    """
+    import inspect
+
+    keys: set[str] = set()
+    for pname in inspect.signature(concrete_volume).parameters:
+        if pname.endswith("_m"):
+            keys.add(pname)
+            keys.add(pname[: -len("_m")])
+    return frozenset(keys)
+
+
+def _volume_operands_present(blob: str, params: dict) -> bool:
+    """True when the ask or the call carries an element size to cube."""
+    if parse_lwt_metres(blob):
+        return True
+    for key in _volume_operand_keys():
+        value = params.get(key)
+        if value in (None, "", 0, 0.0):
+            continue
+        return True
+    return False
+
+
 def resolve_concrete_volume_calc(
     calc: str | None,
     params: dict | None = None,
@@ -309,8 +403,15 @@ def resolve_concrete_volume_calc(
     # Live standing-exit: those names were remapped to concrete_volume and
     # returned volume_m3=0 (tool_error×2 / 1-of-2).
     _e4_stealable = {"", "excavation_volume", "concrete_volume"}
+    # The pin takes a call that named no calculator (or the L6 earthwork
+    # alias) only when the volume's own operands are there. An ask that says
+    # "slab concrete" but types no element size -- a crew count, a cycle, a
+    # cost line -- is not a volume ask, and pinning it asks for a length the
+    # question never needed.
     is_concrete = named == "concrete_volume" or (
-        named in _e4_stealable and looks_like_concrete_volume_ask(blob)
+        named in _e4_stealable
+        and looks_like_concrete_volume_ask(blob)
+        and _volume_operands_present(blob, out)
     )
     if not is_concrete:
         return calc, out

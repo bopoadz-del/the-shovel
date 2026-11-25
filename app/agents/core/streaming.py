@@ -1101,12 +1101,12 @@ async def _chat_stream_impl(
             # emitted as an ALIAS so a consumer written against the callback
             # shape reads the tool name instead of silently getting None.
             _note_tool(fn.get("name"))
-            yield {
+            yield _turn_progress.tool_call({
                 "type": "tool_call",
                 "tool": fn.get("name"),
                 "name": fn.get("name"),
                 "args_preview": (fn.get("arguments") or "")[:200],
-            }
+            })
             tool_result = await self._run_turn_tool_call(
                 tc,
                 search_turn=_search_turn,

@@ -488,7 +488,7 @@ def test_shown_currency_default_is_stated(name, display, code, inputs, env):
     answer = f"The {display.lower()} is {code} {_shown(figure)}."
     with _install(name, code):
         out = gate(answer, None, _calc_turn(name, inputs, env, ask))
-    assert f"The currency used, {code}, is the platform calculator's default" in out, out
+    assert f"The currency used, {code}, is an assumed default" in out, out
 
 
 @pytest.mark.parametrize("name,display,code,inputs,env", CURRENCY, ids=[r[0] for r in CURRENCY])
@@ -537,7 +537,7 @@ def test_prose_denying_defaults_does_not_stand_beside_default_lines(name, displa
     figure = _first_figure(env["result"])
     answer = f"The {display.lower()} is {_shown(figure)}. {denial}"
     out = gate(answer, None, _calc_turn(name, inputs, env, ask))
-    assert "platform calculator's default" in out
+    assert "is an assumed default" in out
     assert denial not in out, out
 
 
@@ -555,7 +555,7 @@ def test_platform_bubble_values_are_not_user_inputs(name, display, inputs, env):
         f"from the operator facts in this turn. Authoritative draft:\n"
         f"{json.dumps(env, default=str)}\n")})
     out = gate(answer, None, msgs)
-    assert "platform calculator's default" in out, out
+    assert "is an assumed default" in out, out
     assert _source_lines(out) == ["Source: " + calculator_label(name, inputs)], out
 
 

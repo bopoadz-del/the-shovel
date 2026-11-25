@@ -189,7 +189,8 @@ async def get_conversation_messages(
 
 def _reopened_messages(conversation_id: str) -> list[dict]:
     """Stored messages as a reopened conversation shows them: an assistant
-    answer stored before the exit check existed passes it on the way out."""
+    answer stored before the exit check existed passes it on the way out,
+    and then the answer contract, as the live ``end`` frame does (W3)."""
     from app.agents import answer_exit
 
     # A reopened session shows its whole thread, not only the recent window
@@ -198,7 +199,33 @@ def _reopened_messages(conversation_id: str) -> list[dict]:
     for m in msgs:
         if m.get("role") == "assistant" and isinstance(m.get("content"), str):
             m["content"] = answer_exit.check_text_or_fallback(m["content"])
+            _reopened_contract(m)
     return msgs
+
+
+def _reopened_contract(message: dict) -> None:
+    """The stored answer is kept as written, before the contract numbered its
+    citations; a reopened one would show them inline and an empty Sources
+    panel. The same contract runs here, so its markers and its ``citations``
+    are numbered together over this text and always agree. The stored entries
+    are read as the turn's Sources rows: they fill each entry's tier. The
+    wording is left as stored (``asking``): only citations and the coverage
+    footer leave the text. Never raises; on any failure the message stands."""
+    from app.agents import answer_contract
+
+    try:
+        stored = message.get("citations") if isinstance(message.get("citations"), list) else []
+        rows = [{"doc_name": e.get("document"), "page_or_section": e.get("section") or "",
+                 "layer_label": e.get("tier")}
+                for e in stored if isinstance(e, dict) and e.get("document")]
+        done = answer_contract.apply(message["content"], sources=rows, asking=True)
+        message["content"] = done.text
+        if done.citations:
+            message["citations"] = done.citations
+        if done.coverage is not None:
+            message["coverage"] = done.coverage
+    except Exception:  # noqa: BLE001 -- a reopened thread must always load
+        logger.exception("reopened answer: contract not applied")
 
 
 @router.get("/v1/agents")
@@ -419,6 +446,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         try:
             from app.core.predefined_reasoning import lookup_question_hijack
             from app.routers.chat import (
+                _predefined_declines,
                 _predefined_enabled,
                 _predefined_workflows,
                 _stream_from_predefined,
@@ -442,9 +470,36 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                 and not lookup_question_hijack(
                     message, float(routing.get("confidence") or 0.0)
                 )
+                # A template action that cannot take the ask as written
+                # (the user typed their own period figures) leaves the
+                # turn to the agent and its calculators.
+                and not _predefined_declines(_pd_action, message)
             )
         except Exception:  # noqa: BLE001 — never block the normal agent path
             _pd_action, _use_predefined = None, False
+
+        async def _agent_sse():
+            try:
+                async for evt in agent.chat_stream(
+                    message,
+                    history=history,
+                    project_id=resolved_project_id,
+                    conversation_id=conversation_id,
+                    user_id=auth["user_id"],
+                    rag_debug=rag_debug,
+                ):
+                    # Same net as /v1/chat/stream: an error naming the plumbing
+                    # (provider, HTTP status, upstream body) is replaced for the user.
+                    if evt.get("type") == "token":
+                        turn_timing.first_token()
+                    yield sanitize_error_frame(f"data: {json.dumps(evt, default=str)}\n\n")
+                    await asyncio.sleep(0)  # yield to the event loop
+            except Exception as e:
+                # Log the real error server-side; stream only a generic message so
+                # infra detail (e.g. the LLM tunnel URL in a ConnectError) never
+                # reaches the browser.
+                logger.warning("agent chat stream failed: %s", e)
+                yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.'})}\n\n"
 
         if _use_predefined:
             try:
@@ -464,6 +519,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                     params=_pd_params,
                     emit_start=True,
                     conversation_id=conversation_id,
+                    fallback=_agent_sse,
                 ):
                     yield chunk
                     await asyncio.sleep(0)
@@ -471,27 +527,8 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
             except Exception:
                 logger.exception("predefined dispatch failed for %s; falling back", _pd_action)
 
-        try:
-            async for evt in agent.chat_stream(
-                message,
-                history=history,
-                project_id=resolved_project_id,
-                conversation_id=conversation_id,
-                user_id=auth["user_id"],
-                rag_debug=rag_debug,
-            ):
-                # Same net as /v1/chat/stream: an error naming the plumbing
-                # (provider, HTTP status, upstream body) is replaced for the user.
-                if evt.get("type") == "token":
-                    turn_timing.first_token()
-                yield sanitize_error_frame(f"data: {json.dumps(evt, default=str)}\n\n")
-                await asyncio.sleep(0)  # yield to the event loop
-        except Exception as e:
-            # Log the real error server-side; stream only a generic message so
-            # infra detail (e.g. the LLM tunnel URL in a ConnectError) never
-            # reaches the browser.
-            logger.warning("agent chat stream failed: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.'})}\n\n"
+        async for chunk in _agent_sse():
+            yield chunk
 
     # Local import: keeps this router's import graph unchanged for the
     # non-streaming endpoints.

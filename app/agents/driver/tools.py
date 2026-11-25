@@ -88,10 +88,21 @@ def lead_first(tools: List[Dict[str, Any]], hat: Optional[str]) -> List[Dict[str
 _MAX_CALCULATIONS = 80
 
 
+#: How an input's declared basis reads in the offer. A to-date figure bound
+#: to a period input is counted twice once earlier payments are taken off, so
+#: the line says which reading the input takes.
+BASIS_WORDS = {
+    "period": "this period's amount only, not a total to date",
+    "cumulative": "total to date, including earlier periods",
+}
+
+
 def _input_line(key: str, p: Any) -> str:
     bits = [p.unit] if p.unit and p.unit != "-" else []
     if p.lo is not None and p.hi is not None:
         bits.append(f"{p.lo:g} to {p.hi:g}")
+    if getattr(p, "basis", ""):
+        bits.append(BASIS_WORDS[p.basis])
     if not p.required:
         bits.append("optional")
     label = p.label or key.replace("_", " ")

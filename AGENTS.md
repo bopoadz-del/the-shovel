@@ -165,7 +165,7 @@ detail see `README.md`, `.env.example`, and `.claude/skills/run-the-fork/SKILL.m
   `except Exception: pass` twin.
 
 ### Production AWS (non-obvious)
-- Live service is `the-fork` at `https://theshovel.ai`. Deploy is `deploy-aws.yml`: build → ECR, roll → ECS (cluster `cerebrum`, region `us-west-2`). A push to `main` deploys only after the `tests` workflow on that same commit finishes green; PRs never deploy. The run ships `workflow_run.head_sha`, so a later merge cannot change which commit deploys. Manual `workflow_dispatch` deploys the selected ref. The workflow does NOT touch DNS — `theshovel.ai` moves only when a human moves it.
+- Live service is `the-fork` at `https://theshovel.ai`. Deploy is `deploy-aws.yml`: build → ECR, roll → ECS (cluster `cerebrum`, region `us-west-2`). A push to `main` deploys only after the `tests` workflow on that same commit finishes green; PRs never deploy. The run ships `workflow_run.head_sha`, so a later merge cannot change which commit deploys. Every deploy (`workflow_run` or manual `workflow_dispatch`) first passes `scripts/deploy_guard.py`: only a commit on main (the head or an ancestor of `origin/main`) ships, and never one older than the sha `/livez` reports, so a late rerun of an older commit cannot roll live back. The workflow does NOT touch DNS — `theshovel.ai` moves only when a human moves it.
 - `/v1/agents/*/chat` and `/v1/chat/stream` conversation ids must be `ws-{projectId}-{unix_ms}` only. Extra path segments 404.
 
 ### Stale docs to ignore

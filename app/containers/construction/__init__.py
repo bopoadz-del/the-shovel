@@ -19,6 +19,65 @@ from .schedule import ConstructionScheduleMixin
 logger = logging.getLogger(__name__)
 
 
+def _predecessor_ids(raw: Any) -> Optional[List[Dict[str, Any]]]:
+    """An activity's stated predecessors as dependency dicts, or None when
+    one of them is not readable as a predecessor id."""
+    deps: List[Dict[str, Any]] = []
+    for p in raw or []:
+        if isinstance(p, str) and p.strip():
+            deps.append({"predecessor_id": p.strip()})
+        elif isinstance(p, dict) and (p.get("predecessor_id") or p.get("id")):
+            dep = {"predecessor_id": str(p.get("predecessor_id") or p.get("id"))}
+            for key in ("type", "lag"):
+                if p.get(key) is not None:
+                    dep[key] = p[key]
+            deps.append(dep)
+        else:
+            return None
+    return deps
+
+
+def _network_pass(activities: List[Dict]) -> Optional[Tuple[List[Dict], int]]:
+    """Forward and backward pass over a network that states its logic.
+
+    Runs only when no activity states its own ``total_float`` and at least
+    one states predecessors: the durations and the logic are then the whole
+    schedule, and ``app.lib.pm_computations.compute_cpm`` derives each
+    activity's early/late times and float from them. Returns copies of the
+    activities carrying those times, plus the project duration in the
+    network's own duration unit. None leaves the caller on the schedule's
+    stated values (a float is stated, no logic is stated, or the network
+    cannot be read as one: a missing id, a fractional duration, a cycle).
+    """
+    if any("total_float" in a for a in activities):
+        return None
+    if not any(a.get("predecessors") for a in activities):
+        return None
+    from app.lib.pm_computations import compute_cpm
+    from app.schemas.cpm import CPMInput
+
+    nodes = []
+    for a in activities:
+        deps = _predecessor_ids(a.get("predecessors"))
+        if deps is None:
+            return None
+        nodes.append({"id": str(a.get("id") or ""), "name": str(a.get("name") or ""),
+                      "duration": a.get("duration", 0), "predecessors": deps})
+    try:
+        out = compute_cpm(CPMInput(activities=nodes))
+    except (ValueError, TypeError, KeyError) as exc:
+        logger.info("network pass skipped: %s", exc)
+        return None
+    times = {r.id: r for r in out.results}
+    scheduled = []
+    for a, node in zip(activities, nodes):
+        r = times[node["id"]]
+        scheduled.append({**a, "early_start": r.early_start_day, "early_finish": r.early_finish_day,
+                          "late_start": r.late_start_day, "late_finish": r.late_finish_day,
+                          "total_float": r.total_float, "free_float": r.free_float})
+    return scheduled, out.project_duration
+
+
 class ConstructionContainer(
     ConstructionDocumentsMixin,
     ConstructionBoqMixin,
@@ -359,6 +418,12 @@ class ConstructionContainer(
                         None if near_critical_band_days is None else []),
                     "near_critical_band_days": near_critical_band_days}
     
+        # A network that states its logic but not its float is scheduled
+        # here by the one CPM engine; a schedule that states its own float
+        # (P6 / XML) keeps the scheduler's numbers.
+        network = _network_pass(activities)
+        if network is not None:
+            activities, network_duration = network
         critical_activities = [a for a in activities if a.get("total_float", 999) <= 0.1]
     
         if not critical_activities:
@@ -366,7 +431,9 @@ class ConstructionContainer(
             critical_activities = [a for a in activities if a.get("total_float", 999) <= min_float + 0.1]
     
         duration = 0
-        if critical_activities:
+        if network is not None:
+            duration = network_duration
+        elif critical_activities:
             try:
                 start_dates = [datetime.fromisoformat(a.get("start", "").replace('Z', '+00:00')) for a in critical_activities if a.get("start")]
                 finish_dates = [datetime.fromisoformat(a.get("finish", "").replace('Z', '+00:00')) for a in critical_activities if a.get("finish")]
@@ -379,7 +446,7 @@ class ConstructionContainer(
         avg_float = sum(floats) / len(floats) if floats else 0
         # Near-critical needs a band the caller chose; none is assumed.
         from app.lib.pm_computations import near_critical_ids
-        sched_acts = schedule_data.get("activities", [])
+        sched_acts = activities
         near_ids = near_critical_ids(
             [(i, a.get("total_float", 999)) for i, a in enumerate(sched_acts)],
             near_critical_band_days,

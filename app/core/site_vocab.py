@@ -160,7 +160,11 @@ _CLASH_CDE_RFI = re.compile(
 _INLINE_BOQ_LINES = re.compile(
     # Do NOT match bare "boq_process" — that fires on uploaded-file asks.
     r"(?is)synthetic\s+csv\s*/\s*boq|Item\s*,\s*Desc\s*,\s*Qty"
-    r"|(?:\d+\.\d+\s*,\s*[^,\n]+,\s*\d+)",
+    # A pasted bill line is code, description, quantity. The description
+    # field is words: it must hold a letter. Without that, a plain series
+    # of decimals the user typed ("1.5, 2.5, 4") read as a bill line and
+    # hid every calculator from the turn.
+    r"|(?:\d+\.\d+\s*,\s*[^,\n]*?[^\W\d_][^,\n]*,\s*\d+)",
 )
 
 
