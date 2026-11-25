@@ -199,3 +199,17 @@ def test_a_missing_element_count_is_one_element(missing):
     assert _concrete_quantity(missing) == 1.0
     result = concrete_volume(length_m=2.0, width_m=3.0, thickness_m=0.5, quantity=missing)
     assert result["net_volume_m3"] == 3.0
+
+
+@pytest.mark.parametrize("zero", [-0.0, Decimal("-0.000")])
+def test_plain_never_prints_a_signed_zero(zero):
+    # A floored or cancelled figure can be a negative zero; the working line
+    # states it as 0, never "-0".
+    assert plain(zero) == "0"
+
+
+@pytest.mark.parametrize("diameter_mm, unit_mass", [(12, "0.8878"), (20, "2.4662")])
+def test_rebar_unit_mass_is_stated_to_four_places(diameter_mm, unit_mass):
+    note = rebar_by_area(area_m2=10, spacing_mm=200, bar_diameter_mm=diameter_mm)["note"]
+    stated = re.search(r"unit mass = \S+ = (\S+) kg/m;", note).group(1)
+    assert stated == unit_mass
