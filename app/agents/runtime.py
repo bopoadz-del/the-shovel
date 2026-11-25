@@ -9932,22 +9932,45 @@ def derivation_mismatches(text: str) -> list[tuple[str, float, float]]:
     return out
 
 
+_DERIVATION_SIGNIFICANT = 4
+
+
 def _derivation_figure(value: float) -> str:
     """A computed figure written the way the working writes figures.
 
-    Grouped digits and no exponent: the client reads "1,088,000", never
-    "1.088e+06". Four significant figures, as before, but never fewer than
-    the whole-number digits, and trailing zeros after the point dropped.
+    Grouped digits, not e-notation: the client reads "1,088,000", never
+    "1.088e+06". The value is rounded (half up, from its shortest decimal
+    form) to four significant figures, but never fewer than its whole-number
+    digits, and trailing zeros after the point are dropped. Plain digits are
+    written only while every position shown is one a float carries
+    (``sys.float_info.dig`` on either side of the point); beyond that the
+    figure is written "m × 10^n" with a four-figure m, so no digit is
+    invented and no figure is cut to 0.
     """
-    magnitude = abs(value)
-    if magnitude == 0 or magnitude != magnitude or magnitude == float("inf"):
+    import sys
+    from decimal import ROUND_HALF_UP, Decimal
+
+    if value == 0 or not math.isfinite(value):
         return f"{value:g}"
-    whole_digits = math.floor(math.log10(magnitude)) + 1
-    decimals = min(max(0, 4 - whole_digits), 12)
-    figure = f"{value:,.{decimals}f}"
+    exact = Decimal(repr(float(value)))
+    lead = exact.adjusted()
+    limit = sys.float_info.dig
+    if -limit <= lead < limit:
+        decimals = max(0, _DERIVATION_SIGNIFICANT - (lead + 1))
+        rounded = exact.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+        figure = f"{rounded:,f}"
+        if "." in figure:
+            figure = figure.rstrip("0").rstrip(".")
+        return figure
+    step = Decimal(1).scaleb(1 - _DERIVATION_SIGNIFICANT)
+    mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
+    if abs(mantissa) >= 10:
+        lead += 1
+        mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
+    figure = f"{mantissa:f}"
     if "." in figure:
         figure = figure.rstrip("0").rstrip(".")
-    return figure
+    return f"{figure} × 10^{lead}"
 
 
 def _annotate_derivation_mismatches(text: str) -> str:

@@ -55,7 +55,6 @@ def test_a_small_computed_figure_keeps_its_significant_digits(text, figure):
         (-6.0, "-6"),
         (-64000.0, "-64,000"),
         (0.0, "0"),
-        (1e-15, "0"),
         (float("inf"), "inf"),
         (float("nan"), "nan"),
     ],
@@ -73,3 +72,72 @@ def test_figure_written_without_exponent(value, written):
 )
 def test_working_that_agrees_gets_no_note(text):
     assert rt._annotate_derivation_mismatches(text) == text
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (12.3449, "12.34"),
+        (1.23456, "1.235"),
+        (0.0123449, "0.01234"),
+        (9999.5, "10,000"),
+        (0.99996, "1"),
+    ],
+)
+def test_figure_keeps_four_significant_figures(value, written):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (1e-13, "0.0000000000001"),
+        (1.234e-10, "0.0000000001234"),
+        (-2.5e-12, "-0.0000000000025"),
+        (1e-15, "0.000000000000001"),
+    ],
+)
+def test_a_tiny_figure_is_never_written_as_zero(value, written):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (999999999999999.0, "999,999,999,999,999"),
+        (123456789012345.0, "123,456,789,012,345"),
+    ],
+)
+def test_the_largest_plain_figure_keeps_every_digit(value, written):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (1e15, "1 × 10^15"),
+        (2.0**60, "1.153 × 10^18"),
+        (1e301, "1 × 10^301"),
+        (-2.5e17, "-2.5 × 10^17"),
+        (9.9996e20, "1 × 10^21"),
+        (1e-16, "1 × 10^-16"),
+        (-1.2346e-20, "-1.235 × 10^-20"),
+    ],
+)
+def test_a_figure_beyond_float_digits_is_mantissa_and_power(value, written):
+    figure = rt._derivation_figure(value)
+    assert figure == written
+    assert len(figure) < 20
+
+
+@pytest.mark.parametrize(
+    ("text", "figure"),
+    [
+        ("Area: 0.0000001 x 0.000001 = 0.6 m2.", "0.0000000000001"),
+        ("Strain: 0.000002 x 0.00003 = 0.4 of the bar.", "0.00000000006"),
+    ],
+)
+def test_the_note_never_calls_a_tiny_product_zero(text, figure):
+    note = rt._annotate_derivation_mismatches(text)
+    assert f"**{figure}**" in note
+    assert "**0**" not in note
