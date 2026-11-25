@@ -92,18 +92,18 @@
         "tier": "operational"
       },
       {
-        "id": "calculate_payment",
-        "description": "Interim payment calculation with retention and net payment",
-        "implemented_by": "app.core.construction_knowledge.calculate_payment",
-        "domain": "commercial",
-        "tier": "strategic"
-      },
-      {
         "id": "markup_build_up",
         "description": "Selling price from cost and tender percentage additions on the tender's basis: on cost (summed) or compounding (on the running total); both prices, the difference and the margin on price",
         "implemented_by": "app.lib.construction_formulas.markup_build_up",
         "domain": "commercial",
         "tier": "operational"
+      },
+      {
+        "id": "calculate_payment",
+        "description": "Interim payment calculation with retention and net payment",
+        "implemented_by": "app.core.construction_knowledge.calculate_payment",
+        "domain": "commercial",
+        "tier": "strategic"
       },
       {
         "id": "calculate_interim_payment",
