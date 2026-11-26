@@ -1,0 +1,178 @@
+"""The model's own JSON memory: working notes it writes and reads by tool.
+
+One table (``llm_memory``): project, name, data (JSON text), written_at,
+written_by_turn. A note belongs to ONE project, and the project always comes
+from the turn, never from the model's arguments. A write replaces the whole
+document in one transaction. Nothing here is injected into a prompt: a note
+reaches the model only as the result of its own ``read_memory`` /
+``list_memory`` call, labelled as its note with the date it was written.
+
+This store is separate from ``agent_memory``'s facts on purpose: a fact is a
+key/value the app may hand to a prompt once verified; a note is the model's
+own JSON on how to work, handed back only when it asks for it.
+
+Limits are settings (environment): ``LLM_MEMORY_MAX_BYTES`` per document and
+``LLM_MEMORY_MAX_DOCS`` per project.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
+
+from app.core.db import SessionLocal, engine, get_database_url
+from app.core.models import LlmMemory
+
+DEFAULT_MAX_BYTES = 16384
+DEFAULT_MAX_DOCS = 50
+#: Letters, digits, hyphen and underscore, 1-64 characters; ``.json`` optional.
+_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+_lock = threading.Lock()
+_initialized_for_url: Optional[str] = None
+
+
+class MemoryRefused(ValueError):
+    """A request the model can correct: its message is returned to it."""
+
+
+def _setting(env: str, default: int) -> int:
+    try:
+        value = int(os.getenv(env) or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_bytes() -> int:
+    return _setting("LLM_MEMORY_MAX_BYTES", DEFAULT_MAX_BYTES)
+
+
+def max_docs() -> int:
+    return _setting("LLM_MEMORY_MAX_DOCS", DEFAULT_MAX_DOCS)
+
+
+def init_db() -> None:
+    """Create the table if absent (SQLite and tests; Postgres uses Alembic)."""
+    global _initialized_for_url
+    url = get_database_url()
+    if _initialized_for_url == url:
+        return
+    with _lock:
+        if _initialized_for_url == url:
+            return
+        if url.startswith("sqlite:///"):
+            parent = os.path.dirname(url[len("sqlite:///"):])
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        LlmMemory.__table__.create(bind=engine, checkfirst=True)
+        _initialized_for_url = url
+
+
+def clean_name(name: Any) -> str:
+    """The stored name for ``name``: ``.json`` taken off; anything outside
+    letters, digits, hyphen and underscore, or longer than 64, is refused."""
+    if not isinstance(name, str):
+        raise MemoryRefused("name must be a text: letters, digits, '-' or '_', at most 64 characters")
+    stem = name[:-5] if name.lower().endswith(".json") else name
+    if not _NAME_RE.fullmatch(stem):
+        raise MemoryRefused(
+            f"name {name!r} is not allowed: use letters, digits, '-' or '_', at most 64 "
+            "characters, optionally ending in .json")
+    return stem
+
+
+def parse_data(data: Any) -> Tuple[str, Any]:
+    """``(json_text, value)`` for a document: a JSON object or array, given
+    as such or as JSON text. Anything else is refused."""
+    value = data
+    if isinstance(data, str):
+        try:
+            value = json.loads(data)
+        except ValueError as exc:
+            raise MemoryRefused(f"data is not JSON ({exc.msg} at character {exc.pos}); "
+                               "send the whole document as a JSON object") from None
+    if not isinstance(value, (dict, list)):
+        raise MemoryRefused("data must be a JSON object or array (the whole document)")
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return text, value
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, Any]:
+    """Replace the whole document ``name`` of ``project_id`` in one
+    transaction. Refused (nothing written) for a bad name, data that is not a
+    JSON object/array, a document over the size limit, or a new document past
+    the per-project count."""
+    if not project_id:
+        raise MemoryRefused("memory needs a project; this conversation has none")
+    stem = clean_name(name)
+    text, _value = parse_data(data)
+    size = len(text.encode("utf-8"))
+    if size > max_bytes():
+        raise MemoryRefused(f"document is {size} bytes; the limit is {max_bytes()} bytes. "
+                           "Keep only what helps you work and write it again")
+    init_db()
+    row = {"data": text, "size_bytes": size, "written_at": _now(), "written_by_turn": turn or ""}
+    with SessionLocal() as s:
+        with s.begin():
+            done = s.execute(update(LlmMemory)
+                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
+                             .values(**row)).rowcount
+            if not done:
+                count = s.scalar(select(func.count()).select_from(LlmMemory)
+                                 .where(LlmMemory.project_id == project_id)) or 0
+                if count >= max_docs():
+                    raise MemoryRefused(f"this project already holds {count} notes (the limit); "
+                                       "replace or reuse one of them (list_memory shows them)")
+                s.add(LlmMemory(project_id=project_id, name=stem, **row))
+        created = not done
+    return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
+
+
+def write_retrying(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, Any]:
+    """``write``; when a concurrent write inserted the same new document
+    first, this one replaces it (the last whole document wins)."""
+    try:
+        return write(project_id, name, data, turn)
+    except IntegrityError:
+        return write(project_id, name, data, turn)
+
+
+def read(project_id: str, name: Any) -> Dict[str, Any]:
+    if not project_id:
+        raise MemoryRefused("memory needs a project; this conversation has none")
+    stem = clean_name(name)
+    init_db()
+    with SessionLocal() as s:
+        row = s.get(LlmMemory, (project_id, stem))
+        if row is None:
+            raise MemoryRefused(f"no note named {stem!r} in this project (list_memory shows them)")
+        return {"name": row.name, "data": json.loads(row.data), "bytes": row.size_bytes,
+                "written_at": row.written_at, "written_by_turn": row.written_by_turn}
+
+
+def listing(project_id: str, with_data: bool = False) -> List[Dict[str, Any]]:
+    if not project_id:
+        raise MemoryRefused("memory needs a project; this conversation has none")
+    init_db()
+    with SessionLocal() as s:
+        rows = s.scalars(select(LlmMemory).where(LlmMemory.project_id == project_id)
+                         .order_by(LlmMemory.name)).all()
+        out = []
+        for row in rows:
+            entry = {"name": row.name, "bytes": row.size_bytes, "written_at": row.written_at,
+                     "written_by_turn": row.written_by_turn}
+            if with_data:
+                entry["data"] = json.loads(row.data)
+            out.append(entry)
+        return out

@@ -228,6 +228,8 @@ async def lifespan(app: FastAPI):
     _bootstrap_first_user()
     from app.core.agent_memory import init_db as init_agent_memory_db
     init_agent_memory_db()
+    from app.core.llm_memory import init_db as init_llm_memory_db
+    init_llm_memory_db()
     from app.core.doc_index import init_db as init_doc_index_db
     init_doc_index_db()
     # NOTE: seed_knowledge() used to run HERE, inline. It is now part of the
