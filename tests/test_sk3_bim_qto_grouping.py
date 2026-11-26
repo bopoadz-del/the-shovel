@@ -271,3 +271,63 @@ def test_block_keeps_extraction_when_table_is_bad(tmp_path, table):
     assert "error" in result["qto_groups"]
     walls = [e for e in result["building_elements"] if e["ifc_type"] == "IfcWall"]
     assert len(walls) == 1
+
+
+# ---- chat pre-dispatch keeps the grouped table inside the cut --------------
+
+class _Extractor:
+    def __init__(self, inner):
+        self._inner = inner
+
+    async def execute(self, input_data, params=None):
+        return {"block": "bim_extractor", "status": "success", "result": self._inner}
+
+
+def _predispatch(monkeypatch, filename, inner):
+    from app.agents import runtime
+    from app.core import projects as projects_mod
+
+    monkeypatch.setattr(projects_mod, "list_documents",
+                        lambda pid, **_kw: [{"original_name": filename}],
+                        raising=False)
+    monkeypatch.setattr(projects_mod, "list_document_names",
+                        lambda pid: projects_mod.list_documents(pid))
+    monkeypatch.setattr(runtime, "_resolve_file_path", lambda pid, raw: "/d/" + raw)
+    monkeypatch.setattr(runtime, "block_instances",
+                        {"bim_extractor": _Extractor(inner)}, raising=False)
+    agent = runtime.Agent(name="qa", description="", system_prompt="x",
+                          allowed_blocks=["bim_extractor"])
+    msgs = [{"role": "user", "content": f"Take-off by level from {filename}"}]
+    rec = asyncio.run(runtime._predispatch_file_tool(agent, msgs, "p1"))
+    assert rec and rec["predispatched"]
+    return msgs[-1]["content"]
+
+
+@pytest.mark.parametrize("filename, n_elements, marker", [
+    ("tower_a.ifc", 400, "GF"),
+    ("annex.ifc", 900, "L07"),
+])
+def test_predispatch_puts_qto_groups_ahead_of_bulky_keys(
+        monkeypatch, filename, n_elements, marker):
+    # building_elements comes FIRST in the block's own dict and alone
+    # exceeds the 6000-char cut, so only the lead-key order keeps the
+    # grouped table in what the model reads.
+    inner = {
+        "building_elements": [{"ifc_type": "IfcWall", "guid": f"g{i:05d}"}
+                              for i in range(n_elements)],
+        "status": "success",
+        "quantities": {"walls": {"count": n_elements}},
+        "qto_groups": {"groups": [{"storey": marker, "count": n_elements}]},
+    }
+    injected = _predispatch(monkeypatch, filename, inner)
+    assert f'"storey": "{marker}"' in injected
+    assert injected.find("qto_groups") < injected.find("quantities")
+    assert injected.find("qto_groups") < injected.find("building_elements")
+
+
+@pytest.mark.parametrize("filename", ["tower_a.ifc", "annex.ifc"])
+def test_predispatch_without_qto_groups_adds_no_key(monkeypatch, filename):
+    inner = {"status": "success", "quantities": {"walls": {"count": 3}}}
+    injected = _predispatch(monkeypatch, filename, inner)
+    assert "qto_groups" not in injected
+    assert '"walls"' in injected
