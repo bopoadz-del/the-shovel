@@ -924,8 +924,6 @@ def _drop_overridden_absence(text: str, cited: Collection[str]) -> str:
     names something else, wider or narrower (a word is missing or added), and
     when it names nothing. The answer is never left empty: the cited figure
     sentence itself is never dropped."""
-    if not cited:
-        return text
     lines = text.split("\n")
     leads = [_ITEM_LEAD_RE.match(line).group(0) for line in lines]
     # Every sentence, in reading order, with the line it sits on.
