@@ -210,3 +210,22 @@ def test_chat_stream_reads_the_setting_when_no_door_marked_the_turn(monkeypatch,
     driven = any(e.get("type") == "start" and e.get("mode") == "driver" for e in events)
     assert driven is on_sheet
     assert bool(seen and "sheet_update" in seen[0]) is on_sheet
+
+
+@pytest.mark.parametrize("conv", ["ws-m-1", "ws-m-2"])
+def test_save_holds_the_sheet_in_memory(tmp_path, conv):
+    day = "2026-11-26"
+    sheet = {"givens": [{"id": "g1", "value": len(conv)}]}
+    trace_store.save({"schema": "trace/1", "sheet": sheet}, conv, now=_now(day))
+    (tmp_path / "trace_records" / f"{day}.jsonl").unlink()
+    assert trace_store.last_sheet(conv, now=_now(day)) == sheet  # held, not re-read
+    trace_store.save({"schema": "trace/1"}, conv, now=_now(day))  # a record without a sheet
+    assert trace_store.last_sheet(conv, now=_now(day)) == sheet
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_a_turn_without_a_conversation_takes_no_ones_sheet(missing):
+    day = "2026-11-26"
+    trace_store.save({"schema": "trace/1", "sheet": {"givens": [{"id": "g1"}]}}, "ws-n-1", now=_now(day))
+    trace_store.forget_held()
+    assert trace_store.last_sheet(missing, now=_now(day)) is None

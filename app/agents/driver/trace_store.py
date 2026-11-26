@@ -102,7 +102,7 @@ def last_sheet(conversation_id: Optional[str], now: Optional[_dt.datetime] = Non
     today = (now or _dt.datetime.now(_dt.timezone.utc)).astimezone(_dt.timezone.utc).date()
     for day in (today, today - _dt.timedelta(days=1)):
         found = None
-        for row in records(day.isoformat(), str(conversation_id)):
+        for row in records(day.isoformat(), conversation_id):
             if isinstance(row.get("sheet"), dict):
                 found = row["sheet"]
         if found is not None:
