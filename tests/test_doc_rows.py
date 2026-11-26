@@ -353,3 +353,154 @@ def test_spreadsheet_keeps_unmapped_cells_in_extra(tmp_path, remark):
     path = _xlsx(tmp_path, "r.xlsx", {"S1": sheet})
     (row,) = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "r.xlsx", ".xlsx"))
     assert dict(row.extra) == {"Item": "A", "Remarks": remark}
+
+
+# ── printed total lines (PR-A step 3) ──────────────────────────────────────
+
+@pytest.mark.parametrize("sheets, totals, states", [
+    # a subtotal per page, then a running total that the next page brings forward
+    ({"Bill 1": [["BILL No. 1 - SITE WORKS"], HEADER,
+                 ["A", "Excavate to reduce levels", "m3", 120, 15, 1800],
+                 ["B", "Fill with imported material", "m3", 40, 22.5, 900],
+                 ["C/F", "", "", "", "", 2700],
+                 ["B/F", "", "", "", "", 2700],
+                 ["C", "Topsoil strip", "m2", 100, 2, 200],
+                 ["To collection", "", "", "", "", 2900]]},
+     [(1, 2, 2700.0), (1, 2, 2700.0), (1, 3, 2900.0)], {1: dr.RECONCILED}),
+    # two sheets; the second prints a total its rows do not add up to
+    ({"Bill 2": [["BILL No. 2 - CONCRETE"], HEADER,
+                 ["A", "Blinding 50 thick", "m2", 300, 12, 3600],
+                 ["", "", "", "", "", 3600]],
+      "Bill 3": [["BILL No. 3 - MASONRY"], HEADER,
+                 ["A", "Blockwork 200 thick", "m2", 50, 40, 2000],
+                 ["B", "Lintels", "nr", 10, 15, 150],
+                 ["", "", "", "", "", 2400]]},
+     [(1, 1, 3600.0), (2, 2, 2400.0)], {1: dr.RECONCILED, 2: dr.FAILED}),
+])
+def test_spreadsheet_total_lines_are_read_and_checked(tmp_path, sheets, totals, states):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "priced.xlsx", sheets)
+    read = doc_index.spreadsheet_rows(path, "priced.xlsx", ".xlsx")
+    chunks = doc_index._spreadsheet_row_chunks(path, "priced.xlsx", ".xlsx")
+    rows = dr.rows_from_spreadsheet("doc-t", read)
+    # a total line makes no chunk and no row; every row still names its chunk
+    assert len(rows) == len(chunks)
+    assert [r.chunk_ordinal for r in rows] == list(range(len(rows)))
+    for r in rows:
+        assert f"Item: {r.fields['description']}" in chunks[r.chunk_ordinal]
+    lines = dr.spreadsheet_printed_totals(read)
+    assert [(ln.table_no, ln.after_row, ln.value) for ln in lines] == totals
+    got = dr.reconcile_tables_with_lines(rows, lines)
+    assert {t: c.state for t, c in got.items()} == states
+    assert {t: c.total_printed for t, c in got.items()} == {t: v for t, _, v in totals}
+
+
+@pytest.mark.parametrize("closing", [
+    ["", "", "", 999, "", ""],       # a quantity alone: not a printed amount
+    ["", "Carried forward", "", "", "", ""],   # a caption alone: a label
+    ["", "", "", "", "", "Included"],          # an amount cell with no number
+])
+def test_a_line_without_a_printed_amount_is_not_a_total(tmp_path, closing):
+    from app.core import doc_index
+
+    sheets = {"Bill 1": [["BILL No. 1"], HEADER,
+                         ["A", "Excavate", "m3", 10, 5, 50], closing]}
+    path = _xlsx(tmp_path, "t.xlsx", sheets)
+    read = doc_index.spreadsheet_rows(path, "t.xlsx", ".xlsx")
+    assert dr.spreadsheet_printed_totals(read) == []
+    rows = dr.rows_from_spreadsheet("doc-n", read)
+    assert dr.reconcile_tables_with_lines(rows, [])[1].state == dr.RECONCILED
+
+
+_LINE_ROWS = [_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Fill", "2", "10", "20"),
+              _row(1, 3, "Lump sum", total="30"), _row(2, 1, "Blinding", "1", "8", "8")]
+
+
+@pytest.mark.parametrize("lines, agrees", [
+    ([dr.PrintedTotal(1, 2, 70.0), dr.PrintedTotal(1, 3, 30.0)], [True, True]),    # subtotals
+    ([dr.PrintedTotal(1, 2, 70.0), dr.PrintedTotal(1, 3, 100.0)], [True, True]),   # running
+    ([dr.PrintedTotal(1, 2, 70.0), dr.PrintedTotal(1, 3, 65.0)], [True, False]),   # neither
+    ([dr.PrintedTotal(1, 0, 10.0), dr.PrintedTotal(2, 1, 8.0)], [None, True]),     # nothing above
+    ([dr.PrintedTotal(2, 1, 8.6)], [False]),                    # past half a unit of "8"
+    ([dr.PrintedTotal(2, 1, 8.5)], [True]),                     # within half a unit of "8"
+])
+def test_total_line_checks_the_rows_it_closes(lines, agrees):
+    assert [c.agrees for c in dr.check_total_lines(_LINE_ROWS, lines)] == agrees
+
+
+@pytest.mark.parametrize("amounts, printed, agrees", [
+    (["50.25", "20.10"], 70.36, True),       # 3 x 0.005 allowed
+    (["50.25", "20.10"], 70.40, False),      # 0.05 off: past the printed cents
+    (["50", "20"], 71.0, True),              # 3 x 0.5 allowed
+    (["50", "20"], 72.0, False),             # 2 off: past the printed units
+    (["995,500"], 1_000_000.0, False),       # short by a share of the total
+    (["1,000,000"], 1_000_000.0, True),
+])
+def test_total_line_allows_printed_rounding_not_a_share(amounts, printed, agrees):
+    rows = [_row(1, i + 1, f"Item {i}", total=a) for i, a in enumerate(amounts)]
+    (check,) = dr.check_total_lines(rows, [dr.PrintedTotal(1, len(rows), printed)])
+    assert check.agrees is agrees
+    assert check.running == pytest.approx(sum(r.figure("total") for r in rows))
+
+
+
+@pytest.mark.parametrize("rows, printed, running, agrees", [
+    # a measured row with no amount is left out of the sum, not counted as 0
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Fill", "4")], 50.0, 50.0, True),
+    ([_row(1, 1, "Fill", "4"), _row(1, 2, "Cart", "2", "3", "6"),
+      _row(1, 3, "Lump sum", total="30")], 37.0, 36.0, True),
+    ([_row(1, 1, "Fill", "4"), _row(1, 2, "Topsoil", "9")], 0.0, None, None),
+])
+def test_total_line_sums_only_rows_that_print_an_amount(rows, printed, running, agrees):
+    (check,) = dr.check_total_lines(rows, [dr.PrintedTotal(1, len(rows), printed)])
+    assert check.running == running
+    assert check.agrees is agrees
+
+
+@pytest.mark.parametrize("sheets, numbered, lines", [
+    ({"S1": [["BILL 1"], HEADER, ["A", "Excavate", "m3", 10, 5, 50], ["", "", "", "", "", 50]],
+      "S2": [["BILL 2"], HEADER, ["A", "Fill", "m3", 2, 10, 20], ["B", "Cart", "m3", 1, 4, 4],
+             ["", "", "", "", "", 24]]},
+     [(1, 1, 0), (2, 1, 1), (2, 2, 2)], [(1, 1), (2, 2)]),
+    ({"S1": [["BILL 1"], HEADER, ["A", "Excavate", "m3", 10, 5, 50], ["B", "Cart", "m3", 1, 4, 4]],
+      "S2": [["BILL 2"], HEADER, ["", "", "", "", "", 9], ["A", "Fill", "m3", 2, 10, 20]]},
+     [(1, 1, 0), (1, 2, 1), (2, 1, 2)], [(2, 0)]),
+])
+def test_row_no_counts_within_its_table_and_a_total_line_closes_its_own(tmp_path, sheets, numbered, lines):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "n.xlsx", sheets)
+    read = doc_index.spreadsheet_rows(path, "n.xlsx", ".xlsx")
+    rows = dr.rows_from_spreadsheet("doc-n", read)
+    assert [(r.table_no, r.row_no, r.chunk_ordinal) for r in rows] == numbered
+    got = [(ln.table_no, ln.after_row) for ln in dr.spreadsheet_printed_totals(read)]
+    assert got == lines
+
+
+@pytest.mark.parametrize("lines, states", [
+    ([dr.PrintedTotal(1, 3, 100.0)], {1: dr.RECONCILED, 2: dr.RECONCILED}),
+    ([dr.PrintedTotal(1, 3, 103.0)], {1: dr.FAILED, 2: dr.RECONCILED}),     # past 4 x 0.5
+    ([dr.PrintedTotal(1, 3, 102.0)], {1: dr.RECONCILED, 2: dr.RECONCILED}), # at 4 x 0.5
+    ([dr.PrintedTotal(1, 0, 5.0)], {1: dr.RECONCILED, 2: dr.RECONCILED}),
+    ([dr.PrintedTotal(3, 0, 5.0)], {1: dr.RECONCILED, 2: dr.RECONCILED, 3: dr.NOT_READ}),
+])
+def test_table_state_takes_its_total_lines(lines, states):
+    got = dr.reconcile_tables_with_lines(_LINE_ROWS, lines)
+    assert {t: c.state for t, c in got.items()} == states
+
+
+@pytest.mark.parametrize("rows, line, state", [
+    # a failing row stays FAILED even when the printed total matches the amounts
+    ([_row(1, 1, "Excavate", "10", "5", "60"), _row(1, 2, "Fill", "2", "10", "20")],
+     dr.PrintedTotal(1, 2, 80.0), dr.FAILED),
+    ([_row(1, 1, "Formwork", "3", "100", "350")], dr.PrintedTotal(1, 1, 350.0), dr.FAILED),
+    # rows that print amounts only: the agreeing total is the one check, so RECONCILED
+    ([_row(1, 1, "Lump sum A", total="40"), _row(1, 2, "Lump sum B", total="60")],
+     dr.PrintedTotal(1, 2, 100.0), dr.RECONCILED),
+    ([_row(1, 1, "Provisional sum", total="500")], dr.PrintedTotal(1, 1, 500.0), dr.RECONCILED),
+    # the same amounts-only rows with no agreeing total stay UNCHECKED
+    ([_row(1, 1, "Provisional sum", total="500")], dr.PrintedTotal(1, 0, 9.0), dr.UNCHECKED),
+])
+def test_a_total_line_neither_hides_a_failing_row_nor_leaves_lump_sums_unchecked(rows, line, state):
+    assert dr.reconcile_tables_with_lines(rows, [line])[1].state == state

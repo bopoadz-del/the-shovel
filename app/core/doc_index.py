@@ -3476,6 +3476,11 @@ class SpreadsheetRow:
     empty when the sheet states no band. ``fields`` holds the resolved columns
     (description, quantity, unit, rate, total) that print a value; ``others``
     every other non-empty cell under its own header text, in column order.
+
+    ``total_line`` marks a row the sheet prints as a total of the rows above
+    it (an amount and no item description: carried forward, to collection).
+    It is not a measured row and makes no chunk; its ``fields`` hold only the
+    amount it prints, so the rows it closes can be checked against it.
     """
 
     sheet: str
@@ -3484,6 +3489,7 @@ class SpreadsheetRow:
     path: tuple[str, ...]
     fields: dict[str, str]
     others: tuple[tuple[str, str], ...]
+    total_line: bool = False
 
 
 def _spreadsheet_row_chunks(
@@ -3492,6 +3498,8 @@ def _spreadsheet_row_chunks(
     """One retrievable chunk per measured spreadsheet row, headers inherited."""
     chunks: list[str] = []
     for r in spreadsheet_rows(file_path, filename, ext):
+        if r.total_line:
+            continue
         parts: list[str] = []
         if r.sheet:
             parts.append(f"Sheet: {r.sheet}")
@@ -3611,7 +3619,15 @@ def spreadsheet_rows(
                 # forward, to collection): it sums the rows above and scopes
                 # nothing below. Taking it as the band would replace the bill
                 # heading with its caption and put a running total into
-                # every following row's locator.
+                # every following row's locator. It is kept, flagged, for
+                # the amount it prints: the rows above are checked against it.
+                tot_idx = colmap.get("total")
+                if tot_idx is not None and tot_idx < len(cells) and cells[tot_idx] != "":
+                    out.append(SpreadsheetRow(
+                        sheet=sheet_name, row_no=row_no, band="", path=(),
+                        fields={"total": cells[tot_idx]}, others=(),
+                        total_line=True,
+                    ))
                 continue
             if not desc or not has_figure:
                 # A bill/section/subtotal marker (label with no measured item

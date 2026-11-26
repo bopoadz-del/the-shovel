@@ -81,32 +81,73 @@ class DocRow:
         return loc
 
 
-def rows_from_spreadsheet(document_id: str, rows: Sequence[Any]) -> list[DocRow]:
-    """``DocRow`` per :class:`app.core.doc_index.SpreadsheetRow`.
+@dataclass(frozen=True)
+class PrintedTotal:
+    """A total line a table prints: the amount it states and where it stands.
 
-    One table per sheet, numbered in the order the sheets are read. The
-    chunk ordinal is the row's position in ``rows``: the row chunks are made
-    from the same list in the same order.
+    ``after_row`` is the ``row_no`` of the last measured row above the line
+    (0 when none is above it), so the rows the line closes are known.
+    """
+
+    table_no: int
+    after_row: int
+    value: float
+    sheet_row: int | None = None
+
+
+def _spreadsheet_walk(rows: Sequence[Any]) -> Iterable[tuple[int, int, int, Any]]:
+    """``(table_no, row_no, ordinal, row)`` over spreadsheet rows, total lines
+    included.
+
+    One table per sheet, numbered in the order the sheets are read. ``row_no``
+    counts the measured rows of its own table; ``ordinal`` counts measured
+    rows across the whole list from 0, so it is the chunk ordinal: the row
+    chunks are made from the measured rows of the same list in order. A total
+    line carries the ``row_no`` of the last measured row above it in its
+    table (0 when none is).
     """
     tables: dict[str, int] = {}
     in_table: dict[int, int] = {}
-    out: list[DocRow] = []
-    for i, r in enumerate(rows):
+    ordinal = 0
+    for r in rows:
         table_no = tables.setdefault(r.sheet, len(tables) + 1)
-        in_table[table_no] = in_table.get(table_no, 0) + 1
+        if not getattr(r, "total_line", False):
+            in_table[table_no] = in_table.get(table_no, 0) + 1
+            ordinal += 1
+        yield table_no, in_table.get(table_no, 0), ordinal - 1, r
+
+
+def rows_from_spreadsheet(document_id: str, rows: Sequence[Any]) -> list[DocRow]:
+    """``DocRow`` per measured :class:`app.core.doc_index.SpreadsheetRow`."""
+    out: list[DocRow] = []
+    for table_no, row_no, ordinal, r in _spreadsheet_walk(rows):
+        if getattr(r, "total_line", False):
+            continue
         fields = dict(r.fields)
         out.append(DocRow(
             document_id=document_id,
             table_no=table_no,
-            row_no=in_table[table_no],
+            row_no=row_no,
             path=tuple(r.path),
             fields=fields,
             extra=dict(r.others),
             sheet=r.sheet,
             sheet_row=r.row_no,
-            chunk_ordinal=i,
+            chunk_ordinal=ordinal,
             check=check_row(fields),
         ))
+    return out
+
+
+def spreadsheet_printed_totals(rows: Sequence[Any]) -> list[PrintedTotal]:
+    """The total lines a spreadsheet prints, each with the amount it states."""
+    out: list[PrintedTotal] = []
+    for table_no, row_no, _, r in _spreadsheet_walk(rows):
+        if not getattr(r, "total_line", False):
+            continue
+        value = parse_number(r.fields.get("total", ""))
+        if value is not None:
+            out.append(PrintedTotal(table_no, row_no, value, r.row_no))
     return out
 
 
@@ -201,6 +242,82 @@ def _rounding_allowance(amounts: Sequence[str], printed_total: float) -> float:
     by rounding alone: half a unit of each figure's own last printed digit."""
     total_half = 0.5 if float(printed_total).is_integer() else 0.005
     return sum(_half_unit(a) for a in amounts) + total_half
+
+
+@dataclass(frozen=True)
+class TotalLineCheck:
+    """One printed total line against the rows it closes.
+
+    A total line states either the rows since the previous total line (a
+    subtotal) or every row above it (a running total: carried forward,
+    brought forward). ``agrees`` is True when the printed amount matches
+    either sum, False when it matches neither, None when no row above it
+    prints an amount.
+    """
+
+    line: PrintedTotal
+    since_previous: float | None
+    running: float | None
+    agrees: bool | None
+
+
+def _amount_sum(rows: Iterable[DocRow]) -> tuple[float, list[str]] | None:
+    """The sum of the amounts ``rows`` print and the printed texts behind it;
+    None when no row prints an amount."""
+    priced = [r for r in rows if r.figure("total") is not None]
+    if not priced:
+        return None
+    return sum(r.figure("total") for r in priced), [r.fields.get("total", "") for r in priced]
+
+
+def _sum_agrees(summed: tuple[float, list[str]], printed: float) -> bool:
+    """A sum agrees with a printed total within the rounding its printed
+    figures allow (:func:`_rounding_allowance`), never a share of the total."""
+    value, texts = summed
+    return abs(value - printed) <= _rounding_allowance(texts, printed)
+
+
+def check_total_lines(rows: Sequence[DocRow], lines: Sequence[PrintedTotal]) -> list[TotalLineCheck]:
+    """:class:`TotalLineCheck` for every printed total line, in table order."""
+    out: list[TotalLineCheck] = []
+    previous: dict[int, int] = {}
+    for line in sorted(lines, key=lambda x: (x.table_no, x.after_row)):
+        mine = [r for r in rows if r.table_no == line.table_no and r.row_no <= line.after_row]
+        start = previous.get(line.table_no, 0)
+        since = _amount_sum(r for r in mine if r.row_no > start)
+        running = _amount_sum(mine)
+        sums = [v for v in (since, running) if v is not None]
+        agrees = any(_sum_agrees(v, line.value) for v in sums) if sums else None
+        out.append(TotalLineCheck(line, since[0] if since else None,
+                                  running[0] if running else None, agrees))
+        previous[line.table_no] = line.after_row
+    return out
+
+
+def reconcile_tables_with_lines(
+    rows: Sequence[DocRow], lines: Sequence[PrintedTotal],
+) -> dict[int, TableCheck]:
+    """Each table's state from its rows and the total lines it prints.
+
+    A total line that agrees with neither the rows it closes nor every row
+    above it makes the table FAILED; one that agrees makes a table with no
+    failing row RECONCILED; a table with no total line keeps the state its
+    rows give.
+    """
+    out = reconcile_tables(rows)
+    checks = check_total_lines(rows, lines)
+    for t in {c.line.table_no for c in checks}:
+        mine = [c for c in checks if c.line.table_no == t]
+        base = out.get(t) or reconcile_table([])
+        if any(c.agrees is False for c in mine) or base.state == FAILED:
+            state = FAILED
+        elif any(c.agrees for c in mine):
+            state = RECONCILED
+        else:
+            state = base.state
+        out[t] = TableCheck(state, base.rows, base.checked, base.failed,
+                            mine[-1].line.value, base.total_of_rows)
+    return out
 
 
 # ── rows_query ──────────────────────────────────────────────────────────────
