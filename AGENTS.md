@@ -20,6 +20,10 @@ shrink. The acceptance is the owner-sealed unseen set: do not ask for it, do
 not write it. The full order, the four tests, and the retriever surgery:
 `docs/ORDER-no-hardwiring.md`.
 
+## STANDING ORDER -- small core first (owner, 2026-11-26)
+
+> Every new build and every project: start with a small core only - RAG of 30 pages at most of different document types, a few formulas, a couple of skills, 1 kernel, a couple of encoded-knowledge items. Nothing else is loaded until that core is all tested and working, with no hardwiring, passing every live UI test. Only then add the full content. Never load everything at once and then start trial and error.
+
 ## Cursor Cloud specific instructions
 
 The Fork is a **FastAPI** backend (`app/`) plus a **React + Vite + TypeScript**
