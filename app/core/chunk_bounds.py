@@ -362,31 +362,40 @@ def _is_heading_line(line: str) -> bool:
     return sum(ch.isupper() for ch in letters) / len(letters) >= 0.6
 
 
+def _folded(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _table_cell_copies(lines: list[str], rows: set[int]) -> set[int]:
-    """Indexes of the lines that repeat a cell of the page's own table rows.
+    """Indexes of the lines that repeat cells of the page's own table rows.
 
     A PDF page carries its text layer and, after it, its tables as rows; the
     text layer holds the same cells, one or a few to a line. A line is such
-    a copy when its text is a cell of a row on this page, and the page holds
-    that text off the rows no more often than in them: one more occurrence
-    is a line of its own (a heading the table repeats), and keeps its place.
+    a copy when its text, spacing folded, is one cell of a row on this page
+    or a run of neighbouring cells of one row (the text layer writes cells
+    that sit close together on one line), and the page holds that text off
+    the rows no more often than in them: one more occurrence is a line of
+    its own (a heading the table repeats), and keeps its place.
     """
-    cells = Counter(
-        cell.strip()
-        for idx in rows
-        for cell in lines[idx].split(_TABLE_CELL_SEPARATOR)
-        if cell.strip()
-    )
+    runs: Counter[str] = Counter()
+    for idx in rows:
+        row = [
+            _folded(cell) for cell in lines[idx].split(_TABLE_CELL_SEPARATOR)
+            if cell.strip()
+        ]
+        for start in range(len(row)):
+            for end in range(start + 1, len(row) + 1):
+                runs[" ".join(row[start:end])] += 1
     # A wrapped row's continuation line can hold no separator; it is a row,
     # not a copy, so only lines off the rows are counted and taken.
     loose = Counter(
-        line.strip() for idx, line in enumerate(lines)
-        if idx not in rows and line.strip() in cells
+        _folded(line) for idx, line in enumerate(lines)
+        if idx not in rows and _folded(line) in runs
     )
     copies: set[int] = set()
     for idx, line in enumerate(lines):
-        text = line.strip()
-        if idx not in rows and text in cells and loose[text] <= cells[text]:
+        text = _folded(line)
+        if idx not in rows and text in runs and loose[text] <= runs[text]:
             copies.add(idx)
     return copies
 

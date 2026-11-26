@@ -427,3 +427,64 @@ def test_cell_copies_are_off_the_rows(cell, unit):
     rows = _table_row_indexes(lines)
     assert lines.index(cell) in rows
     assert _table_cell_copies(lines, rows) == {len(lines) - 1}
+
+
+# --- The text layer writes cells that sit close together on one line.
+@pytest.mark.parametrize("cells,rows", [
+    ("ITEM DESCRIPTION\nUNIT QTY\n1\nExcavation\nm3\n450",
+     "ITEM | DESCRIPTION | UNIT | QTY\n1 | Excavation | m3 | 450"),
+    ("NO.    ACTIVITY    START   FINISH\n1 Setting out\nMAY JUNE",
+     "NO. | ACTIVITY | START | FINISH\n1 | Setting out | MAY | JUNE"),
+])
+def test_text_layer_line_of_neighbouring_cells_is_not_a_heading(cells, rows):
+    assert heading_line_for_page(f"{PROSE}\n{cells}\n{rows}") == ""
+
+
+# Cells of a row that are not neighbours are no run of the row: the line is
+# the page's own, and a run written more often off the rows than in them is
+# a heading too.
+@pytest.mark.parametrize("line,extra", [
+    ("ITEM UNIT", 0), ("DESCRIPTION QTY", 0),
+    ("ITEM DESCRIPTION", 1), ("UNIT QTY", 1),
+])
+def test_cells_that_are_no_run_of_one_row_stay_a_heading(line, extra):
+    rows = "ITEM | DESCRIPTION | UNIT | QTY\n1 | Excavation | m3 | 450"
+    page = "\n".join([PROSE] + [line] * (1 + extra) + [rows])
+    assert heading_line_for_page(page) == line
+
+
+@pytest.mark.parametrize("lines,copy", [
+    (["UNIT QTY", "ITEM | DESCRIPTION | UNIT | QTY", "1 | Pipe | m | 9"], 0),
+    (["Pipe   m", "ITEM | DESCRIPTION | UNIT | QTY", "1 | Pipe | m | 9"], 0),
+])
+def test_a_run_of_cells_is_taken_as_a_copy(lines, copy):
+    rows = _table_row_indexes(lines)
+    assert copy not in rows
+    assert _table_cell_copies(lines, rows) == {copy}
+
+
+# The scan resumes after the widest table it took: a line that only joins a
+# table starting inside the one taken is no row.
+@pytest.mark.parametrize("table", [
+    ["Concrete works below.", "1 | Blinding | m2", "2 | Mass fill",
+     "to footings | m3", "Rates on request | "],
+    ["Drainage works below.", "1 | Pipe 150 | m", "2 | Manhole",
+     "chamber | nr", "Prices exclude VAT | "],
+])
+def test_a_line_after_the_widest_table_is_not_a_row(table):
+    assert _table_row_indexes(table) == {1, 2, 3}
+
+
+@pytest.mark.parametrize("widths", [[28, 70, 28, 28], [26, 66, 26, 26]])
+def test_real_pdf_narrow_columns_header_is_no_heading(tmp_path, widths):
+    from app.core.doc_index import _extract_pdf
+
+    rows = [["ITEM", "DESCRIPTION", "UNIT", "QTY"],
+            ["1", "Excavation", "m3", "450"],
+            ["2", "Backfill", "m3", "120"]]
+    path = tmp_path / "page.pdf"
+    _ruled_table_pdf(path, None, widths, rows)
+    text, meta = _extract_pdf(str(path), "page.pdf")
+    assert " | " in text
+    headings = page_heading_lines(text, meta.get("page_starts"))
+    assert headings.get(1) is None
