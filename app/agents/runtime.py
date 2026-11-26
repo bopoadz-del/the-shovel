@@ -9971,7 +9971,9 @@ def _derivation_figure(value: float) -> str:
     shown = rounded.adjusted()
     if -limit <= shown < limit:
         return _derivation_trim(f"{rounded:,f}")
-    mantissa = rounded.scaleb(-shown).quantize(step, rounding=ROUND_HALF_UP)
+    # Already four figures at most: past the bound, a plain figure is only
+    # ever a carry to a power of ten.
+    mantissa = rounded.scaleb(-shown)
     return f"{_derivation_trim(f'{mantissa:f}')} × 10^{shown}"
 
 
