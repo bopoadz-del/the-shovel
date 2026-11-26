@@ -435,6 +435,10 @@ def test_a_rule_that_rescales_a_weighted_score_criterion_binds_nothing(rule):
     assert records_completed_by_user_text(text) is not None
     ruled = text.replace(". Who wins?", f", {rule}. Who wins?")
     assert records_completed_by_user_text(ruled) is None
+    # The rule guard itself reads the rule, not only the whole-sentence read.
+    criteria, amounts = ["price", "technical"], {"price"}
+    assert stated_records._rule_disagrees(text, criteria, amounts) is False
+    assert stated_records._rule_disagrees(ruled, criteria, amounts) is True
 
 
 # -- which way a score is better ---------------------------------------------
