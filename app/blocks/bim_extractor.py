@@ -179,6 +179,7 @@ class BIMExtractorBlock(UniversalBlock):
                 model, building_elements, params
             )
             clash_report = self._with_clash_triage(clash_report, params)
+            clash_report = self._with_clash_register(clash_report, params)
 
         # Cap response payload so a 50k-element model can't blow up the chat
         # context. Each cap fires independently; the top-level ``truncated``
@@ -452,6 +453,27 @@ class BIMExtractorBlock(UniversalBlock):
         # groups read as the whole model.
         triage["complete"] = not clash_report.get("pair_cap_reached") and not clash_report.get("timed_out")
         return {"triage": triage, **clash_report}
+
+    def _with_clash_register(self, clash_report: Dict, params: Dict | None) -> Dict:
+        """Add the resolution register to the clash report, summary first.
+
+        The strategy table is the caller's (``clash_strategy_table``); with
+        none, every clash is listed as unassigned. The register goes ahead
+        of the raw pair list so a chat payload cut at a fixed length keeps
+        the per-strategy counts. A bad table becomes ``register.error`` and
+        the detection result is kept as it was.
+        """
+        from app.blocks.clash_register import build_clash_register
+
+        table = self._clash_opt(params or {}, "clash_strategy_table", None)
+        try:
+            register = build_clash_register(clash_report.get("clashes") or [], table)
+        except ValueError as e:
+            register = {"error": str(e)}
+        # A capped or timed-out detection is a partial clash set: the
+        # register must not read as the whole model.
+        register["complete"] = not clash_report.get("pair_cap_reached") and not clash_report.get("timed_out")
+        return {"register": register, **clash_report}
 
     def _basic_clash_report(
         self, model, elements: List[Dict], params: Dict | None = None

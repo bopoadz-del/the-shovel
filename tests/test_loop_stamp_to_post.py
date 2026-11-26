@@ -18,8 +18,10 @@ Every test builds its own input; no document text.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
+import weakref
 from typing import Optional
 
 import pytest
@@ -28,8 +30,29 @@ from app.core import loop_watchdog
 from app.core.loop_watchdog import LagMonitor, stamp_to_post_summary
 
 
-def _monitor() -> LagMonitor:
-    return LagMonitor(asyncio.new_event_loop(), threshold_ms=250, tick_ms=20, log=False)
+#: The snapshot threads of the monitors these tests build. ``cpu_snapshot``
+#: and ``host_cpu`` are module globals, so patching them reaches every
+#: monitor in the process; the fakes answer these threads only.
+_OWN_SNAP_THREADS: "weakref.WeakSet[threading.Thread]" = weakref.WeakSet()
+
+
+def _monitor(tick_ms: float = 20) -> LagMonitor:
+    mon = LagMonitor(asyncio.new_event_loop(), threshold_ms=250, tick_ms=tick_ms, log=False)
+    _OWN_SNAP_THREADS.add(mon._snap_thread)
+    return mon
+
+
+def _patch_readings(monkeypatch, snapshot, host) -> None:
+    """Install ``snapshot``/``host`` for this test's monitors; any other
+    thread (another monitor in the process) keeps the real readings."""
+    real_snapshot, real_host = loop_watchdog.cpu_snapshot, loop_watchdog.host_cpu
+
+    def mine() -> bool:
+        return threading.current_thread() in _OWN_SNAP_THREADS
+
+    monkeypatch.setattr(loop_watchdog, "cpu_snapshot",
+                        lambda: snapshot() if mine() else real_snapshot())
+    monkeypatch.setattr(loop_watchdog, "host_cpu", lambda: host() if mine() else real_host())
 
 
 @pytest.mark.parametrize("stalled", [True, False])
@@ -107,8 +130,7 @@ def _slow_snapshot(snapshot_s: float, monkeypatch, started=None, fail: bool = Fa
             time.sleep(snapshot_s)
         return 0.0, {}
 
-    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
-    monkeypatch.setattr(loop_watchdog, "host_cpu", lambda: {})
+    _patch_readings(monkeypatch, snapshot, lambda: {})
     return calls
 
 
@@ -143,17 +165,42 @@ async def _block_then_wait(mon: LagMonitor, block_s: float, seen: Optional[dict]
         await asyncio.sleep(0.02)
 
 
+@contextlib.contextmanager
+def _another_monitor(running: bool):
+    """A second monitor on its own running loop, as the process-wide one is
+    once an app lifespan in the same worker has started it (main 45386234062,
+    ea2df39f: its snapshot thread ran the patched ``cpu_snapshot`` too, and
+    this test counted 8 readings for a monitor that took 4)."""
+    if not running:
+        yield None
+        return
+    loop = asyncio.new_event_loop()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    other = LagMonitor(loop, threshold_ms=250, tick_ms=20, log=False).start()
+    try:
+        yield other
+    finally:
+        other.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=2)
+        loop.close()
+
+
+@pytest.mark.parametrize("another_running", [False, True])
 @pytest.mark.parametrize("snapshot_s", [0.35, 0.6])
-def test_a_slow_snapshot_with_an_idle_loop_is_not_a_stall(snapshot_s, monkeypatch):
+def test_a_slow_snapshot_with_an_idle_loop_is_not_a_stall(snapshot_s, another_running, monkeypatch):
     """(a) The monitor's own snapshot, however slow, is never charged to the
     loop: an idle loop shows no stall and a lag near zero, and the
-    snapshot's duration is kept as its own figure."""
+    snapshot's duration is kept as its own figure. Another monitor running
+    in the process changes none of this monitor's figures."""
     calls = _slow_snapshot(snapshot_s, monkeypatch)
 
     async def idle(mon):
         await asyncio.sleep(snapshot_s * 3)
 
-    mon = _run(_monitor(), idle)
+    with _another_monitor(another_running):
+        mon = _run(_monitor(), idle)
     assert len(calls) >= 2, "the slow snapshot never ran"
     assert not mon.stalls, mon.stalls
     assert mon.max_lag_ms < 50, mon.max_lag_ms
@@ -245,7 +292,7 @@ def test_the_loop_is_never_unobserved_for_more_than_two_ticks(tick_ms, monkeypat
     """(e) Between one heartbeat's service and the next one's post there is
     the tick sleep and nothing else, even while a 600 ms snapshot runs."""
     _slow_snapshot(0.6, monkeypatch)
-    mon = LagMonitor(asyncio.new_event_loop(), threshold_ms=250, tick_ms=tick_ms, log=False)
+    mon = _monitor(tick_ms)
 
     async def idle(mon):
         await asyncio.sleep(1.5)
@@ -296,8 +343,8 @@ def test_the_snapshot_thread_publishes_its_reading_and_never_raises(fail, monkey
             raise OSError("no /proc here")
         return 7.0, {1: 3.0}
 
-    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
-    monkeypatch.setattr(loop_watchdog, "host_cpu", lambda: {"total": 9})
+    _OWN_SNAP_THREADS.add(threading.current_thread())  # _snap_run runs right here
+    _patch_readings(monkeypatch, snapshot, lambda: {"total": 9})
     try:
         mon._snap_run()
     finally:
