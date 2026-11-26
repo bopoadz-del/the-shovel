@@ -377,13 +377,16 @@ def _table_cell_copies(lines: list[str], rows: set[int]) -> set[int]:
         for cell in lines[idx].split(_TABLE_CELL_SEPARATOR)
         if cell.strip()
     )
-    # A row line holds the separator and a cell never does, so only lines
-    # off the rows can equal a cell.
-    loose = Counter(line.strip() for line in lines if line.strip() in cells)
+    # A wrapped row's continuation line can hold no separator; it is a row,
+    # not a copy, so only lines off the rows are counted and taken.
+    loose = Counter(
+        line.strip() for idx, line in enumerate(lines)
+        if idx not in rows and line.strip() in cells
+    )
     copies: set[int] = set()
     for idx, line in enumerate(lines):
         text = line.strip()
-        if text in cells and loose[text] <= cells[text]:
+        if idx not in rows and text in cells and loose[text] <= cells[text]:
             copies.add(idx)
     return copies
 

@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.chunk_bounds import heading_line_for_page, page_heading_lines
+from app.core.chunk_bounds import (
+    _table_cell_copies,
+    _table_row_indexes,
+    heading_line_for_page,
+    page_heading_lines,
+)
 
 PROSE = (
     "The contractor shall keep the works clean and remove debris daily "
@@ -389,3 +394,36 @@ def test_the_widest_table_the_lines_make_is_taken(table):
     # that way the full row after them would stand alone, a numbered title.
     page = f"{PROSE}\n{_written(table)}\n{PROSE}"
     assert heading_line_for_page(page) == ""
+
+
+
+def _wrapped_table(cell: str, unit: str) -> list[str]:
+    return [
+        "Item | Description | Unit | Qty", "1 | Concrete | m3 | 5",
+        "2 | Formwork", cell, f"| {unit} | 9", "3 | Rebar | t | 2",
+    ]
+
+
+# A wrapped row whose cell runs onto a line with no separator: that line is
+# a row, and the text layer's one loose copy of the cell is no heading.
+@pytest.mark.parametrize("cell,unit", [("SLABS", "m2"), ("PILE CAPS", "m3")])
+def test_a_text_layer_copy_of_a_wrapped_cell_is_no_heading(cell, unit):
+    page = "\n".join(_wrapped_table(cell, unit) + [cell])
+    assert heading_line_for_page(page) == ""
+
+
+# The same text twice off the rows is the page's own line, not a copy.
+@pytest.mark.parametrize("cell,unit", [("SLABS", "m2"), ("PILE CAPS", "m3")])
+def test_a_wrapped_cell_also_written_twice_off_the_table_is_a_heading(cell, unit):
+    page = "\n".join([cell] + _wrapped_table(cell, unit) + [cell])
+    assert heading_line_for_page(page) == cell
+
+
+# Copies are lines off the rows only: the continuation line that is itself a
+# row is never one, and the loose line after the table is.
+@pytest.mark.parametrize("cell,unit", [("SLABS", "m2"), ("PILE CAPS", "m3")])
+def test_cell_copies_are_off_the_rows(cell, unit):
+    lines = _wrapped_table(cell, unit) + [cell]
+    rows = _table_row_indexes(lines)
+    assert lines.index(cell) in rows
+    assert _table_cell_copies(lines, rows) == {len(lines) - 1}
