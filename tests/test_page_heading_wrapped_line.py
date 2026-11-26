@@ -371,3 +371,17 @@ def test_the_word_after_a_capital_opener_is_counted(heading):
     # lowercase line at the margin.
     page = f"{heading}\nmm gaps\n{'x' * len(heading)}\nend.\n"
     assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "line,carry",
+    [("3 The joints are left open", "until the works are done."),
+     ("A blinding is laid under the slab", "to the levels shown.")],
+)
+def test_a_page_with_no_line_to_measure_shows_no_wrap(line, carry):
+    # A prose-shaped line that is not a numbered sentence-case heading, over a
+    # lowercase last line: no other line shows the margin, so nothing shows a wrap.
+    assert heading_line_for_page(f"{line}\n{carry}\n") == line
+    # The same two lines with a measured line at the margin below: a wrap.
+    margin = "x" * len(line)
+    assert heading_line_for_page(f"{line}\n{carry}\n{margin}\n9 SECTION HEAD\n") == "9 SECTION HEAD"
