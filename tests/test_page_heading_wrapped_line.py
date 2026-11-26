@@ -281,3 +281,93 @@ def test_a_heading_three_quarters_as_wide_as_the_page_is_not_a_wrap(heading, bod
     assert 0.70 * width <= reach < WRAP_FILL * width
     page = f"{heading}\n{body}\nframe as shown.\n"
     assert heading_line_for_page(page) == heading
+
+
+# A page whose other lines are short (a schedule under its heading, a short
+# page, a narrow column) has a narrow measured width. A numbered heading in
+# sentence case fills that width, but it is still the page's heading.
+@pytest.mark.parametrize(
+    "page,heading",
+    [
+        ("5.4 Loads on the frame\nkN values are unfactored\nDead 2.5\nLive 1.5\nWind 0.8\nNotes\n",
+         "5.4 Loads on the frame"),
+        ("9.2 Rates for the pumps\nm3 per hour at the inlet\nPump A 40\nPump B 55\nEnd\n",
+         "9.2 Rates for the pumps"),
+        ("7.1 Pointing of joints\ne.g. flush, struck or weathered\nas shown.\n", "7.1 Pointing of joints"),
+        ("6.3 Curing of the slab\nmm of water lost is to be\nmade good.\n", "6.3 Curing of the slab"),
+        ("3.2 Cover to reinforcement bars\nmm values below are nominal and\nare kept at all faces of the\n"
+         "members by spacers of a type\nthe engineer has approved.\n", "3.2 Cover to reinforcement bars"),
+        ("8.3 Joints in the blockwork wall\nmm gaps are filled with mortar as\nthe courses are laid, and are\n"
+         "struck flush on the face of the\nwall when it is finished.\n", "8.3 Joints in the blockwork wall"),
+    ],
+)
+def test_numbered_sentence_case_heading_on_a_page_of_short_lines_names_the_page(page, heading):
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "first,head",
+    [("5.4 Loads on the frame\nkN values are unfactored\nDead 2.5\nLive 1.5\nNotes\n", "5.4 Loads on the frame"),
+     ("9.2 Rates for the pumps\nm3 per hour at the inlet\nPump A 40\nPump B 55\nEnd\n", "9.2 Rates for the pumps")],
+)
+def test_short_line_page_keeps_its_heading_through_the_document_path(first, head):
+    second = _page("A mist coat is applied to new plaster before the", "two finishing coats.", "7 Glazing")
+    headings = page_heading_lines(first + second, [(1, 0), (2, len(first))])
+    assert headings == {1: head, 2: "7 Glazing"}
+
+
+@pytest.mark.parametrize(
+    "line,carry",
+    [
+        # A quantity opener: the word after the number is a lowercase unit.
+        ("3 mm joints are left in the", "frame as shown."),
+        # A unit symbol that opens on a capital is not a capitalised word.
+        ("30 N/mm2 concrete is placed in", "the pile caps."),
+        ("300 Pa of suction is held on", "the duct run."),
+        # A decimal is a quantity too; its unit may open on a capital.
+        ("2.5 MPa grout is pumped into", "the ducts."),
+        ("0.5 litres of primer is used per", "square metre."),
+        # A count followed by a capitalised noun is not a section number.
+        ("4 Bolts are fixed at each of", "the base plates."),
+    ],
+)
+def test_a_number_and_a_unit_on_a_page_of_short_lines_is_still_a_wrap(line, carry):
+    # The sentence-case rule must not fire: these lines open on a quantity.
+    page = f"{line}\n{carry}\n4 PILE CAPS\nAs shown.\n"
+    assert heading_line_for_page(page) == "4 PILE CAPS"
+
+
+@pytest.mark.parametrize(
+    "line,wrapped",
+    [
+        # A capital and two lowercase letters is a word; a capital and one is a symbol.
+        ("4.1 The joints are left in the", False),
+        ("4.1 Th joints are left in the", True),
+    ],
+)
+def test_the_capitalised_word_needs_two_lowercase_letters(line, wrapped):
+    page = f"{line}\nframe as shown.\n4 PILE CAPS\nAs shown.\n"
+    assert heading_line_for_page(page) == ("4 PILE CAPS" if wrapped else line)
+
+
+@pytest.mark.parametrize(
+    "line,word",
+    [("A blinding is laid under the slab", "to"), ("C bricks are laid below the course", "in")],
+)
+@pytest.mark.parametrize("pad", ["      ", "\t\t\t"])
+def test_trailing_padding_is_not_counted_toward_the_margin(line, word, pad):
+    # The page's lines run just wider than the line and the next word reach at
+    # WRAP_FILL: the line was not wrapped, and its padding does not change that.
+    reach = len(line) + 1 + len(word)
+    roomy = "x" * (math.floor(reach / WRAP_FILL) + 1)
+    assert len(line + pad) + 1 + len(word) >= WRAP_FILL * len(roomy)
+    page = f"{line}{pad}\n{word} the works are done.\n{roomy}\n9 SECTION HEAD\n"
+    assert heading_line_for_page(page) == line
+
+
+@pytest.mark.parametrize("heading", ["A CONCRETE cover", "C BRICK wall"])
+def test_the_word_after_a_capital_opener_is_counted(heading):
+    # One capitalised word against one lowercase word is not prose, even over a
+    # lowercase line at the margin.
+    page = f"{heading}\nmm gaps\n{'x' * len(heading)}\nend.\n"
+    assert heading_line_for_page(page) == heading

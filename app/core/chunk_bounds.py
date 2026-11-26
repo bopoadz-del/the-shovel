@@ -301,6 +301,7 @@ def heading_line_for_page(
             continue
         if (
             not line.lstrip().startswith("#")
+            and not _NUMBERED_SENTENCE_CASE.match(line.strip())
             and _reads_as_prose(line)
             and _continues_sentence(lines[idx + 1:])
             and _wrapped_at_margin(line, lines[idx + 1:], _wrap_width(lines, idx))
@@ -337,6 +338,16 @@ def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] 
 # ("a)", "b.") or a roman numeral ("iv.", "xii)"), then the item's own words.
 # A bracketed marker ("(b)") opens on "(", which never reads as a carried sentence.
 _LOWER_ENUMERATOR = re.compile(r"^(?:[a-z]|[ivx]{1,4})[.)]\s+\S")
+
+
+# A section number of two or more levels, then a capitalised word ("5.4 Loads
+# on the frame"): a numbered heading in sentence case. A sentence carried onto
+# a new line that opens on a figure opens on a quantity: a decimal is followed
+# by its unit ("2.5 mm", "0.8 kN"), and a count may be followed by a capitalised
+# noun ("2 Bars at ..."), so a single-level number does not show a heading. A
+# unit symbol that opens on a capital ("N/mm2", "MPa", "Pa") is not a capitalised
+# word: the capital must be followed by at least two lowercase letters.
+_NUMBERED_SENTENCE_CASE = re.compile(r"^\d+(?:\.\d+)+[.)]?\s+[A-Z][a-z]{2,}")
 
 
 def _reads_as_prose(line: str) -> bool:
