@@ -281,8 +281,10 @@ def heading_line_for_page(
     A drawing sheet is named by its title block (number and title, read by
     ``title_block``); any other page by its first heading-like line that is
     not page furniture (``running``: a line the document repeats on most of
-    its pages). A page whose only heading-like lines are furniture keeps the
-    first of them.
+    its pages). A line shaped like a wrapped line of prose gives way to a
+    later heading on the page; with none, the page keeps the first such line
+    ahead of furniture. A page whose only heading-like lines are furniture
+    keeps the first of them.
     """
     if not page_text or not page_text.strip():
         return ""
@@ -295,9 +297,13 @@ def heading_line_for_page(
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
     first = ""
+    wrapped = ""
     lines = page_text.splitlines()
     for idx, line in enumerate(lines):
         if not _is_heading_line(line):
+            continue
+        if running is not None and running(line):
+            first = first or line.strip()
             continue
         if (
             not line.lstrip().startswith("#")
@@ -306,11 +312,13 @@ def heading_line_for_page(
             and _continues_sentence(lines[idx + 1:])
             and _wrapped_at_margin(line, lines[idx + 1:], _wrap_width(lines, idx))
         ):
-            continue  # a wrapped line of prose, not a heading
-        if running is None or not running(line):
-            return line.strip()
-        first = first or line.strip()
-    return first
+            # Shaped like a wrapped line of prose: it gives way to a heading
+            # later on the page, but is not dropped. A sentence-case heading
+            # over a lowercase line on a page of short lines has this shape too.
+            wrapped = wrapped or line.strip()
+            continue
+        return line.strip()
+    return wrapped or first
 
 
 def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] | None:

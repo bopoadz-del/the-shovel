@@ -385,3 +385,99 @@ def test_a_page_with_no_line_to_measure_shows_no_wrap(line, carry):
     # The same two lines with a measured line at the margin below: a wrap.
     margin = "x" * len(line)
     assert heading_line_for_page(f"{line}\n{carry}\n{margin}\n9 SECTION HEAD\n") == "9 SECTION HEAD"
+
+
+# --- grader faults on ab655f5 (REPORT_OPUSGRADE_S616): a heading the sentence-case
+# rule does not take (a one-level number, a letter opener, a short first word)
+# over a lowercase line on a page of short lines is shaped like a wrap. It gives
+# way to a later heading, but a page with no other heading keeps it. ---
+
+
+@pytest.mark.parametrize(
+    "page,heading",
+    [
+        ("4 Loads on the frame\nkN values are unfactored\nDead 2.5\nLive 1.5\nWind 0.8\nNotes\n",
+         "4 Loads on the frame"),
+        ("3 Cover to reinforcement bars\nmm values below are nominal and\nshall be increased by 10 mm where\n"
+         "exposure is severe.\n", "3 Cover to reinforcement bars"),
+        ("A Loads on the frame\nkN values are unfactored\nDead 2.5\nLive 1.5\nWind 0.8\nNotes\n",
+         "A Loads on the frame"),
+        ("8.2 On site testing of concrete\nmm values are nominal here\nSlump 75\nCube 40\nNotes\n",
+         "8.2 On site testing of concrete"),
+        ("2.1 In situ concrete to the walls\nmm joints are left where shown\nC32 40\nEnd\n",
+         "2.1 In situ concrete to the walls"),
+    ],
+)
+def test_wrap_shaped_heading_with_no_later_heading_still_names_the_page(page, heading):
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "line,carry,later",
+    [("4 Loads on the frame", "kN values are unfactored", "4.1 DEAD LOADS"),
+     ("8.2 On site testing of concrete", "mm values are nominal here", "8.3 CUBES")],
+)
+def test_wrap_shaped_line_gives_way_to_a_later_heading(line, carry, later):
+    # The same wrap-shaped line: alone it names the page, with a heading below it gives way.
+    assert heading_line_for_page(f"{line}\n{carry}\nDead 2.5\nNotes\n") == line
+    assert heading_line_for_page(f"{line}\n{carry}\n{later}\nDead 2.5\nNotes\n") == later
+
+
+@pytest.mark.parametrize(
+    "first,head",
+    [("4 Loads on the frame\nkN values are unfactored\nDead 2.5\nLive 1.5\nNotes\n", "4 Loads on the frame"),
+     ("A Pumps on the site\nm3 per hour at the inlet\nPump 40\nEnd\n", "A Pumps on the site")],
+)
+def test_wrap_shaped_heading_names_its_page_through_the_document_path(first, head):
+    second = _page("450 mm deep ground beams are cast against a blinding of", "lean mix concrete and sand.",
+                   "3.4 GROUND BEAMS")
+    headings = page_heading_lines(first + second, [(1, 0), (2, len(first))])
+    assert headings == {1: head, 2: "3.4 GROUND BEAMS"}
+
+
+@pytest.mark.parametrize(
+    "line,carry,furniture",
+    [("4 Loads on the frame", "kN values are unfactored", "SPECIFICATION VOLUME"),
+     ("A Pumps on the site", "m3 per hour at the inlet", "ISSUED FOR TENDER")],
+)
+def test_wrap_shaped_line_is_kept_ahead_of_page_furniture(line, carry, furniture):
+    def running(text: str) -> bool:
+        return text.strip() == furniture
+
+    page = f"{furniture}\n{line}\n{carry}\nDead 2.5\nNotes\n"
+    assert heading_line_for_page(page, running=running) == line
+    # Negative: furniture alone still names the page.
+    assert heading_line_for_page(f"{furniture}\nDead 2.5\n", running=running) == furniture
+
+
+@pytest.mark.parametrize(
+    "one,two",
+    [("4 Loads on the frame", "5 Laps in the bars"), ("A Pumps on the site", "B Pipes to the tank")],
+)
+def test_the_first_of_two_wrap_shaped_lines_names_the_page(one, two):
+    page = f"{one}\nkN values are unfactored\n{two}\nmm values are nominal\nNotes\n"
+    assert heading_line_for_page(page) == one
+
+
+@pytest.mark.parametrize(
+    "heading,item,item2",
+    [("3 Fixings to be used on site", "xiii) stainless steel bolts", "xiv) galvanised washers"),
+     ("6 Anchors to be set in the wall", "viii) resin anchors are drilled", "xii) the holes are cleaned")],
+)
+def test_four_letter_numeral_under_a_heading_with_a_later_heading(heading, item, item2):
+    # A four-letter numeral opens a list item: the heading is not carried on,
+    # so the later heading does not take the page.
+    page = f"{heading}\n{item}\n{item2}\n9 SECTION HEAD\nNotes are given below\n"
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "one,two",
+    [("SPECIFICATION VOLUME", "ISSUED FOR TENDER"), ("PART B WORKS", "REVISION C")],
+)
+def test_a_page_of_furniture_only_keeps_the_first_furniture_line(one, two):
+    def running(text: str) -> bool:
+        return text.strip() in (one, two)
+
+    assert heading_line_for_page(f"{one}\n{two}\nDead 2.5\n", running=running) == one
+    assert heading_line_for_page(f"{two}\n{one}\nDead 2.5\n", running=running) == two
