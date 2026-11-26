@@ -825,6 +825,10 @@ async def _chat_stream_impl(
                         audit_rec=_rag_audit,
                     ))
                     cut_notice = _LENGTH_CUT_NOTICE if length_cut else _SYNTH_CUTOFF_NOTICE
+                    if cut_off:
+                        from app.agents.answer_exit import note_cut
+
+                        note_cut()
                     if cut_off and cut_notice not in final_text:
                         suffix = (
                             ("\n\n" if final_text.strip() else "")

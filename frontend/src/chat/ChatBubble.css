@@ -257,3 +257,24 @@
     font-size: 12px;
   }
 }
+
+/* Rule 5: supporting detail folded under the answer. */
+.chat-bubble__details {
+  margin-top: 8px;
+  font-size: 0.95em;
+}
+
+.chat-bubble__details-summary {
+  cursor: pointer;
+  color: var(--text-secondary, #6b7280);
+  user-select: none;
+}
+
+.chat-bubble__details-body {
+  margin-top: 6px;
+  line-height: 1.55;
+}
+
+.chat-bubble__details-body p {
+  margin: 0 0 8px;
+}
