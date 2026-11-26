@@ -691,6 +691,81 @@ async def test_hydration_leaves_existing_facts_untouched(isolated_data_dir, monk
     assert [(f["key"], f["value"], f["verified_by"]) for f in agent] == [("site", site, "u1")]
 
 
+class _RecordingLearningEngine:
+    """Stands in for the learning_engine block: records every pattern it is
+    handed, so a test reads exactly what the writeback sent."""
+
+    recorded: list = []
+
+    @classmethod
+    def shared_instance(cls):
+        return cls()
+
+    def _record_pattern(self, data, _params):
+        type(self).recorded.append(data)
+        return {"status": "success"}
+
+
+@pytest.mark.parametrize("asks,run_date,expect_signals", [
+    # 'why' / 'broken' are complaint words, and the same ask twice is a repeat:
+    # two friction signals, each recorded once on the learning engine.
+    (("why is the export broken?", "why is the export broken?"), "2026-05-26", 2),
+    # Plain asks: no friction, so nothing is recorded.
+    (("lift shaft size?", "concrete pour schedule for foundation?"), "2026-06-02", 0),
+])
+def test_writeback_for_next_chat_returns_brief_and_records_each_friction_signal(
+    monkeypatch, asks, run_date, expect_signals,
+):
+    """``_writeback_for_next_chat`` returns the day's brief for the run row and
+    hands each friction signal to the learning engine; it writes no fact."""
+    from app.blocks import BLOCK_REGISTRY
+    from app.core.learning import hydration as hydration_module
+
+    _RecordingLearningEngine.recorded = []
+    monkeypatch.setitem(BLOCK_REGISTRY, "learning_engine", _RecordingLearningEngine)
+    messages = [{"role": "user", "content": a} for a in asks]
+
+    out = hydration_module._writeback_for_next_chat("proj-w", messages, run_date)
+
+    assert out["brief"]["run_date"] == run_date
+    assert out["brief"]["asks"] == list(dict.fromkeys(asks))
+    assert len(out["brief"]["friction"]) == expect_signals
+    assert out["patterns_recorded"] == expect_signals
+    assert out["skipped"] == []
+    assert [r["observation"] for r in _RecordingLearningEngine.recorded] == out["brief"]["friction"]
+    assert {(r["project_id"], r["category"], r["run_date"]) for r in _RecordingLearningEngine.recorded} == (
+        {("proj-w", "friction", run_date)} if expect_signals else set()
+    )
+
+
+@pytest.mark.parametrize("registry_entry", ["absent", "raises"])
+def test_writeback_for_next_chat_keeps_the_brief_when_the_learning_engine_cannot_record(
+    monkeypatch, registry_entry,
+):
+    """No learning engine (or one that fails) records no pattern; the brief is
+    still returned, and a failure is named in ``skipped``."""
+    from app.blocks import BLOCK_REGISTRY
+    from app.core.learning import hydration as hydration_module
+
+    class _Failing(_RecordingLearningEngine):
+        def _record_pattern(self, data, _params):
+            raise RuntimeError("store down")
+
+    if registry_entry == "absent":
+        monkeypatch.delitem(BLOCK_REGISTRY, "learning_engine", raising=False)
+    else:
+        monkeypatch.setitem(BLOCK_REGISTRY, "learning_engine", _Failing)
+    messages = [{"role": "user", "content": "why is the BOQ empty?"}]
+
+    out = hydration_module._writeback_for_next_chat("proj-f", messages, "2026-05-26")
+
+    assert out["brief"]["asks"] == ["why is the BOQ empty?"]
+    assert out["patterns_recorded"] == 0
+    assert [s.split(":")[0] for s in out["skipped"]] == (
+        [] if registry_entry == "absent" else ["learning_engine"]
+    )
+
+
 @requires_construction_kit
 @pytest.mark.asyncio
 async def test_hydration_records_friction_patterns_on_learning_engine(

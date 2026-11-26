@@ -110,6 +110,18 @@ def test_search_facts_honours_verified_only(tmp_path, monkeypatch, term, confirm
     assert [f["key"] for f in store.search_facts(pid, term, verified_only=True)] == [confirmed]
 
 
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_search_facts_with_no_term_lists_every_fact_the_filter_allows(tmp_path, monkeypatch, blank):
+    """A query with no word in it filters nothing: every fact comes back, and
+    verified_only still drops the unconfirmed row."""
+    store, _pm, _am = _isolate(tmp_path, monkeypatch)
+    pid = store.create_project("P")["id"]
+    store.set_fact(pid, "door_width", "0.90 m", verified_by="u1")
+    store.set_fact(pid, "slab_grade", "C40")
+    assert {f["key"] for f in store.search_facts(pid, blank)} == {"door_width", "slab_grade"}
+    assert [f["key"] for f in store.search_facts(pid, blank, verified_only=True)] == ["door_width"]
+
 # ── the prompt readers ──────────────────────────────────────────────────────
 
 
@@ -227,3 +239,38 @@ def test_user_entered_fact_is_verified_by_that_user(client, key, value):
     from app.core.project_memory import build_memory_context
     ctx = build_memory_context(pid)
     assert value in ctx and "unconfirmed" not in ctx
+
+
+def _route_path(endpoint, method: str) -> str:
+    from app.main import app
+    for route in app.routes:
+        if getattr(route, "endpoint", None) is endpoint and method in getattr(route, "methods", ()):
+            return route.path
+    raise AssertionError(f"no {method} route serves {endpoint.__name__}")
+
+
+@pytest.mark.parametrize("key,value,status", [
+    ("employer", "Ports Authority", 201),
+    ("  ld_rate  ", "0.1%/day", 201),
+    ("", "Ports Authority", 400),
+    ("   ", "0.1%/day", 400),
+])
+def test_add_memory_saves_a_keyed_fact_and_refuses_a_blank_key(client, key, value, status):
+    """``add_memory`` (POST .../memory) saves the user's fact under the trimmed
+    key and returns it; a blank key is refused with 400 and saves nothing."""
+    from app.core import projects as store
+    from app.routers.projects import add_memory
+
+    path = _route_path(add_memory, "POST")
+    pid = client.post("/v1/projects", json={"name": "Memory Route"}, headers=H).json()["id"]
+    resp = client.post(path.replace("{project_id}", pid), json={"key": key, "value": value}, headers=H)
+
+    assert resp.status_code == status, resp.text
+    saved = [(f["key"], f["value"]) for f in store.list_facts(pid)]
+    if status == 201:
+        body = resp.json()
+        assert (body["key"], body["value"], body["verified"]) == (key.strip(), value, True)
+        assert saved == [(key.strip(), value)]
+    else:
+        assert "key" in resp.json()["detail"].lower()
+        assert saved == []
