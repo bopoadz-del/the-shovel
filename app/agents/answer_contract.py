@@ -22,7 +22,21 @@ question, a formula, a project or a document.
    entry (document, page or section, passage, tier) that travels beside the
    answer. The ``N of M project documents indexed`` footer leaves the text
    and travels as structured ``coverage``.
-5. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
+5. THE LEAD IS THE ANSWER; THE REST IS DETAIL. On a turn that did not
+   compute, the text the user reads first is the opening paragraph (a
+   heading carries on into the paragraph under it) with the list it
+   introduces, each item cut to its first sentence. Every later paragraph,
+   and each cut item word for word, leaves the text and travels as
+   structured ``details`` beside the answer. The budget is the answer's own
+   shape, never a word count: nothing is deleted, and an answer that is one
+   paragraph is untouched. An answer a conflict statement replaces is read
+   whole: the statement is its lead and nothing is moved out of sight.
+   The rule is a reading of a FINISHED answer to a question put to the
+   documents: it runs only when the caller says so (``lead``) and the turn
+   read a document (a Sources row or a handed passage). Every other text is
+   read whole -- an answer cut part-way (its end says why it stops), a reply
+   that read no document, and a document built from a stored answer.
+6. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
    a refusal into an answer: a tier is copied from the turn's own Sources row
    or left ``None``; a refusal (an answer with no figure) keeps every sentence
    that is not machinery or padding.
@@ -54,6 +68,8 @@ class Contracted:
     #: One entry per conflict between documents in the evidence (C2-C4):
     #: ``{"values": [{"value", "document", "marker"}], "governs", "basis_document"}``.
     conflicts: list[dict[str, Any]] = field(default_factory=list)
+    #: Rule 5: the supporting text that left the lead, word for word, or None.
+    details: str | None = None
 
 
 # ── Rule 4: citations and the coverage footer ───────────────────────────────
@@ -473,12 +489,37 @@ def _paired(text: str) -> set[str]:
     return out
 
 
+def _reference_point(text: str, i: int, j: int) -> bool:
+    """True when the single point at ``text[i]`` closes a short word (one to
+    four letters) and a number follows it after spaces -- ``p. 12``,
+    ``cl. 4.2``, ``Fig. 3``: the word and the number name one place, so the
+    point does not end the sentence. A unit written after a figure
+    (``5 m. 12 bars``) is not such a word: that point still ends one. The
+    trade is deliberate: a sentence that opens on a figure after a short
+    closing word stays joined to the one before it, which keeps more text
+    together and never leaves half a reference standing alone."""
+    if text[i] != "." or j != i + 1:
+        return False
+    k = j
+    while k < len(text) and text[k] == " ":
+        k += 1
+    if k == j or k >= len(text) or not text[k].isdigit():
+        return False
+    w = i
+    while w > 0 and text[w - 1].isalpha():
+        w -= 1
+    if not 1 <= i - w <= 4:
+        return False
+    before = text[:w].rstrip()
+    return not (before and before[-1].isdigit())
+
+
 def _sentences(text: str) -> list[str]:
     """The sentences of one line. A sentence ends at ``.``/``!``/``?``
     followed by space or the end; a point inside a figure (``12.5``) or a name
-    (``p.12``) does not end it, and neither does one inside a paired bracket
-    or quotation -- ``(e.g. "A", "B")`` is part of the sentence around it, so
-    no rule that keeps or drops whole sentences can leave half of a quoted or
+    (``p.12``, ``p. 12``: see :func:`_reference_point`) does not end it,
+    and neither does one inside a paired bracket or quotation --
+    ``(e.g. "A", "B")`` is part of the sentence around it, so no rule that keeps or drops whole sentences can leave half of a quoted or
     bracketed clause standing as a sentence of its own."""
     paired = _paired(text)
     out: list[str] = []
@@ -503,7 +544,7 @@ def _sentences(text: str) -> list[str]:
             j = i + 1
             while j < n and text[j] in ".!?":
                 j += 1
-            if not stack and (j == n or text[j].isspace()):
+            if not stack and (j == n or text[j].isspace()) and not _reference_point(text, i, j):
                 if text[start:j].strip():
                     out.append(text[start:j])
                 start = j
@@ -798,6 +839,116 @@ def _answer_first(text: str, computed: bool) -> str:
     return "\n".join([head] + lines)
 
 
+# ── Rule 5: the lead and the details ────────────────────────────────────────
+
+_PARA_SPLIT_RE = re.compile(r"\n[ \t]*\n")
+_HEADING_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+\S.*|\*\*[^*\n]+\*\*:?[ \t]*)$")
+_TABLE_RE = re.compile(r"^[ \t]*\|")
+_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~)", re.MULTILINE)
+
+
+def _nonblank(par: str) -> list[str]:
+    return [ln for ln in par.split("\n") if ln.strip()]
+
+
+def _is_list(par: str) -> bool:
+    """A paragraph that is a list or a table: its first line is an item or a
+    table row and every other line is one too or continues one (indented)."""
+    lines = _nonblank(par)
+    if not lines or not (_BULLET_RE.match(lines[0]) or _TABLE_RE.match(lines[0])):
+        return False
+    return all(_BULLET_RE.match(ln) or _TABLE_RE.match(ln) or ln[:1] in (" ", "\t") for ln in lines)
+
+
+def _introduces_list(par: str) -> bool:
+    last = _nonblank(par)[-1].rstrip()
+    return last.endswith(":") or bool(_HEADING_RE.match(last))
+
+
+def _cut_item(line: str) -> tuple[str, str | None]:
+    """A list item cut to its first sentence, and the item word for word when
+    it was cut (else None). Every marker the item carried stays on it."""
+    m = _BULLET_RE.match(line)
+    if not m:
+        return line, None
+    sentences = [x.strip() for x in _sentences(line[m.end():]) if x.strip()]
+    if len(sentences) < 2:
+        return line, None
+    first = sentences[0]
+    rest = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(" ".join(sentences[1:]))) if mk not in first)
+    return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
+
+
+#: A sentence that points at what comes after it instead of stating it.
+_FORWARD_RE = re.compile(r"\b(?:here\s+(?:is|are)|the\s+following|as\s+follows|below)\b", re.IGNORECASE)
+
+
+def _frames(par: str) -> bool:
+    """A framing paragraph: it states no figure, citation marker or absence,
+    and it only introduces what follows -- it ends on ``:`` or its one
+    sentence points forward ("Here is what the documents say."). A plain
+    statement with no figure ("The generator sits on the roof.") answers;
+    it does not frame."""
+    bare = _MARKER_RE.sub("", par)
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(bare) or _NEGATIVE_RE.search(bare):
+        return False
+    lines = _nonblank(par)
+    if lines[-1].rstrip().endswith(":"):
+        return True
+    return len(lines) == 1 and len(_sentences(lines[0].strip())) == 1 and bool(_FORWARD_RE.search(bare))
+
+
+def _lead_and_details(body: str) -> tuple[str, str | None]:
+    """The lead (opening paragraph, headings carrying on into the paragraph
+    under them, plus the list it introduces with items cut to their first
+    sentence) and the details (each cut item and every later paragraph, word
+    for word), or ``(body, None)`` when nothing would move. A body carrying a
+    fenced block is left whole."""
+    if _FENCE_RE.search(body):
+        return body, None
+    pars = [p for p in _PARA_SPLIT_RE.split(body) if p.strip()]
+    if not pars:
+        return body, None
+    def heading(par: str) -> bool:
+        return all(_HEADING_RE.match(ln) for ln in _nonblank(par))
+
+    i = 1
+    while i < len(pars) and heading(pars[i - 1]):
+        i += 1
+    if heading(pars[0]):
+        # An answer that opens on a heading: the lead is its whole first
+        # section -- everything up to the next heading answers under it.
+        while i < len(pars) and not heading(pars[i]):
+            i += 1
+    # The lead carries the answer, not only a framing line: framing
+    # paragraphs ("Based on the specification:", "Here is what the documents
+    # say.") take the paragraph after them into the lead, so they never stand
+    # alone over a closed fold holding every fact.
+    while i < len(pars) and all(heading(p) or _frames(p) for p in pars[:i]):
+        i += 1
+    lead_pars = pars[:i]
+    # A lead that ends introducing what follows (``...:`` or a heading)
+    # takes the paragraph it introduces, list or not.
+    if i < len(pars) and _introduces_list(lead_pars[-1]) and not heading(pars[i]):
+        lead_pars.append(pars[i])
+        i += 1
+    cut_items: list[str] = []
+    lead: list[str] = []
+    for par in lead_pars:
+        lines = []
+        for ln in par.split("\n"):
+            short, whole = _cut_item(ln)
+            lines.append(short)
+            if whole:
+                cut_items.append(whole)
+        lead.append("\n".join(lines))
+    rest = pars[i:]
+    if not cut_items and not rest:
+        return body, None
+    details = ([ "\n".join(cut_items)] if cut_items else []) + rest
+    return "\n\n".join(lead), "\n\n".join(details)
+
+
 #: A sentence that opens on the writer's own search: "I searched ...",
 #: "I looked through ...", "I reviewed ...". It tells the reader what was
 #: done, not what is so.
@@ -853,6 +1004,7 @@ def apply(
     asking: bool = False,
     question: str | None = None,
     evidence: Iterable[dict[str, Any]] | None = None,
+    lead: bool = False,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
@@ -865,11 +1017,14 @@ def apply(
     every passage the turn was handed (pre-injected excerpts and tool
     passages): conflicts are checked over it as well as over ``sources``,
     since a Sources row names only what the answer cited and may carry no
-    passage."""
+    passage. ``lead`` is True when the text is a finished answer leaving
+    the turn for the reader: only then may rule 5 move text into
+    ``details``."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
         rows = [r for r in (sources or []) if isinstance(r, dict)]
+        handed = [r for r in (evidence or []) if isinstance(r, dict)]
         coverage = None
         m = _COVERAGE_RE.search(text)
         if m:
@@ -886,11 +1041,14 @@ def apply(
             body = _answer_first(body, computed)
             body = _narration_first(body)
         body = _tidy(body)
+        whole = body
+        details: str | None = None
+        if lead and not asking and not computed and (rows or handed):
+            body, details = _lead_and_details(body)
         from app.agents.evidence_conflicts import detect
 
-        handed = [r for r in (evidence or []) if isinstance(r, dict)]
-        # Read over the text the user reads (citations already markers).
-        found = detect(body, rows + handed, question)
+        # Read over the whole text (citations already markers): lead and details.
+        found = detect(body + ("\n\n" + details if details else ""), rows + handed, question)
         structured: list[dict[str, Any]] = []
         if found:
             lines, structured = _conflict_lines(found, markers)
@@ -898,19 +1056,26 @@ def apply(
                 # The conflict statement leads; a sentence asserting only one
                 # of the differing values for that thing, or asserting that the
                 # documents agree about it, is replaced by it.
+                # A replaced answer is read whole (rule 5 yields): the
+                # conflict statement is its lead and every paragraph it did
+                # not supersede stays in the text the user reads, beside it.
                 stated = [c for c in found if _nameable(c)]
-                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(whole, stated))
+                details = None
         # A marker whose line went (padding, a dropped note) is not lost: it
-        # rides on the last line, so every citation entry has its marker.
-        lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)
+        # rides on the last line, so every citation entry has its marker. A
+        # marker that travels in the details is not lost.
+        shown = body + "\n" + (details or "")
+        lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in shown)
         if body and lost:
             body = body + " " + lost
-        if not body or body == _tidy(text):
+        if not body or (body == _tidy(text) and not details):
             # Nothing but machinery and padding: the original stands, so the
             # user is never left with an empty answer. Nothing to change: the
             # original stands byte for byte.
             return Contracted(text=text)
-        return Contracted(text=body, citations=markers.entries, coverage=coverage, conflicts=structured)
+        return Contracted(text=body, citations=markers.entries, coverage=coverage, conflicts=structured,
+                          details=details)
     except Exception:  # noqa: BLE001 -- the contract must never break an answer
         _LOG.exception("answer_contract: failed; answer passed through")
         return Contracted(text=text)

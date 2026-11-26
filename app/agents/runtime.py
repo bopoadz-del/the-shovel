@@ -12270,8 +12270,9 @@ def _finished_on_length(choice: Any) -> bool:
 def _end_cut_answer(text: str, notice: str = _LENGTH_CUT_NOTICE) -> str:
     """An answer the model stopped writing part-way, ending on its last whole
     sentence and then ``notice``: never mid-sentence."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_cut
 
+    note_cut()
     kept = end_on_a_sentence(text or "")
     if notice in kept:
         return kept
