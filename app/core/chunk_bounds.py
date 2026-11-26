@@ -282,8 +282,8 @@ def heading_line_for_page(
     ``title_block``); any other page by its first heading-like line that is
     not page furniture (``running``: a line the document repeats on most of
     its pages). A line shaped like a wrapped line of prose gives way to a
-    later heading on the page; with none, the page keeps the first such line
-    ahead of furniture. A page whose only heading-like lines are furniture
+    later line that names a section (:func:`_names_a_section`); with none,
+    the page keeps the first such line ahead of furniture. A page whose only heading-like lines are furniture
     keeps the first of them.
     """
     if not page_text or not page_text.strip():
@@ -310,12 +310,16 @@ def heading_line_for_page(
             and not _NUMBERED_SENTENCE_CASE.match(line.strip())
             and _reads_as_prose(line)
             and _continues_sentence(lines[idx + 1:])
+            and _sentence_closes(lines[idx + 1:])
             and _wrapped_at_margin(line, lines[idx + 1:], _wrap_width(lines, idx))
         ):
-            # Shaped like a wrapped line of prose: it gives way to a heading
-            # later on the page, but is not dropped. A sentence-case heading
-            # over a lowercase line on a page of short lines has this shape too.
+            # Shaped like a wrapped line of prose: it gives way to a later
+            # line that names a section, but is not dropped. A sentence-case
+            # heading over a lowercase line on a page of short lines has this
+            # shape too, and the rows and labels under it do not take its place.
             wrapped = wrapped or line.strip()
+            continue
+        if wrapped and not _names_a_section(line):
             continue
         return line.strip()
     return wrapped or first
@@ -379,6 +383,25 @@ def _continues_sentence(following: list[str]) -> bool:
     return False
 
 
+def _sentence_closes(following: list[str]) -> bool:
+    """True when the carried sentence ends before the next heading-like line.
+
+    A wrapped sentence runs on to its full stop ("... and sand."). A heading
+    over a lowercase line runs into the rows or the next heading-like line
+    below it before any line closes a sentence ("kN values are unfactored",
+    then "1 Dead load 2.5").
+    """
+    for line in following:
+        text = line.strip()
+        if not text:
+            continue
+        if text[-1] in ".;?!":
+            return True
+        if _is_heading_line(line):
+            return False
+    return False
+
+
 #: A wrapped line reaches at least this share of the page's wrap width once
 #: the next line's first word is added back. Proportional type sets the same
 #: margin at different character counts ("mmm" against "iii"), so a wrap is
@@ -394,6 +417,27 @@ def _wrap_width(lines: list[str], idx: int) -> int:
     filled = [i for i, ln in enumerate(lines) if ln.strip()]
     measured = [len(lines[i].strip()) for i in filled[:-1] if i != idx]
     return max(measured, default=0)
+
+
+# A figure standing as a word of its own ("2.5", "40", "1,200").
+_FIGURE_WORD = re.compile(r"^\d+(?:[.,]\d+)*$")
+
+
+def _names_a_section(line: str) -> bool:
+    """True when a heading-like line names a section, not a row or a label.
+
+    A row of a table or list carries its value after its opener ("1 Dead
+    load 2.5", "A Dead 2.5", "1 Internal faces 25 mm"); a label is one word
+    with no section number ("NOTE"). A section heading is neither ("3.4
+    GROUND BEAMS", "14 BRICKWORK", "11 Steel Fixings").
+    """
+    text = line.strip().lstrip("#").strip()
+    words = text.split()
+    numbered = bool(words) and any(ch.isdigit() for ch in words[0])
+    rest = words[1:] if _NUMBERED_HEADING.match(text) else words
+    if any(_FIGURE_WORD.match(w) for w in rest):
+        return False
+    return numbered or len([w for w in words if w[0].isalpha()]) >= 2
 
 
 def _wrapped_at_margin(line: str, following: list[str], width: int) -> bool:

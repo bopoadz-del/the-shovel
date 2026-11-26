@@ -13,7 +13,13 @@ import math
 
 import pytest
 
-from app.core.chunk_bounds import WRAP_FILL, _wrapped_at_margin, heading_line_for_page, page_heading_lines
+from app.core.chunk_bounds import (
+    WRAP_FILL,
+    _sentence_closes,
+    _wrapped_at_margin,
+    heading_line_for_page,
+    page_heading_lines,
+)
 
 
 def _page(opener: str, carry: str, heading: str) -> str:
@@ -414,11 +420,11 @@ def test_wrap_shaped_heading_with_no_later_heading_still_names_the_page(page, he
 
 @pytest.mark.parametrize(
     "line,carry,later",
-    [("4 Loads on the frame", "kN values are unfactored", "4.1 DEAD LOADS"),
-     ("8.2 On site testing of concrete", "mm values are nominal here", "8.3 CUBES")],
+    [("450 mm deep ground beams are cast against a blinding of", "lean mix concrete and sand.", "4.1 DEAD LOADS"),
+     ("A sealant joint is formed between each frame and the", "surrounding masonry opening.", "8.3 CUBES")],
 )
 def test_wrap_shaped_line_gives_way_to_a_later_heading(line, carry, later):
-    # The same wrap-shaped line: alone it names the page, with a heading below it gives way.
+    # The same wrapped line: alone it names the page, with a section heading below it gives way.
     assert heading_line_for_page(f"{line}\n{carry}\nDead 2.5\nNotes\n") == line
     assert heading_line_for_page(f"{line}\n{carry}\n{later}\nDead 2.5\nNotes\n") == later
 
@@ -493,3 +499,81 @@ def test_wrapped_at_margin_shows_no_wrap_with_no_measured_width(line, following)
     # long the line. With a measured width the same line and word do reach it.
     assert _wrapped_at_margin(line, following, 0) is False
     assert _wrapped_at_margin(line, following, len(line)) is True
+
+
+@pytest.mark.parametrize(
+    "page,heading",
+    [("4 Loads on the frame\nkN values are unfactored\n1 Dead load 2.5\n2 Live load 1.5\nNotes\n",
+      "4 Loads on the frame"),
+     ("3 Cover to reinforcement bars\nmm values below are nominal and\n1 Internal faces 25 mm\n"
+      "2 External faces 40 mm\nEnd\n", "3 Cover to reinforcement bars"),
+     ("4 Loads on the frame\nkN values are unfactored\nA Dead 2.5\nB Live 1.5\nNotes\n",
+      "4 Loads on the frame"),
+     ("5 Joints in the blockwork\nmm wide joints are formed at 6 m\nNOTE\nSee drawing\n",
+      "5 Joints in the blockwork")],
+)
+def test_a_row_or_a_label_below_does_not_take_the_page(page, heading):
+    # A heading-like row (a value after its opener) or a one-word label is not
+    # a section: the wrap-shaped heading above it keeps the page.
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "line,carry,later",
+    [("450 mm deep ground beams are cast against a blinding of", "lean mix concrete and sand.", "14 BRICKWORK"),
+     ("A sealant joint is formed between each frame and the", "surrounding masonry opening.", "GROUND BEAMS")],
+)
+def test_a_numbered_word_or_two_capital_words_below_take_the_page(line, carry, later):
+    # Boundary of the label rule: one word with a section number, or two words
+    # with none, names a section; the same page with a one-word label does not.
+    assert heading_line_for_page(f"{line}\n{carry}\n{later}\nSee drawing\n") == later
+    assert heading_line_for_page(f"{line}\n{carry}\nNOTE\nSee drawing\n") == line
+
+
+@pytest.mark.parametrize(
+    "line,carry,later",
+    [("450 mm deep ground beams are cast against a blinding of", "lean mix concrete and sand.", "4.1 DEAD LOADS 2"),
+     ("A sealant joint is formed between each frame and the", "surrounding masonry opening.", "8.3 CUBES 1,200")],
+)
+def test_a_figure_after_the_opener_makes_a_row(line, carry, later):
+    # The same later line without its figure names a section and takes the page.
+    head = later.rsplit(" ", 1)[0]
+    assert heading_line_for_page(f"{line}\n{carry}\n{later}\nNotes\n") == line
+    assert heading_line_for_page(f"{line}\n{carry}\n{head}\nNotes\n") == head
+
+
+@pytest.mark.parametrize(
+    "page,heading",
+    [("## Joints in the blockwork wall\nmm wide joints are formed at 6 m.\n3.4 GROUND BEAMS\nEnd\n",
+      "## Joints in the blockwork wall"),
+     ("# Loads on the frame here\nkN values are unfactored here.\n2.1 DEAD LOADS\nEnd\n",
+      "# Loads on the frame here")],
+)
+def test_a_markdown_heading_is_never_a_wrap(page, heading):
+    # Shaped like a wrap (lowercase carry, at the margin), but a markdown
+    # heading: a later section heading does not take the page.
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "line,carry,later",
+    [("4 Loads on the frame", "kN values are unfactored", "4.1 DEAD LOADS"),
+     ("8.2 On site testing of concrete", "mm values are nominal here", "8.3 CUBES")],
+)
+def test_a_wrap_needs_the_carried_sentence_to_close(line, carry, later):
+    # With no full stop before the next heading-like line, the line above is a
+    # heading over a lowercase line; the same page with the stop is a wrap.
+    assert heading_line_for_page(f"{line}\n{carry}\n{later}\nEnd\n") == line
+    assert heading_line_for_page(f"{line}\n{carry}.\n{later}\nEnd\n") == later
+
+
+@pytest.mark.parametrize(
+    "following,closes",
+    [(["", "lean mix concrete and sand."], True),
+     (["the joints are sealed;", "1 Dead load 2.5"], True),
+     (["kN values are unfactored", "1 Dead load 2.5", "ends here."], False),
+     (["kN values are unfactored"], False),
+     ([], False)],
+)
+def test_sentence_closes_stops_at_the_next_heading_like_line(following, closes):
+    assert _sentence_closes(following) is closes
