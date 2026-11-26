@@ -49,9 +49,13 @@ def test_productivity_rate_is_output_per_man_hour(o, h, crew, rate, crew_rate):
     _close(out["crew_hours"], h / crew)
 
 
-def test_productivity_rate_without_crew_names_the_missing_input():
-    out = productivity_rate(90, 36)
-    _close(out["rate_per_worker_hour"], 2.5)
+@pytest.mark.parametrize("o,h,crew,rate", [
+    (90, 36, None, 2.5),
+    (120, 30, "", 4.0),
+])
+def test_productivity_rate_without_crew_names_the_missing_input(o, h, crew, rate):
+    out = productivity_rate(o, h, crew)
+    _close(out["rate_per_worker_hour"], rate)
     assert out["needs_input"] == ["crew_size"]
     assert "rate_per_crew_hour" not in out
 
