@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from abc import abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -61,11 +62,17 @@ class BackfillDoc:
 class Sources(Protocol):
     """What the backfill reads; the live runner wires the stored readers."""
 
+    @abstractmethod
     def documents(self, project_id: str) -> Iterable[BackfillDoc]: ...
+    @abstractmethod
     def has_rows(self, project_id: str, doc_id: str) -> bool: ...
+    @abstractmethod
     def sheet_rows(self, doc: BackfillDoc) -> Sequence[Any]: ...
+    @abstractmethod
     def row_chunk_count(self, doc: BackfillDoc) -> int: ...
+    @abstractmethod
     def page_coverage(self, doc: BackfillDoc) -> tuple[int, int]: ...
+    @abstractmethod
     def bill_rows(self, doc: BackfillDoc) -> Sequence[Any]: ...
 
 
