@@ -183,11 +183,16 @@ def test_composite_column_squash_resistance(load, rec, a_safe, b_safe):
     assert out["recommended"] == rec
 
 
-def test_composite_column_without_steel_section():
+@pytest.mark.parametrize("load,dia,fck,rebar,cap,rec", [
     # D 400, C30: gross 125,663.7; Ac 123,663.7 x 0.85 x 20 = 2,102.3 kN; + 2,000 x 434.78 = 869.6
-    out = composite_column_design(2_500, 400, 30, False, 3.0, 9_000, 355, 2_000, 500)
-    assert out["option_a"]["capacity_kn"] == out["option_b"]["capacity_kn"] == 2_972
-    assert out["recommended"] == "A or B"
+    (2_500, 400, 30, 2_000, 2_972, "A or B"),
+    # D 500, C40: gross 196,349.5; Ac 193,349.5 x 0.85 x 26.667 = 4,382.6 kN; + 3,000 x 434.78 = 1,304.3
+    (6_000, 500, 40, 3_000, 5_687, "NEITHER"),
+])
+def test_composite_column_without_steel_section(load, dia, fck, rebar, cap, rec):
+    out = composite_column_design(load, dia, fck, False, 3.0, 9_000, 355, rebar, 500)
+    assert out["option_a"]["capacity_kn"] == out["option_b"]["capacity_kn"] == cap
+    assert out["recommended"] == rec
 
 
 @pytest.mark.parametrize("kw", [
@@ -215,37 +220,60 @@ def test_slip_form_mix_constants_are_locked(extra):
 
 
 # --- cpm_network: forward / backward pass, TF = LS - ES ------------------------
-def test_cpm_network_with_one_float_path():
+@pytest.mark.parametrize("acts,duration,critical,floater,es,ls,tf", [
     # A3; B2 after A; C4 after A; D1 after B,C -> A 0-3, B 3-5, C 3-7, D 7-8.
     # B: LF 7, LS 5, TF 2, FF 7-5 = 2.  Critical A-C-D, duration 8.
-    out = cpm_network([
+    ([
         {"id": "A", "duration": 3, "predecessors": []},
         {"id": "B", "duration": 2, "predecessors": ["A"]},
         {"id": "C", "duration": 4, "predecessors": "A"},
         {"id": "D", "duration": 1, "predecessors": "B, C"},
-    ])
+    ], 8, ["A", "C", "D"], "B", 3, 5, 2),
+    # A2; B6 after A; C1 after A; D3 after B,C -> A 0-2, B 2-8, C 2-3, D 8-11.
+    # C: LF 8, LS 7, TF 5, FF 8-3 = 5.  Critical A-B-D, duration 11.
+    ([
+        {"id": "A", "duration": 2},
+        {"id": "B", "duration": 6, "predecessors": ["A"]},
+        {"id": "C", "duration": 1, "predecessors": ["A"]},
+        {"id": "D", "duration": 3, "predecessors": ["B", "C"]},
+    ], 11, ["A", "B", "D"], "C", 2, 7, 5),
+])
+def test_cpm_network_with_one_float_path(acts, duration, critical, floater, es, ls, tf):
+    out = cpm_network(acts)
     rows = {r["id"]: r for r in out["activities"]}
-    assert out["project_duration"] == 8
-    assert list(out["critical_path"]) == ["A", "C", "D"]
-    assert (rows["B"]["early_start"], rows["B"]["late_start"]) == (3, 5)
-    assert (rows["B"]["total_float"], rows["B"]["free_float"]) == (2, 2)
-    assert [rows[k]["total_float"] for k in "ACD"] == [0, 0, 0]
+    assert out["project_duration"] == duration
+    assert list(out["critical_path"]) == critical
+    assert (rows[floater]["early_start"], rows[floater]["late_start"]) == (es, ls)
+    assert (rows[floater]["total_float"], rows[floater]["free_float"]) == (tf, tf)
+    assert [rows[k]["total_float"] for k in critical] == [0] * len(critical)
 
 
-def test_cpm_network_total_float_differs_from_free_float():
+@pytest.mark.parametrize("acts,duration,critical,floats", [
     # A2; B5; C2 after A; D2 after B,C -> A 0-2, B 0-5, C 2-4, D 5-7.
     # C: LS 3, TF 1, FF 5-4 = 1.  A: LF 3, TF 1, FF 2-2 = 0.  Critical B-D, 7.
-    out = cpm_network([
+    ([
         {"id": "A", "duration": 2},
         {"id": "B", "duration": 5},
         {"id": "C", "duration": 2, "predecessors": ["A"]},
         {"id": "D", "duration": 2, "predecessors": ["B", "C"]},
-    ])
+    ], 7, ["B", "D"], {"A": (1, 0), "C": (1, 1)}),
+    # A1; B4; C1 after A; E1 after C; D2 after B,E -> A 0-1, C 1-2, E 2-3, B 0-4, D 4-6.
+    # LS: E 3, C 2, A 1 -> TF 1 each; FF A 1-1 = 0, C 2-2 = 0, E 4-3 = 1.  Critical B-D, 6.
+    ([
+        {"id": "A", "duration": 1},
+        {"id": "B", "duration": 4},
+        {"id": "C", "duration": 1, "predecessors": ["A"]},
+        {"id": "E", "duration": 1, "predecessors": ["C"]},
+        {"id": "D", "duration": 2, "predecessors": ["B", "E"]},
+    ], 6, ["B", "D"], {"A": (1, 0), "C": (1, 0), "E": (1, 1)}),
+])
+def test_cpm_network_total_float_differs_from_free_float(acts, duration, critical, floats):
+    out = cpm_network(acts)
     rows = {r["id"]: r for r in out["activities"]}
-    assert out["project_duration"] == 7
-    assert list(out["critical_path"]) == ["B", "D"]
-    assert (rows["A"]["total_float"], rows["A"]["free_float"]) == (1, 0)
-    assert (rows["C"]["total_float"], rows["C"]["free_float"]) == (1, 1)
+    assert out["project_duration"] == duration
+    assert list(out["critical_path"]) == critical
+    for k, (tf, ff) in floats.items():
+        assert (rows[k]["total_float"], rows[k]["free_float"]) == (tf, ff), k
 
 
 @pytest.mark.parametrize("acts", [
@@ -270,11 +298,16 @@ def test_crane_count_per_month(demand, cranes):
     assert out["total_monthly_cost"] == cranes * 50_000.0
 
 
-def test_crane_count_second_case_without_a_rate():
+@pytest.mark.parametrize("args,daily,cranes", [
     # 8 t, 50%, 15 min, 10 h x 1, 25 d: 4 t x 4 x 10 = 160 t/day, 4,000 t/month
-    out = crane_planning(5_000, 8, 50, 1, 10, 15, 25)
-    _close(out["daily_tonnage_per_crane"], 160.0)
-    assert out["cranes_required"] == 2
+    ((5_000, 8, 50, 1, 10, 15, 25), 160.0, 2),
+    # 12 t, 80%, 30 min, 8 h x 2, 22 d: 9.6 t x 2 x 16 = 307.2 t/day, 6,758.4 t/month
+    ((6_000, 12, 80, 2, 8, 30, 22), 307.2, 1),
+])
+def test_crane_count_second_case_without_a_rate(args, daily, cranes):
+    out = crane_planning(*args)
+    _close(out["daily_tonnage_per_crane"], daily)
+    assert out["cranes_required"] == cranes
     assert out["total_monthly_cost"] is None
     assert any("dry hire rate" in n for n in out["notes"])
 
