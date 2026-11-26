@@ -160,6 +160,71 @@ def test_unknown_operation_is_an_error_not_a_guess():
 
 # ── readers ────────────────────────────────────────────────────────────────
 
+NUMBERED = [
+    _row(1, 1, "Strip topsoil", total="120", path=("Bill 1", "Site")),
+    _row(1, 2, "Remove debris", total="80", path=("Bill 1", "Site")),
+    _row(1, 3, "Formwork", total="300", path=("Bill 10",)),
+    _row(1, 4, "Rebar", total="400", path=("Bill 11",)),
+    _row(1, 5, "Blockwork", total="500", path=("Bill 12",)),
+]
+
+
+@pytest.mark.parametrize("where, value, count", [
+    ({"path": "Bill 1"}, 200.0, 2),
+    ({"path": "bill 10"}, 300.0, 1),
+    ({"path": "BILL 1 > site"}, 200.0, 2),
+    ({"description": "REBAR"}, 400.0, 1),
+    ({"path": "Bill"}, 1400.0, 5),
+])
+def test_where_matches_whole_tokens_not_a_prefix(where, value, count):
+    assert dr.rows_query(NUMBERED, "sum", where)["value"] == pytest.approx(value)
+    assert dr.rows_query(NUMBERED, "count", where)["value"] == count
+
+
+@pytest.mark.parametrize("item, picked", [("1", [1]), ("1.1", [3]), ("10", [2])])
+def test_item_reference_matches_itself_only(item, picked):
+    rows = [dr.DocRow("d", 1, n, fields={"description": "x", "total": "1"}, extra={"Item": ref})
+            for n, ref in ((1, "1"), (2, "10"), (3, "1.1"), (4, "11"))]
+    got = dr.rows_query(rows, "filter", {"Item": item})
+    assert ([r["row_no"] for r in got["rows"]], got["count"]) == (picked, len(picked))
+
+
+@pytest.mark.parametrize("value", ["", " - ", "  "])
+def test_where_value_without_a_token_matches_nothing(value):
+    assert dr.rows_query(NUMBERED, "count", {"path": value})["value"] == 0
+
+
+@pytest.mark.parametrize("amounts, printed, state", [
+    (["500000", "495500"], 1_000_000.0, dr.FAILED),      # one row's worth missing
+    (["400", "600"], 1004.0, dr.FAILED),
+    (["1000", "2000", "3000"], 6001.0, dr.RECONCILED),   # three halves + the total's half
+    (["1000", "2000", "3000"], 6003.0, dr.FAILED),
+    (["100.25", "200.25"], 300.5, dr.RECONCILED),
+    (["100.25", "200.25"], 300.52, dr.FAILED),
+    (["400", "600"], float("inf"), dr.FAILED),
+])
+def test_printed_total_allows_only_the_rounding_of_its_figures(amounts, printed, state):
+    rows = [_row(1, i + 1, f"Lump sum {i}", total=a) for i, a in enumerate(amounts)]
+    assert dr.reconcile_table(rows, printed).state == state
+
+
+@pytest.mark.parametrize("where, other, missing", [
+    ({"description": "Excavate"}, None, "other"),
+    (None, {"description": "Backfill"}, "where"),
+    (None, None, "where, other"),
+    ({"description": "Excavate"}, {}, "other"),
+])
+def test_compare_without_both_sides_is_an_error_not_a_figure(where, other, missing):
+    got = dr.rows_query(ROWS, "compare", where, other=other)
+    assert got["error"].endswith(f"missing: {missing}")
+    assert "difference" not in got and got["rows"] == []
+
+
+@pytest.mark.parametrize("where, n", [({"description": "trench"}, 2), ({"description": "blinding"}, 1)])
+def test_filter_counts_only_the_rows_that_match(where, n):
+    assert dr.rows_query(ROWS, "filter", where)["count"] == n
+
+
 @pytest.mark.parametrize("bill, expect, state", [
     ([BillRow(section="Earthworks", source_page=7, path=("Bill 2", "Earthworks"),
               fields={"description": "Excavate", "quantity": "10", "rate": "5", "total": "50"}),
@@ -234,3 +299,57 @@ def test_spreadsheet_public_path_rows_match_chunks(tmp_path, sheets, states, tot
         assert r.sheet_row is not None and r.sheet_row >= 3   # banner + header above
     assert {t: c.state for t, c in dr.reconcile_tables(rows).items()} == states
     assert dr.rows_query(rows, "sum")["value"] == pytest.approx(total)
+
+
+ROW_A = ["A", "Excavate", "m3", 10, 5, 50]
+ROW_B = ["B", "Backfill", "m3", 4, 2.5, 10]
+
+
+@pytest.mark.parametrize("sheets, numbered", [
+    ({"S1": [["BILL 1"], HEADER, ROW_A, ROW_B], "S2": [["BILL 2"], HEADER, ROW_A]},
+     [(1, 1), (1, 2), (2, 1)]),
+    ({"S1": [["BILL 1"], HEADER, ROW_A], "S2": [["BILL 2"], HEADER, ROW_A, ROW_B, ROW_A]},
+     [(1, 1), (2, 1), (2, 2), (2, 3)]),
+])
+def test_spreadsheet_row_no_counts_within_its_table(tmp_path, sheets, numbered):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "two.xlsx", sheets)
+    rows = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "two.xlsx", ".xlsx"))
+    assert [(r.table_no, r.row_no) for r in rows] == numbered
+    assert [r.chunk_ordinal for r in rows] == list(range(len(numbered)))
+
+
+@pytest.mark.parametrize("sheet, sheet_rows", [
+    ([["BILL 1"], HEADER, ROW_A, ROW_B], [3, 4]),
+    ([[None], [None], [None], ["BILL 1"], HEADER, ROW_A, ROW_B], [6, 7]),
+    ([["BILL 1"], HEADER, ROW_A, [None], ROW_B], [3, 5]),
+])
+def test_spreadsheet_sheet_row_is_the_row_the_sheet_prints(tmp_path, sheet, sheet_rows):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "one.xlsx", {"S1": sheet})
+    rows = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "one.xlsx", ".xlsx"))
+    assert [r.sheet_row for r in rows] == sheet_rows
+
+
+@pytest.mark.parametrize("sheets", [
+    {"S1": [["BILL No. 1"], HEADER, ROW_A], "S2": [HEADER, ROW_B]},
+    {"S2": [HEADER, ROW_B, ROW_A]},
+])
+def test_sheet_without_its_own_heading_has_no_path(tmp_path, sheets):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "h.xlsx", sheets)
+    rows = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "h.xlsx", ".xlsx"))
+    assert [r.path for r in rows if r.sheet == "S2"] == [()] * len(sheets["S2"][1:])
+
+
+@pytest.mark.parametrize("remark", ["by hand", "machine dig"])
+def test_spreadsheet_keeps_unmapped_cells_in_extra(tmp_path, remark):
+    from app.core import doc_index
+
+    sheet = [["BILL 1"], [*HEADER, "Remarks"], [*ROW_A, remark]]
+    path = _xlsx(tmp_path, "r.xlsx", {"S1": sheet})
+    (row,) = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "r.xlsx", ".xlsx"))
+    assert dict(row.extra) == {"Item": "A", "Remarks": remark}

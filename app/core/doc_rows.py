@@ -19,14 +19,16 @@ and every answer names the rows it used.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.bill_table_geometry import BillRow, check_row, parse_number, reconciles
+from app.core.bill_table_geometry import BillRow, check_row, parse_number
 
-#: Every quantity x rate a table states agrees with its amount, and at least
-#: one row states all three (and a printed total, when given, agrees too).
+#: Every check the table makes possible agrees, and there is at least one:
+#: a row stating quantity, rate and amount, or a printed total the amounts
+#: sum to (within the rounding of the printed figures).
 RECONCILED = "RECONCILED"
 #: Rows were read, but no row states quantity, rate and amount together and
 #: no printed total was given: nothing in the table can be checked.
@@ -87,14 +89,16 @@ def rows_from_spreadsheet(document_id: str, rows: Sequence[Any]) -> list[DocRow]
     from the same list in the same order.
     """
     tables: dict[str, int] = {}
+    in_table: dict[int, int] = {}
     out: list[DocRow] = []
     for i, r in enumerate(rows):
         table_no = tables.setdefault(r.sheet, len(tables) + 1)
+        in_table[table_no] = in_table.get(table_no, 0) + 1
         fields = dict(r.fields)
         out.append(DocRow(
             document_id=document_id,
             table_no=table_no,
-            row_no=i + 1,
+            row_no=in_table[table_no],
             path=tuple(r.path),
             fields=fields,
             extra=dict(r.others),
@@ -140,7 +144,10 @@ def reconcile_table(rows: Sequence[DocRow], printed_total: float | None = None) 
 
     A row is checkable when it states quantity, rate and amount; it fails when
     they disagree (:func:`check_row`). When ``printed_total`` is given, the
-    amounts of the rows must sum to it within the bill rounding tolerance.
+    amounts of the rows must sum to it within the rounding the printed
+    figures allow (:func:`_rounding_allowance`), never a share of the total:
+    a total short by one row's amount is FAILED. A printed total that is not
+    a finite number is never agreed with.
     """
     if not rows:
         return TableCheck(NOT_READ, 0, 0, 0, printed_total)
@@ -153,7 +160,11 @@ def reconcile_table(rows: Sequence[DocRow], printed_total: float | None = None) 
     total_of_rows = sum(amounts) if amounts else None
     total_ok: bool | None = None
     if printed_total is not None:
-        total_ok = total_of_rows is not None and reconciles(1.0, total_of_rows, printed_total)
+        # A non-finite printed total is never within a finite allowance.
+        total_ok = (total_of_rows is not None
+                    and abs(total_of_rows - printed_total) <= _rounding_allowance(
+                        [r.fields.get("total", "") for r in rows if r.figure("total") is not None],
+                        printed_total))
     if failed or total_ok is False:
         state = FAILED
     elif checked or total_ok:
@@ -177,6 +188,21 @@ def reconcile_tables(
     return out
 
 
+def _half_unit(text: str) -> float:
+    """Half a unit of the last digit ``text`` prints (``"1,200.50"`` -> 0.005,
+    ``"1,200"`` -> 0.5)."""
+    digits = re.sub(r"[^0-9.]", "", text or "")
+    _, dot, frac = digits.rpartition(".")
+    return 0.5 * 10.0 ** -(len(frac) if dot and frac else 0)
+
+
+def _rounding_allowance(amounts: Sequence[str], printed_total: float) -> float:
+    """How far a sum of printed ``amounts`` may sit from ``printed_total``
+    by rounding alone: half a unit of each figure's own last printed digit."""
+    total_half = 0.5 if float(printed_total).is_integer() else 0.005
+    return sum(_half_unit(a) for a in amounts) + total_half
+
+
 # ── rows_query ──────────────────────────────────────────────────────────────
 
 OPERATIONS = ("filter", "lookup", "sum", "count", "compare")
@@ -190,10 +216,26 @@ def _text_of(row: DocRow, column: str) -> str:
     return row.extra.get(column, "")
 
 
+#: A word or a number; ``.``, ``/`` and ``-`` between letters or digits stay
+#: inside it, so an item reference like ``1.10`` is one token.
+_TOKEN_RE = re.compile(r"[^\W_]+(?:[./-][^\W_]+)*")
+
+
+def _tokens(text: str) -> list[str]:
+    return _TOKEN_RE.findall(str(text).casefold())
+
+
 def _matches(row: DocRow, where: Mapping[str, str]) -> bool:
-    """Every ``column -> text`` in ``where`` is contained in the row's cell,
-    case-insensitively. An empty ``where`` keeps every row."""
-    return all(str(v).casefold() in _text_of(row, k).casefold() for k, v in where.items())
+    """Every ``column -> text`` in ``where`` appears in the row's cell as
+    whole tokens in order, case-insensitively: ``Bill 1`` matches ``Bill 1 >
+    Earthworks`` but not ``Bill 10``. An empty ``where`` keeps every row; a
+    value with no token matches nothing."""
+    for k, v in where.items():
+        want, have = _tokens(v), _tokens(_text_of(row, k))
+        n = len(want)
+        if not n or not any(have[i:i + n] == want for i in range(len(have) - n + 1)):
+            return False
+    return True
 
 
 def rows_query(
@@ -210,7 +252,8 @@ def rows_query(
     * ``sum``: the sum of ``column`` over the matching rows;
     * ``count``: how many rows match;
     * ``compare``: ``column`` summed over ``where`` and over ``other``, and
-      the difference (first minus second).
+      the difference (first minus second); an error when either side is not
+      given.
 
     Every result carries ``rows``: the locators of the rows it used. A row
     whose ``column`` prints no number is named under ``skipped``, never
@@ -241,6 +284,9 @@ def rows_query(
                 "rows": [r.locator()]}
     if operation == "sum":
         return summed(picked)
+    missing = [name for name, side in (("where", where), ("other", other)) if not side]
+    if missing:
+        return {"error": f"compare needs both sides; missing: {', '.join(missing)}", "rows": []}
     second = [r for r in rows if _matches(r, other or {})]
     a, b = summed(picked), summed(second)
     diff = None if a["value"] is None or b["value"] is None else a["value"] - b["value"]
