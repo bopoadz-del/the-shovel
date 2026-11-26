@@ -377,17 +377,15 @@ def _table_cell_copies(lines: list[str], rows: set[int]) -> set[int]:
         for cell in lines[idx].split(_TABLE_CELL_SEPARATOR)
         if cell.strip()
     )
-    if not cells:
-        return set()
-    loose = Counter(
-        line.strip() for idx, line in enumerate(lines)
-        if idx not in rows and line.strip() in cells
-    )
-    return {
-        idx for idx, line in enumerate(lines)
-        if idx not in rows and line.strip() in cells
-        and loose[line.strip()] <= cells[line.strip()]
-    }
+    # A row line holds the separator and a cell never does, so only lines
+    # off the rows can equal a cell.
+    loose = Counter(line.strip() for line in lines if line.strip() in cells)
+    copies: set[int] = set()
+    for idx, line in enumerate(lines):
+        text = line.strip()
+        if text in cells and loose[text] <= cells[text]:
+            copies.add(idx)
+    return copies
 
 
 def heading_line_for_page(
