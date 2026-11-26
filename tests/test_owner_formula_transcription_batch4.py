@@ -6,6 +6,12 @@ No entry in ``app/knowledge/construction_kb.json`` states these ten, so the
 stated form is each formula's own docstring. Every expected value below is a
 hand calculation from that stated form, written as a literal; none is
 obtained by running the calculator. All inputs are invented figures.
+
+One difference is reported to the owner, not decided by a test: the stated
+form of ``rebar_lap_length`` caps the confinement term at 2.5, but the public
+route (``run_calculation``) declares that input's range as 1 to 2.5 and
+refuses a larger value before the cap runs. The cap is pinned here on a
+direct call only; the public route is pinned inside the declared range.
 """
 from __future__ import annotations
 
@@ -158,7 +164,11 @@ def test_seismic_base_shear_is_cs_times_w(kw, cs, v):
 #      eta2 = (132 - db)/100 above 32 mm; lap = 1.5 lb.
 @pytest.mark.parametrize("kw,lap", [
     (dict(bar_diameter_mm=16, fy_mpa=420, fc_mpa=28), 800.5),
+    # boundary: psi_s 0.8 holds at db = 19 and is 1.0 at db = 20.
+    (dict(bar_diameter_mm=19, fy_mpa=420, fc_mpa=28), 950.5),
+    (dict(bar_diameter_mm=20, fy_mpa=420, fc_mpa=28), 1250.7),
     (dict(bar_diameter_mm=25, fy_mpa=500, fc_mpa=35, confinement_ratio=2.0), 1435.8),
+    # direct call only: the cap of 2.5 (see the module note on the public route).
     (dict(bar_diameter_mm=25, fy_mpa=420, fc_mpa=35, confinement_ratio=3.0), 839.0),
     (dict(bar_diameter_mm=25, fy_mpa=421, fc_mpa=35, confinement_ratio=3.0), 967.2),
     (dict(bar_diameter_mm=16, fy_mpa=500, fc_mpa=30, code="eurocode"), 857.8),
@@ -213,12 +223,35 @@ def test_fall_arrest_force_is_the_energy_balance(kw, kn, within):
     ("slab_thickness_min", {"span_mm": 4800}, "min_thickness_mm", 240.0),
     ("progress_quantity", {"total_qty": 800, "planned_qty": 200, "actual_qty": 260},
      "progress_variance_percent", 7.5),
+    # fy 420 / 421 at the top of the declared confinement range.
+    ("rebar_lap_length", {"bar_diameter_mm": 25, "fy_mpa": 420, "fc_mpa": 35,
+                          "confinement_ratio": 2.5}, "lap_length_mm", 839.0),
+    ("rebar_lap_length", {"bar_diameter_mm": 25, "fy_mpa": 421, "fc_mpa": 35,
+                          "confinement_ratio": 2.5}, "lap_length_mm", 967.2),
+    ("rebar_lap_length", {"bar_diameter_mm": 19, "fy_mpa": 420, "fc_mpa": 28},
+     "lap_length_mm", 950.5),
 ])
 def test_public_route_returns_the_hand_value(name, params, key, want):
     from app.lib.construction_formulas import run_calculation
     env = run_calculation(name, params)
     assert env["status"] == "success"
     _close(env["result"][key], want, 0.051)
+
+
+# The 8 kN limit on the public route, at a g it accepts: 256 x 9.75 x
+# (1 + 8.6/3.9) = 8000.0 N exactly (within); H = 8.62 gives 8012.8 N (above).
+@pytest.mark.parametrize("free_fall,kn,within", [
+    (8.6, 8.0, True),
+    (8.62, 8.013, False),
+])
+def test_public_route_fall_arrest_limit_is_inclusive(free_fall, kn, within):
+    from app.lib.construction_formulas import run_calculation
+    env = run_calculation("fall_arrest_force", {
+        "worker_mass_kg": 256, "free_fall_m": free_fall,
+        "deceleration_distance_m": 3.9, "g": 9.75})
+    assert env["status"] == "success"
+    _close(env["result"]["max_arrest_force_kn"], kn, 0.0051)
+    assert env["result"]["within_osha_limit"] is within
 
 
 # Degenerate inputs are refused, never a confident wrong figure.
