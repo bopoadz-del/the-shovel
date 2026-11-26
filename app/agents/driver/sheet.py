@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import copy
 import json
-import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -62,18 +61,9 @@ def new_sheet(turn: str, question: str, previous: Optional[Dict[str, Any]] = Non
 
 
 def _number(value: Any) -> Optional[float]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value) if math.isfinite(float(value)) else None
-    if isinstance(value, str):
-        text = value.strip().replace(",", "")
-        try:
-            number = float(text)
-        except ValueError:
-            return None
-        return number if math.isfinite(number) else None
-    return None
+    from app.agents.base.formulas.arithmetic import finite_number
+
+    return finite_number(value)
 
 
 def _given_problems(given: Any) -> List[str]:

@@ -9,6 +9,7 @@ is reached through tools. Steps and model are configuration.
 from __future__ import annotations
 
 import contextvars
+import logging
 import os
 from typing import Any, Mapping, Optional
 
@@ -72,6 +73,8 @@ def project_setting(project_id: Any, user_id: Any, key: str) -> str:
 
         project = projects.get_project_accessible(str(project_id), user_id)
     except Exception:  # noqa: BLE001 -- an unreadable profile keeps the default
+        logging.getLogger(__name__).warning("project %s profile could not be read; default path",
+                                            project_id, exc_info=True)
         return ""
     profile = (project or {}).get("profile")
     if not isinstance(profile, dict):

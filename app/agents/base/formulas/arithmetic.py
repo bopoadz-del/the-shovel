@@ -12,10 +12,13 @@ written next to it as ``<name>_unit``).
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Dict, Optional
 
 from app.lib.formula_registry import Param, formula
+
+_LOG = logging.getLogger(__name__)
 
 OPERATORS = ("add", "subtract", "multiply", "divide")
 
@@ -27,12 +30,15 @@ ANY_UNIT = "any"
 _LIMIT = 1e15
 
 
-def _number(value: Any) -> Optional[float]:
+def finite_number(value: Any) -> Optional[float]:
+    """``value`` as a finite float -- a number, or text such as "3,000" --
+    or None for anything else (a flag, a word, None, NaN, an infinity)."""
     if isinstance(value, bool):
         return None
     try:
         number = float(str(value).replace(",", "").strip()) if isinstance(value, str) else float(value)
     except (TypeError, ValueError):
+        _LOG.debug("not a number: %r", value)
         return None
     return number if math.isfinite(number) else None
 
@@ -84,7 +90,7 @@ def arithmetic(operator: str, a: float, b: float, a_unit: str = "-", b_unit: str
     op = str(operator or "").strip().lower()
     if op not in OPERATORS:
         return {"error": f"operator must be one of {', '.join(OPERATORS)}"}
-    x, y = _number(a), _number(b)
+    x, y = finite_number(a), finite_number(b)
     if x is None or y is None:
         return {"error": "both values must be finite numbers"}
     au, bu = _unit(a_unit), _unit(b_unit)
