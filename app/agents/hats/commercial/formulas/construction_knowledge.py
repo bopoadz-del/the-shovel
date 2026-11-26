@@ -167,9 +167,13 @@ def calculate_evm(
         "status": {
             "cost": "UNDER BUDGET" if cv >= 0 else "OVER BUDGET",
             "schedule": "AHEAD" if sv >= 0 else "BEHIND",
+            # The band reads the unrounded CPI (a 0.8996 CPI shows as 0.9
+            # but is below the 0.9 band). With no actual cost CPI is
+            # undefined, and so is its band -- not CRITICAL.
             "cpi_health": (
-                "GOOD" if cpi and cpi >= 1
-                else ("WARNING" if cpi and cpi >= 0.9 else "CRITICAL")
+                "UNDEFINED" if cpi_raw is None
+                else "GOOD" if cpi_raw >= 1
+                else ("WARNING" if cpi_raw >= 0.9 else "CRITICAL")
             ),
         },
     }

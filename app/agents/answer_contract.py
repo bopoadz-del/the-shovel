@@ -121,10 +121,23 @@ def _inline_citations(line: str, markers: "_Markers") -> str:
         end = _group_end(line, i) if ch in _CLOSE else -1
         if end > 0:
             inner = line[i + 1:end]
+            labelled = bool(_SOURCE_PREFIX_RE.match(inner))
             body = _SOURCE_PREFIX_RE.sub("", inner, count=1).strip()
             if body and len(body) <= _CITE_BODY_MAX and _names_a_file(body):
                 head = "".join(out).rstrip(" 	")
                 out = [head, " " + markers.marker(body)]
+                i = end + 1
+                continue
+            if labelled and len(body) <= _CITE_BODY_MAX:
+                # A group the writer labelled as its source but that names no
+                # file ("[source: Bill of Quantities, Bill No. 4]", "[source:
+                # 1]") is still a citation, never prose: it becomes the marker
+                # of the one Sources row its words name, or, when no single
+                # row backs it, it leaves the text -- an attribution nothing
+                # in the turn backs is not printed, and none is guessed.
+                tag = markers.for_title(body)
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + tag] if tag else [head]
                 i = end + 1
                 continue
         out.append(ch)
@@ -141,6 +154,10 @@ _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
 _LOCATOR_LEAD = " \t,;:،؛，；—–-"
 #: The colons a label ends with; a file name holds none.
 _LABEL_COLONS = ":："
+#: Where a document named in words ends and its locator begins: a comma or
+#: semicolon of any script, or a dash with space on both sides. Punctuation
+#: only, no word of any language.
+_TITLE_SPLIT_RE = re.compile(r"[ \t]*[,;،؛，；][ \t]*|[ \t]+[—–-][ \t]+")
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -224,6 +241,24 @@ class _Markers:
         entry["marker"] = len(self.entries) + 1
         self.entries.append(entry)
         return f"[{entry['marker']}]"
+
+    def for_title(self, body: str) -> str:
+        """The marker for a citation that names its document in words, not
+        by file name: the one Sources row whose name holds those words. The
+        whole text is tried first, then its lead before the first separator
+        with the rest as the locator. A text with no word in it, or whose
+        words fit no row or more than one document, has no marker ("")."""
+        parts = _TITLE_SPLIT_RE.split(body.strip(), maxsplit=1)
+        lead, rest = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+        for title, section in ((body.strip(), ""), (lead, rest)):
+            key = _name_key(title)
+            if not title or not _doc_words(title):
+                continue
+            hits = [r for r in self.rows if key and key in _name_key(str(r.get("doc_name") or ""))]
+            if len({str(r.get("doc_name")) for r in hits}) == 1:
+                row = hits[0]
+                return self.for_row(dict(row, page_or_section=section or row.get("page_or_section") or ""))
+        return ""
 
     def for_row(self, row: dict[str, Any]) -> str:
         """The marker for one evidence row (its document and section)."""
@@ -702,6 +737,49 @@ def _drop_padding(text: str, computed: bool = True) -> str:
     return "\n".join(out)
 
 
+#: A sentence addressed to the reader that asks them for the next step:
+#: an imperative to supply or direct something ("Upload the priced BOQ and
+#: I'll price it", "point me at that file"), optionally after a condition
+#: ("If the pipework is billed elsewhere, point me at that file and I'll pull
+#: the line") or a "please"; or the writer's own offer made conditional on
+#: the reader ("I can pull the line if you send the file").
+#: An imperative to supply something counts only when the sentence names
+#: the writer as the one who receives it or acts next ("... and I'll pull
+#: the line", "send it to me"): "Send the notice to the Engineer" is an
+#: instruction the answer gives, not a request for the writer.
+_REQUEST_RE = re.compile(
+    r"^(?:(?:if|once|when|where|should)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?(?:please[ \t]+|just[ \t]+)?"
+    r"(?:(?:point|tell|give|show)\s+me|let\s+me\s+know"
+    r"|(?:upload|re-?upload|share|send|provide|attach|forward)\b[^.!?]*\b(?:me|i'll|i\s+(?:can|will|could))\b)\b"
+    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def _is_request_paragraph(par: str) -> bool:
+    """Every sentence of the paragraph asks the reader for a next step (or
+    offers further help), and it states no figure and carries no citation
+    marker -- it adds nothing the reader can use from this answer."""
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(par):
+        return False
+    sentences = [s.strip() for ln in par.split("\n")
+                 for s in _sentences(_BULLET_RE.sub("", ln).strip().lstrip("*_ ").strip()) if s.strip()]
+    return bool(sentences) and all(_REQUEST_RE.match(s) or _OFFER_RE.match(s) for s in sentences)
+
+
+def _drop_closing_request(text: str) -> str:
+    """Rule 2, every kind of answer: a closing paragraph that only asks the
+    reader for a next step ("upload X", "point me at the file and I'll pull
+    the line") and states no figure and no marker is padding and goes. The
+    answer before it stays; an answer that is nothing but such a paragraph
+    stays as written. A turn that ends on its own question for inputs a
+    step still needs (``asking``) never reaches this rule."""
+    pars = re.split(r"\n[ \t]*\n", text.strip())
+    while len(pars) > 1 and _is_request_paragraph(pars[-1]):
+        pars.pop()
+    return "\n\n".join(pars)
+
+
 # ── Rule 1: answer first ────────────────────────────────────────────────────
 
 def _answer_first(text: str, computed: bool) -> str:
@@ -888,6 +966,7 @@ def apply(
         if not asking:
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
+            body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
             body = _drop_overridden_absence(body)

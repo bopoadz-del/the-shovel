@@ -204,6 +204,12 @@ class PlanExecutor:
             "boq_items": step.args.get("boq_items"),
         }
         wbs = await ConstructionContainer().generate_wbs({}, params)
+        # The engine refuses in its own words (what scope it needs). That is a
+        # failed step, not a successful one with nothing in it: reported as a
+        # success, the refusal vanished and only cost_load's "run build_wbs
+        # first" was left to explain the empty schedule.
+        if isinstance(wbs, dict) and wbs.get("status") == "error":
+            raise PlanExecutionError(str(wbs.get("error") or "the work breakdown was not built"))
         session.data["wbs"] = wbs
         session.data["activities"] = wbs.get("activities") or []
         value = {

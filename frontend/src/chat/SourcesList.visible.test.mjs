@@ -245,7 +245,22 @@ for (const [i, c] of W3_CASES.entries()) {
     for (const cite of c.citations) assert.ok(!text.includes(cite.document), `answer shows ${cite.document}`)
     assert.doesNotMatch(text, /\bsources?\s*:/i)
     assert.doesNotMatch(text, /documents indexed/i)
-    assert.doesNotMatch(text, /\[\d+\]/, 'a bare [n] is left in the text')
+  })
+
+  test(`W3 case ${i}: each marker control reads [n] and is named Source n`, () => {
+    const host = dom.window.document.createElement('div')
+    host.innerHTML = bubble(c)
+    for (const cite of c.citations) {
+      const btn = host.querySelector(`button[data-citation-marker="${cite.marker}"]`)
+      assert.ok(btn, `marker ${cite.marker} is not a control`)
+      assert.equal(btn.textContent, `[${cite.marker}]`)
+      assert.equal(btn.getAttribute('aria-label'), `Source ${cite.marker}`)
+    }
+    // every [n] left in the text is one of the controls, none is loose
+    const loose = [...host.querySelectorAll('.chat-bubble__markdown')]
+      .map((el) => { const k = el.cloneNode(true); k.querySelectorAll('button').forEach((b) => b.remove()); return k.textContent })
+      .join(' ')
+    assert.doesNotMatch(loose, /\[\d+\]/, 'a bare [n] is left in the text')
   })
 
   test(`W3 case ${i}: the panel shows every entry by its marker with document, section, passage and tier`, () => {
@@ -315,6 +330,21 @@ for (const [i, c] of W3_CASES.entries()) {
       await view.click(markerButton(cite.marker))
     }
     assert.deepEqual(got, c.citations.map((cite) => cite.marker))
+    view.unmount()
+  })
+
+  test(`W3 case ${i}: the copied answer keeps each marker as [n], never a bare digit`, async () => {
+    const view = await mountLive(React.createElement(ChatBubble, {
+      message: { id: `c${i}`, role: 'assistant', content: c.content, citations: c.citations, coverage: c.coverage },
+    }))
+    const answer = view.container.querySelector('.chat-bubble__markdown')
+    const range = dom.window.document.createRange()
+    range.selectNodeContents(answer)
+    const copied = range.toString().replace(/\s+/g, ' ').trim()
+    assert.equal(copied, c.content.replace(/\s+/g, ' ').trim())
+    for (const cite of c.citations) {
+      assert.ok(copied.includes(`[${cite.marker}]`), `copied text lacks [${cite.marker}]`)
+    }
     view.unmount()
   })
 }

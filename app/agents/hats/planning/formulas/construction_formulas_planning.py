@@ -64,12 +64,13 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
 
     A predecessor is given as an id (``"A"``), a comma-separated string of
     ids (``"A, B"``) or a mapping with ``id`` and, optionally, ``type``
-    (FS/SS/FF/SF) and ``lag`` in working days. Nothing is assumed beyond
-    what the CPM convention itself defines: a link with no type is FS and a
-    link with no lag has none."""
+    (FS/SS/FF/SF) and ``lag`` in working days, or a list or tuple of any of
+    those (a sequence is read item by item, never as its printed text).
+    Nothing is assumed beyond what the CPM convention itself defines: a link
+    with no type is FS and a link with no lag has none."""
     if raw is None or raw == "":
         return []
-    items = raw if isinstance(raw, list) else [raw]
+    items = list(raw) if isinstance(raw, (list, tuple)) else [raw]
     links: List[Dict[str, Any]] = []
     for item in items:
         if isinstance(item, dict):

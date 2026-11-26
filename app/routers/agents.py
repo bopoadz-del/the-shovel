@@ -446,6 +446,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         try:
             from app.core.predefined_reasoning import lookup_question_hijack
             from app.routers.chat import (
+                _predefined_declines,
                 _predefined_enabled,
                 _predefined_workflows,
                 _stream_from_predefined,
@@ -469,9 +470,36 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                 and not lookup_question_hijack(
                     message, float(routing.get("confidence") or 0.0)
                 )
+                # A template action that cannot take the ask as written
+                # (the user typed their own period figures) leaves the
+                # turn to the agent and its calculators.
+                and not _predefined_declines(_pd_action, message)
             )
         except Exception:  # noqa: BLE001 — never block the normal agent path
             _pd_action, _use_predefined = None, False
+
+        async def _agent_sse():
+            try:
+                async for evt in agent.chat_stream(
+                    message,
+                    history=history,
+                    project_id=resolved_project_id,
+                    conversation_id=conversation_id,
+                    user_id=auth["user_id"],
+                    rag_debug=rag_debug,
+                ):
+                    # Same net as /v1/chat/stream: an error naming the plumbing
+                    # (provider, HTTP status, upstream body) is replaced for the user.
+                    if evt.get("type") == "token":
+                        turn_timing.first_token()
+                    yield sanitize_error_frame(f"data: {json.dumps(evt, default=str)}\n\n")
+                    await asyncio.sleep(0)  # yield to the event loop
+            except Exception as e:
+                # Log the real error server-side; stream only a generic message so
+                # infra detail (e.g. the LLM tunnel URL in a ConnectError) never
+                # reaches the browser.
+                logger.warning("agent chat stream failed: %s", e)
+                yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.'})}\n\n"
 
         if _use_predefined:
             try:
@@ -491,6 +519,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                     params=_pd_params,
                     emit_start=True,
                     conversation_id=conversation_id,
+                    fallback=_agent_sse,
                 ):
                     yield chunk
                     await asyncio.sleep(0)
@@ -498,27 +527,8 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
             except Exception:
                 logger.exception("predefined dispatch failed for %s; falling back", _pd_action)
 
-        try:
-            async for evt in agent.chat_stream(
-                message,
-                history=history,
-                project_id=resolved_project_id,
-                conversation_id=conversation_id,
-                user_id=auth["user_id"],
-                rag_debug=rag_debug,
-            ):
-                # Same net as /v1/chat/stream: an error naming the plumbing
-                # (provider, HTTP status, upstream body) is replaced for the user.
-                if evt.get("type") == "token":
-                    turn_timing.first_token()
-                yield sanitize_error_frame(f"data: {json.dumps(evt, default=str)}\n\n")
-                await asyncio.sleep(0)  # yield to the event loop
-        except Exception as e:
-            # Log the real error server-side; stream only a generic message so
-            # infra detail (e.g. the LLM tunnel URL in a ConnectError) never
-            # reaches the browser.
-            logger.warning("agent chat stream failed: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.'})}\n\n"
+        async for chunk in _agent_sse():
+            yield chunk
 
     # Local import: keeps this router's import graph unchanged for the
     # non-streaming endpoints.

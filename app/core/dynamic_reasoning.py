@@ -84,6 +84,7 @@ async def understand_intent(message: str, has_documents: bool = False) -> Dict[s
     from app.core.action_router import (
         message_wants_cash_flow,
         message_wants_look_ahead,
+        template_declines_ask,
     )
     if message_is_contract_data_lookup(message):
         return empty
@@ -100,6 +101,10 @@ async def understand_intent(message: str, has_documents: bool = False) -> Dict[s
             "params": {"as_of": stated} if stated else {},
         }
     if message_wants_cash_flow(message):
+        if template_declines_ask("cash_flow_forecast", message):
+            # The user wrote their own period figures: the template curve
+            # cannot take them, and no other workflow is this ask either.
+            return empty
         # Live tip 53b8b29 ask1: "Use cash_flow_forecast. Synthetic
         # schedule/costs…" still went predefined generate_wbs after #669
         # because UNDERSTAND maps "schedule" + "Produce" to workflow=schedule.
