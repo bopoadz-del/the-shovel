@@ -18,7 +18,10 @@ from app.agents.base.formulas.construction_formulas_earthwork import (
     excavation_volume,
 )
 from app.agents.base.formulas.construction_formulas_quantities import concrete_volume
-from app.agents.base.formulas.construction_formulas_commercial import cost_per_area
+from app.agents.base.formulas.construction_formulas_commercial import (
+    cost_per_area,
+    unit_cost_total,
+)
 from app.agents.hats.qaqc.formulas.construction_formulas_earthwork import compaction_control
 from app.agents.hats.quantities.formulas.construction_formulas_earthwork import cut_fill_balance
 from app.agents.hats.quantities.formulas.construction_formulas_quantities import (
@@ -138,6 +141,18 @@ def test_cost_per_area_is_total_over_area(kw, rate):
     _close(cost_per_area(**kw)["cost_per_area"], rate)
 
 
+# line extension: total = quantity * unit rate, to 2 dp (the docstring's form).
+# Hand cases folded from #742: 12*4850, 37.5*212.40, 7*1.1111 = 7.7777 -> 7.78, 0*1250.
+@pytest.mark.parametrize("kw,total", [
+    (dict(quantity=12, unit_rate=4850), 58200.0),
+    (dict(quantity=37.5, unit_rate=212.40), 7965.0),
+    (dict(quantity=7, unit_rate=1.1111), 7.78),
+    (dict(quantity=0, unit_rate=1250), 0.0),
+])
+def test_unit_cost_total_is_quantity_times_rate(kw, total):
+    assert unit_cost_total(**kw)["total_cost"] == pytest.approx(total, abs=1e-9)
+
+
 # crews = Q/(D*R), rounded up
 @pytest.mark.parametrize("kw,crews", [
     (dict(quantity=2100, duration_days=4, rate_per_crew_day=250), 3),
@@ -155,6 +170,7 @@ def test_crew_sizing_is_quantity_over_duration_times_rate(kw, crews):
     ("compaction_control", {"field_dry_density": 2.104, "max_dry_density": 2.131},
      "compaction_percent", 98.73),
     ("cost_per_area", {"total_cost": 50000, "area": 320}, "cost_per_area", 156.25),
+    ("unit_cost_total", {"quantity": 24, "unit_rate": 1375.5}, "total_cost", 33012.0),
 ])
 def test_public_route_returns_the_hand_value(name, params, key, want):
     from app.lib.construction_formulas import run_calculation
