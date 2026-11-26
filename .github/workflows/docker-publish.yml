@@ -15,18 +15,49 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
-# Newer push to the same ref supersedes the running build (the newest
-# image is the one that matters for a given branch/PR anyway).
+# Newer push to the same PR supersedes the running build (the newest
+# image is the one that matters for a PR). A run on main or a tag is never
+# cancelled: cancel-in-progress is true only for pull_request events.
 concurrency:
   group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # A pull request whose every changed file is a test or a document cannot
+  # change what the image serves, so it skips the image build (a skipped
+  # required check counts as passed). scripts/ci_image_inputs.py decides;
+  # pushes to main and tags always build.
+  changes:
+    if: github.event_name == 'pull_request' && ! github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.classify.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: classify
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -o pipefail
+          git diff --name-only "$BASE" "$HEAD" | python3 scripts/ci_image_inputs.py | tee -a "$GITHUB_OUTPUT"
+
   build:
     # A draft PR does not build the image (it runs only the fast checks). The
     # image build is part of the full run that happens once the PR is marked
-    # ready. Pushes to main and tags always build.
-    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
+    # ready. Pushes to main and tags always build. Fail-closed: if the
+    # `changes` classifier fails, the image builds.
+    needs: changes
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' || (
+          ! github.event.pull_request.draft &&
+          (needs.changes.result != 'success' || needs.changes.outputs.image != 'false')
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -125,6 +156,9 @@ jobs:
     # and 429s the required check (PR #451 job 99261131077).
     name: compose up (fresh clone) + health
     needs: build
+    # Explicit: `build` now depends on `changes`, which is skipped on main.
+    # Without a status check a skipped ancestor would skip this job too.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

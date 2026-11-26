@@ -20,6 +20,13 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
+# Its own concurrency group: no PR or main run shares it, so a probe never
+# waits on one. A newer scheduled probe replaces an older one that is still
+# pending; a probe that is running is never cancelled.
+concurrency:
+  group: slo-probe-probe
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -32,6 +39,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/slo_probe.py
+          sparse-checkout-cone-mode: false
 
       # /livez only: it is the DB-free, client-facing liveness endpoint and
       # the right surface for an availability + latency SLO. Readiness paging

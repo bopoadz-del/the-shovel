@@ -21,9 +21,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels that PR's superseded run. A run on
+# main (push or schedule) is never cancelled: cancel-in-progress is true
+# only for pull_request events.
 concurrency:
   group: lint-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ruff:

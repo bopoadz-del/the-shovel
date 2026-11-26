@@ -20,9 +20,10 @@ concurrency:
 jobs:
   mutation-gate:
     name: Mutation gate (CI-M)
-    # CI-M is a gate and runs on EVERY PR push (draft included) — it is never
-    # skipped. Only the heavy non-gate jobs (test matrix, postgres shards,
-    # timing, Docker, compose) skip while the PR is a draft.
+    # CI-M is a gate. It runs when the PR is marked ready (ready_for_review)
+    # and on every push after that; while the PR is a draft only lint and
+    # fast run. A draft cannot merge, so the gate still covers every merge.
+    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:

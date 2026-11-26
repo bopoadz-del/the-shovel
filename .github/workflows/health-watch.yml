@@ -24,6 +24,13 @@ on:
     - cron: "*/15 * * * *"   # liveness — DB-free; readiness is the same cadence
   workflow_dispatch:
 
+# Its own concurrency group: no PR or main run shares it, so a probe never
+# waits on one. A newer scheduled probe replaces an older one that is still
+# pending; a probe that is running is never cancelled.
+concurrency:
+  group: health-watch-probe
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -91,6 +98,9 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ready_probe.py
+          sparse-checkout-cone-mode: false
 
       - name: GET /ready (two attempts; page on 503)
         run: |
