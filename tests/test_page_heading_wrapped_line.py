@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from app.core.chunk_bounds import WRAP_FILL, heading_line_for_page, page_heading_lines
+from app.core.chunk_bounds import WRAP_FILL, _wrapped_at_margin, heading_line_for_page, page_heading_lines
 
 
 def _page(opener: str, carry: str, heading: str) -> str:
@@ -481,3 +481,15 @@ def test_a_page_of_furniture_only_keeps_the_first_furniture_line(one, two):
 
     assert heading_line_for_page(f"{one}\n{two}\nDead 2.5\n", running=running) == one
     assert heading_line_for_page(f"{two}\n{one}\nDead 2.5\n", running=running) == two
+
+
+@pytest.mark.parametrize(
+    "line,following",
+    [("3 The joints are left open", ["until the works are done."]),
+     ("A blinding is laid under the slab", ["", "to the levels shown."])],
+)
+def test_wrapped_at_margin_shows_no_wrap_with_no_measured_width(line, following):
+    # No other line measures the margin (width 0): nothing shows a wrap, however
+    # long the line. With a measured width the same line and word do reach it.
+    assert _wrapped_at_margin(line, following, 0) is False
+    assert _wrapped_at_margin(line, following, len(line)) is True
