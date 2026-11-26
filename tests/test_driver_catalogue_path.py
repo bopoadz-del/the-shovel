@@ -456,6 +456,36 @@ def test_a_sheet_keyed_to_the_user_is_refused_when_the_access_check_fails(monkey
     assert _sheet_in(seen[0]["messages"])["givens"] == []
 
 
+@pytest.mark.parametrize("empty", [None, ""])
+def test_carried_sheet_without_an_id_reads_nothing(monkeypatch, empty):
+    from app.core import agent_memory
+
+    def no_read(cid):
+        raise AssertionError("a turn with no conversation id read the conversation store")
+
+    monkeypatch.setattr(agent_memory, "get_conversation", no_read)
+    assert trace_store.carried_sheet(empty, "cs-u", "cs-p") is None
+
+
+@pytest.mark.parametrize("value", [41.5, 7])
+def test_carried_sheet_needs_a_stored_conversation_and_the_access_check(value):
+    from app.core import users as users_store
+
+    conv = f"cs-c-{value}"
+    users_store.ensure_user_exists("cs-other", role="user", email="cs-other@local")
+    sheet = {"givens": [{"id": "g1", "value": value, "unit": "m", "source": "user"}], "missing": []}
+    trace_store.save({"schema": "trace/1", "sheet": sheet}, conv, user_id="cs-u", project_id="cs-p")
+    # No id, or no stored conversation: nothing, though a record matches.
+    assert trace_store.carried_sheet(None, "cs-u", "cs-p") is None
+    assert trace_store.carried_sheet("", "cs-u", "cs-p") is None
+    assert trace_store.carried_sheet(conv, "cs-u", "cs-p") is None
+    pid = _owned_conversation(conv, "cs-u")
+    trace_store.save({"schema": "trace/1", "sheet": sheet}, conv, user_id="cs-u", project_id=pid)
+    assert trace_store.carried_sheet(conv, "cs-u", pid) == sheet
+    trace_store.save({"schema": "trace/1", "sheet": sheet}, conv, user_id="cs-other", project_id=pid)
+    assert trace_store.carried_sheet(conv, "cs-other", pid) is None  # refused by the access check
+
+
 def _user(uid, role="user"):
     from app.core import jwt_auth
     from app.core import users as users_store
