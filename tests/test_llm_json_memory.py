@@ -316,3 +316,162 @@ def test_the_strict_flag_goes_only_to_a_provider_that_declares_it(supports, expe
         assert ("strict" in t["function"]) is expected
         assert t["function"]["parameters"]["additionalProperties"] is False
     assert memory.WRITE_SCHEMA["function"]["strict"] is True  # the declared schema is never changed
+
+
+# --- Each function named and called directly (the tools, the store's guards,
+# the admin read), so its own behaviour is pinned apart from the route.
+
+def _toolcall(name, args, pid, history=None, conversation="conv-a"):
+    from app.agents.core.tool_registry import ToolCall
+    return ToolCall(agent=None, name=name, args=args, project_id=pid,
+                    conversation_id=conversation, history=history)
+
+
+@pytest.mark.parametrize("props", [
+    {"name": {"type": "string"}, "data": {"type": "string"}},
+    {},
+])
+def test_the_schema_builder_is_strict_shaped(props):
+    from app.agents.base import memory
+    built = memory._fn("some_tool", "what it does", props)
+    fn = built["function"]
+    assert built["type"] == "function" and fn["name"] == "some_tool" and fn["strict"] is True
+    assert fn["parameters"]["required"] == sorted(props)
+    assert fn["parameters"]["properties"] == props
+    assert fn["parameters"]["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("history,conversation,expected", [
+    (None, "conv-a", "conv-a#1"),
+    ([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+      "not a message", {"role": "user", "content": "c"}], "conv-b", "conv-b#3"),
+])
+def test_the_turn_is_the_conversation_and_the_users_message_number(history, conversation, expected):
+    from app.agents.base import memory
+    assert memory.turn_of(_toolcall("list_memory", {}, "p", history, conversation)) == expected
+
+
+@pytest.mark.parametrize("written_at", ["2026-11-27T10:00:00+00:00", "2025-01-02T23:59:59+00:00"])
+def test_a_read_note_is_labelled_with_its_own_date(written_at):
+    from app.agents.base import memory
+    label = memory._label(written_at)
+    assert label == f"Your own note, written {written_at[:10]}. A note on how to work, not a fact."
+
+
+@pytest.mark.parametrize("name,data", NOTES)
+def test_the_three_handlers_write_read_and_list_with_a_trace(name, data):
+    import asyncio
+
+    from app.agents.base import memory
+    pid = f"mem-h-{uuid.uuid4().hex[:8]}"
+    history = [{"role": "user", "content": "first"}]
+    stem = name[:-5] if name.endswith(".json") else name
+    wrote = asyncio.run(memory.handle_write_memory(
+        _toolcall("write_memory", {"name": name, "data": json.dumps(data)}, pid, history)))
+    size = len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    assert wrote["ok"] is True and wrote["result"]["written"] == stem
+    assert wrote["result"]["replaced"] is False
+    assert wrote["trace"] == {"memory": "write", "name": stem, "bytes": size, "turn": "conv-a#2", "ok": True}
+    again = asyncio.run(memory.handle_write_memory(
+        _toolcall("write_memory", {"name": stem, "data": json.dumps(data)}, pid, history)))
+    assert again["result"]["replaced"] is True
+    got = asyncio.run(memory.handle_read_memory(_toolcall("read_memory", {"name": name}, pid)))
+    assert got["ok"] is True and got["result"]["data"] == data
+    assert got["result"]["note"] == memory._label(got["result"]["written_at"])
+    assert got["trace"] == {"memory": "read", "name": stem, "bytes": size, "turn": "conv-a#1", "ok": True}
+    listed = asyncio.run(memory.handle_list_memory(_toolcall("list_memory", {}, pid)))
+    assert [n["name"] for n in listed["result"]["notes"]] == [stem]
+    assert listed["trace"]["memory"] == "list" and listed["trace"]["bytes"] == size
+
+
+@pytest.mark.parametrize("op,args", [
+    ("write", {"name": "n1", "data": "{}"}),
+    ("read", {"name": "n1"}),
+    ("list", {}),
+])
+@pytest.mark.parametrize("pid", [None, ""])
+def test_each_handler_without_a_project_returns_a_refusal_in_its_trace(op, args, pid):
+    import asyncio
+
+    from app.agents.base import memory
+    handler = {"write": memory.handle_write_memory, "read": memory.handle_read_memory,
+               "list": memory.handle_list_memory}[op]
+    out = asyncio.run(handler(_toolcall(f"{op}_memory", args, pid)))
+    assert out["ok"] is False and "needs a project" in out["result"]["error"]
+    assert out["trace"] == {"memory": op, "name": args.get("name"), "bytes": 0,
+                            "turn": "conv-a#1", "ok": False}
+    refused = memory._refused(_toolcall(f"{op}_memory", args, pid), op, "why", 7)
+    assert refused["trace"]["name"] is None and refused["result"]["error"] == "why"
+
+
+@pytest.mark.parametrize("name", [42, None])
+def test_a_name_that_is_not_text_is_refused(name):
+    with pytest.raises(llm_memory.MemoryRefused, match="must be a text"):
+        llm_memory.clean_name(name)
+
+
+@pytest.mark.parametrize("pid", ["", None])
+def test_the_store_refuses_every_call_without_a_project(pid):
+    with pytest.raises(llm_memory.MemoryRefused, match="needs a project"):
+        llm_memory.write(pid, "n1", "{}")
+    with pytest.raises(llm_memory.MemoryRefused, match="needs a project"):
+        llm_memory.read(pid, "n1")
+    with pytest.raises(llm_memory.MemoryRefused, match="needs a project"):
+        llm_memory.listing(pid)
+
+
+@pytest.mark.parametrize("first,second,makes_dir", [
+    ("sqlite:///{tmp}/a/mem.db", "sqlite:///{tmp}/b/mem.db", True),
+    ("postgresql://h1/db", "postgresql://h2/db", False),
+])
+def test_init_db_creates_the_table_once_per_database(monkeypatch, tmp_path, first, second, makes_dir):
+    created = []
+
+    class _Table:
+        def create(self, bind=None, checkfirst=False):
+            created.append(checkfirst)
+
+    class _Model:
+        __table__ = _Table()
+
+    urls = [first.format(tmp=tmp_path.as_posix()), second.format(tmp=tmp_path.as_posix())]
+    current = {"url": urls[0]}
+    monkeypatch.setattr(llm_memory, "LlmMemory", _Model)
+    monkeypatch.setattr(llm_memory, "get_database_url", lambda: current["url"])
+    monkeypatch.setattr(llm_memory, "_initialized_for_url", None)
+    llm_memory.init_db()
+    llm_memory.init_db()
+    assert created == [True]
+    current["url"] = urls[1]
+    llm_memory.init_db()
+    assert created == [True, True]
+    assert (tmp_path / "a").is_dir() is makes_dir and (tmp_path / "b").is_dir() is makes_dir
+
+
+@pytest.mark.parametrize("tool", [{"type": "function"}, {"type": "function", "function": "text"},
+                                  {"type": "function", "function": {"name": "t", "parameters": {}}}])
+def test_a_tool_without_a_strict_flag_passes_through_unchanged(tool):
+    assert llm._unstrict(tool) is tool
+
+
+@pytest.mark.parametrize("extra", [{"description": "d"}, {}])
+def test_the_strict_flag_is_taken_off_and_the_declared_tool_kept(extra):
+    tool = {"type": "function", "function": {"name": "t", "strict": True, **extra}}
+    out = llm._unstrict(tool)
+    assert out["function"] == {"name": "t", **extra}
+    assert tool["function"]["strict"] is True
+
+
+@pytest.mark.parametrize("name,data", NOTES)
+def test_the_admin_read_returns_the_notes_whole_and_needs_an_admin(name, data):
+    from fastapi import HTTPException
+
+    from app.routers.admin import admin_project_memory
+    pid = f"mem-adm-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, name, json.dumps(data), "c#1")
+    got = admin_project_memory(pid, auth={"user_id": "a", "role": "admin"})
+    assert got["project_id"] == pid and got["count"] == 1
+    assert [n["data"] for n in got["notes"]] == [data]
+    with pytest.raises(HTTPException) as refused:
+        admin_project_memory(pid, auth={"user_id": "u", "role": "user"})
+    assert refused.value.status_code == 403
