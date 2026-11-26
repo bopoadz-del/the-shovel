@@ -677,6 +677,40 @@ class RagChunk(Base):
     # (``c.text_search @@ plainto_tsquery(...)``), bypassing the ORM.
 
 
+class DocRowRecord(Base):
+    """doc_rows table: one table row of an indexed document, held as a fact.
+
+    Written at ingest from the document's own reader (``app.core.doc_rows``);
+    each row keeps the locator a citation needs: page (PDF) or sheet and sheet
+    row (spreadsheet), the heading path above it, and the stored chunk made
+    from it. Field maps are JSON text. No FK, as for ``chunks``: SQLite test
+    DBs accept arbitrary ids (Alembic 0041).
+    """
+
+    __tablename__ = "doc_rows"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "doc_id", "table_no", "row_no", name="uq_doc_rows_project_doc_row"
+        ),
+        Index("idx_doc_rows_doc", "project_id", "doc_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    table_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    fields: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    extra: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sheet: Mapped[str | None] = mapped_column(String, nullable=True)
+    sheet_row: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    row_check: Mapped[str] = mapped_column(String, nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class AgentFact(Base):
     """agent_facts table — see the_fork_schema.sql.
 
