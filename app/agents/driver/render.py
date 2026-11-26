@@ -131,8 +131,12 @@ def _phrases(values: Dict[str, Any], labels: Dict[str, str], units: Dict[str, st
     return out
 
 
-def render_calculation(envelope: Dict[str, Any], inputs: Optional[Dict[str, Any]] = None) -> str:
-    """A calculator envelope (``run_calculation``'s result) as prose."""
+def render_calculation(envelope: Dict[str, Any], inputs: Optional[Dict[str, Any]] = None,
+                       on_sheet: bool = False) -> str:
+    """A calculator envelope (``run_calculation``'s result) as prose. On the
+    working sheet a calculator that did not run is told as the tool result
+    only -- the inputs it lacks and its own question -- and the model decides
+    what to do with it; off the sheet the model is told to ask the question."""
     from app.lib import formula_registry
 
     calc = str(envelope.get("calculation") or "")
@@ -141,6 +145,14 @@ def render_calculation(envelope: Dict[str, Any], inputs: Optional[Dict[str, Any]
     head = f"{name} — {CALCULATOR_SUFFIX}"
     question = envelope.get("question")
     if envelope.get("status") != "success":
+        if on_sheet:
+            lacking = ", ".join(str(m) for m in (envelope.get("missing") or []) if str(m).strip())
+            told = f"{head}: did not run; needs input" + (f" ({lacking})" if lacking else "") + "."
+            if question:
+                told += f" Its question: {question}"
+            return told + (" Supply each input as a bare number in the calculator's own unit from a given,"
+                           " an earlier step or a document and call it again, or record it under missing"
+                           " and ask the user.")
         if question:
             return f"{head}: needs input. Ask the user exactly this: {question}"
         return f"{head}: did not run. Ask the user for the inputs it needs, by their labels."

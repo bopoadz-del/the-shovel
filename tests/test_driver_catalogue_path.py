@@ -206,19 +206,115 @@ def test_off_the_sheet_the_calculators_question_still_ends_the_turn(monkeypatch,
 
 
 @pytest.mark.parametrize("question", ["What is the unit rate?", "What is the crew size?"])
-def test_on_the_sheet_with_no_open_step_the_question_ends_the_turn(monkeypatch, question):
+def test_on_the_sheet_with_no_plan_the_question_goes_back_to_the_model(monkeypatch, question):
+    """No plan written yet: the calculator's question is the tool result of
+    that round, and the model has the next round (code used to end it)."""
     from app.agents.runtime import Agent
 
     _asking_calculator(monkeypatch, Agent, question)
     seen = _scripted(monkeypatch, [
         {"content": "", "tool_calls": [_call("construction_calc", {
             "calculation": "unit_cost_total", "params": {"quantity": 40}}, "c2")]},
-        {"content": "never reached"},
+        {"content": "Please give the rate per item; the quantity is 40."},
     ])
     events = _run(user_message="cost of the items", conversation_id="ws-p5-1", sheet_mode=True)
+    assert len(seen) == 2
+    told = [m["content"] for m in seen[1]["messages"] if m["role"] == "tool"]
+    assert told and "did not run; needs input (unit_rate)" in told[-1] and question in told[-1]
+    assert "Ask the user exactly this" not in told[-1]
+    text = _text(events)
+    assert "rate per item" in text and question not in text
+    assert trace_store.records(_today(), "ws-p5-1")[0]["ended"] == "answer"
+
+
+def _refusing_workflow(monkeypatch, missing):
+    from app.agents.driver import routes
+
+    async def refusing(args, *a, **k):
+        return {"ok": False, "missing": list(missing)}
+
+    async def nothing_stated(*a, **k):
+        return {}
+
+    monkeypatch.setattr(routes, "run", refusing)
+    monkeypatch.setattr(loop, "_inputs_stated_in_ask", nothing_stated)
+    monkeypatch.setattr(routes, "input_request", lambda w, r: "CODE REQUEST " + ",".join(r["missing"]))
+    return routes.RUN_WORKFLOW
+
+
+@pytest.mark.parametrize("missing", [["value"], ["start", "duration"]])
+def test_on_the_sheet_a_refusing_workflow_does_not_end_the_turn_with_its_request(monkeypatch, missing):
+    """Out of rounds with a workflow still refusing: on the sheet the closing
+    call answers; code does not write the workflow's request."""
+    run_workflow = _refusing_workflow(monkeypatch, missing)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "1")
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call(run_workflow, {"workflow": "probe_flow"}, "c1")]},
+        {"content": "The workflow still needs " + " and ".join(missing) + "."},
+    ])
+    events = _run(user_message="make the document", conversation_id="ws-p5w-1", sheet_mode=True)
+    assert len(seen) == 2 and seen[-1]["tools"] == []
+    text = _text(events)
+    assert "CODE REQUEST" not in text and "workflow still needs" in text
+    assert trace_store.records(_today(), "ws-p5w-1")[0]["ended"] == "ceiling"
+
+
+@pytest.mark.parametrize("missing", [["value"], ["start", "duration"]])
+def test_off_the_sheet_a_refusing_workflow_still_ends_with_its_request(monkeypatch, missing):
+    run_workflow = _refusing_workflow(monkeypatch, missing)
+    monkeypatch.setenv("DRIVER_MAX_STEPS", "1")
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call(run_workflow, {"workflow": "probe_flow"}, "c1")]},
+        {"content": "never reached"},
+    ])
+    events = _run(user_message="make the document", conversation_id="ws-p5x-1")
     assert len(seen) == 1
-    assert question in _text(events)
-    assert trace_store.records(_today(), "ws-p5-1")[0]["ended"] == "asked_input"
+    assert "CODE REQUEST " + ",".join(missing) in _text(events)
+
+
+# --- the per-request selection ----------------------------------------------
+
+@pytest.mark.parametrize("mode,headers,driver_on,sheet,question_set", [
+    ("request", {"x-fork-driver": "sheet", "x-fork-question-set": "frozen"}, True, True, "frozen"),
+    ("request", {"x-fork-driver": " Sheet ", "x-fork-question-set": "Held-Back"}, True, True, "held_back"),
+    ("request", {"x-fork-driver": "on", "x-fork-question-set": "frozen"}, True, None, ""),
+    ("request", {"x-fork-question-set": "teaching"}, False, None, ""),
+    ("request", {"x-fork-driver": "sheets"}, False, None, ""),
+    ("", {"x-fork-driver": "sheet", "x-fork-question-set": "teaching"}, False, None, ""),
+    ("on", {"x-fork-driver": "sheet"}, True, None, ""),
+])
+def test_a_request_header_selects_the_sheet_for_one_turn(monkeypatch, mode, headers, driver_on, sheet,
+                                                          question_set):
+    def check():
+        if mode:
+            monkeypatch.setenv("DRIVER_MODE", mode)
+        driver.mark_request(headers)
+        assert driver.enabled() is driver_on
+        assert driver.on_sheet() is sheet
+        assert driver.requested_question_set() == question_set
+        # A project without the setting does not take a requested sheet away.
+        assert driver.mark_project(False) is bool(sheet)
+        assert driver.on_sheet() is bool(sheet)
+        assert driver.mark_project(True) is True
+    contextvars.copy_context().run(check)
+
+
+@pytest.mark.parametrize("header,profile_set,recorded", [
+    ("teaching", "frozen", "teaching"), ("held-back", None, "held_back"),
+    ("", "frozen", "frozen"), ("nonsense", None, "unset")])
+def test_the_requests_question_set_is_recorded(monkeypatch, header, profile_set, recorded):
+    from app.core import projects
+
+    monkeypatch.setenv("DRIVER_MODE", "request")
+    profile = {"question_set": profile_set} if profile_set else {}
+    monkeypatch.setattr(projects, "get_project_accessible", lambda pid, uid=None: {"id": pid, "profile": profile})
+    _scripted(monkeypatch, [{"content": "Done."}])
+
+    def go():
+        driver.mark_request({"x-fork-driver": "sheet", "x-fork-question-set": header})
+        _run(user_message="q", conversation_id="ws-p10-1", project_id="p10", sheet_mode=True)
+    contextvars.copy_context().run(go)
+    assert trace_store.records(_today(), "ws-p10-1")[0]["question_set"] == recorded
 
 
 @pytest.mark.parametrize("rounds", [2, 3])
@@ -359,3 +455,50 @@ def test_the_chat_door_marks_the_turn_before_the_shortcut_can_take_it(monkeypatc
         client.post("/v1/chat/stream", json={"message": second, "project_id": off,
                                              "conversation_id": f"ws-{off}-1700000000002"}, headers=user)
         assert read == [second]
+
+
+@pytest.mark.parametrize("quantity,qset", [(40, "frozen"), (12, "teaching")])
+def test_the_public_route_takes_the_sheet_on_request_and_the_question_goes_back(monkeypatch, quantity, qset):
+    """Through the door, DRIVER_MODE=request, a project WITHOUT the setting:
+    the turn with the sheet header takes the sheet; its calculator lacks an
+    input and the model still reaches a second round; it writes a trace
+    record under the header's question set. The plain turn writes none."""
+    from fastapi.testclient import TestClient
+
+    from app.agents.runtime import Agent
+    from app.core import jwt_auth
+    from app.core import projects as store
+    from app.core import users as users_store
+    from app.main import app
+
+    monkeypatch.setenv("DRIVER_MODE", "request")
+    _asking_calculator(monkeypatch, Agent)
+    users_store.ensure_user_exists("rq-user", role="user", email="rq-user@local")
+    user = {"Authorization": f"Bearer {jwt_auth.create_token('rq-user')}"}
+    pid = store.create_project("request project", user_id="rq-user")["id"]
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("construction_calc", {
+            "calculation": "unit_cost_total", "params": {"quantity": quantity}}, "c1")]},
+        {"content": f"The {quantity} items need a unit rate before the cost can be worked."},
+    ])
+    conv, plain = f"ws-{pid}-1700000000010", f"ws-{pid}-1700000000011"
+    with TestClient(app) as client:
+        text = client.post("/v1/agents/project-assistant/chat/stream",
+                           json={"message": "cost of the items", "project_id": pid, "conversation_id": conv},
+                           headers={**user, "X-Fork-Driver": "sheet", "X-Fork-Question-Set": qset}).text
+        assert '"mode": "driver"' in text and '"trace_record"' in text
+        assert len(seen) == 2 and "sheet_update" in seen[0]["tools"]
+        assert "need a unit rate" in text and "What is the unit rate?" not in text
+
+        async def no_driver(*a, **k):
+            raise AssertionError("the driver ran for a plain turn")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(loop, "stream", no_driver)
+        text = client.post("/v1/agents/project-assistant/chat/stream",
+                           json={"message": "cost of the items", "project_id": pid, "conversation_id": plain},
+                           headers=user).text
+        assert '"mode": "driver"' not in text
+    rows = trace_store.records(_today(), conv)
+    assert len(rows) == 1 and rows[0]["question_set"] == qset and rows[0]["ended"] == "answer"
+    assert trace_store.records(_today(), plain) == []

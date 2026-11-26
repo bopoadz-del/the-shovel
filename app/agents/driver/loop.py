@@ -281,9 +281,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                  sheet_mode: bool = False, **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
     """One driver turn. ``sheet_mode`` (the project's ``answer_path`` is
     ``catalogue``): the turn carries a working sheet, handed back to the model
-    every round; while a plan step is open the tools stay offered and no code
-    ends the turn short of the round / seconds ceiling; one trace record is
-    written per turn."""
+    every round; the tools stay offered every round and no code ends the turn
+    with a tool's question -- a needs-input result goes back to the model as
+    the tool result -- short of the round / seconds ceiling; one trace record
+    is written per turn."""
     t0 = time.monotonic()
     # 6b: anchor llm_first_token to the generation-turn start (the model-call
     # wait), not to turn_timing's `last` stage marker, which intervening
@@ -308,7 +309,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
         sheet_msg["content"] = _sheet_note(work)
         msgs.insert(len(msgs) - 1, sheet_msg)
-        chosen_set = await off_loop(driver.project_setting, project_id, user_id, "question_set")
+        # The request's own question set (a per-turn sheet request) wins;
+        # else the project's profile names one.
+        chosen_set = (driver.requested_question_set()
+                      or await off_loop(driver.project_setting, project_id, user_id, "question_set"))
         if chosen_set in trace_record.QUESTION_SETS:
             question_set = chosen_set
     used: List[str] = []
@@ -588,7 +592,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             envelope = result_of_call.get("result") if isinstance(result_of_call, dict) else None
             if isinstance(envelope, dict) and envelope.get("calculation"):
                 inputs = args.get("params") if isinstance(args.get("params"), dict) else args
-                shown = render.render_calculation(envelope, inputs)
+                shown = render.render_calculation(envelope, inputs, on_sheet=work is not None)
                 if envelope.get("status") == "success":
                     computed.append((envelope, inputs))
                 if envelope.get("status") != "success" and str(envelope.get("question") or "").strip():
@@ -602,21 +606,23 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             answer_exit.note_tool_message(call, evidence[-1])
         if work is not None:
             trace[-1]["sheet"] = json.loads(sheet.render(work))
-        # A calculator that rejected or lacks an input ends the turn with its
-        # own question: the model is never given the chance to compute a
-        # figure the calculator refused (lane 2: it did). On the sheet, while
-        # a plan step is open, the question is the model's to place: it
-        # records the missing input and asks, or reads it from a document.
-        if questions and not (work is not None and sheet.open_steps(work)):
+        # Off the sheet, a calculator that rejected or lacks an input ends the
+        # turn with its own question: the model is never given the chance to
+        # compute a figure the calculator refused. On the sheet no code ends a
+        # turn with a tool's question: the needs-input result went back to the
+        # model as the tool result, and the model places it -- computes an
+        # earlier step, reads a document, or records it under missing and asks.
+        if questions and work is None:
             for question in dict.fromkeys(questions):
                 event = await off_loop(_release, question + "\n", model_text=False)
                 if event:
                     yield event
             answer_done = True
             break
-    if not answer_done and refused:
+    if not answer_done and refused and work is None:
         # Out of steps with a workflow still refusing: its deliverable comes
-        # from the workflow, so the turn asks for what it needs.
+        # from the workflow, so the turn asks for what it needs. On the sheet
+        # the closing call below answers, naming what is still missing.
         for request in dict.fromkeys(routes.input_request(w, r) for w, r in refused.items()):
             event = await off_loop(_release, request + "\n", model_text=False)
             if event:

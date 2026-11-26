@@ -16,7 +16,14 @@ from typing import Any, Mapping, Optional
 _TRUTHY = ("1", "true", "yes", "on")
 #: The header a request carries to ask for driver mode when DRIVER_MODE=request.
 REQUEST_HEADER = "x-fork-driver"
+#: The REQUEST_HEADER value that asks for the catalogue path (the working
+#: sheet and a trace record) for this one turn, whatever the project's setting.
+SHEET = "sheet"
+#: The header that names the question set a sheet turn is recorded under.
+QUESTION_SET_HEADER = "x-fork-question-set"
 _REQUESTED: "contextvars.ContextVar[bool]" = contextvars.ContextVar("driver_requested", default=False)
+_SHEET_REQUESTED: "contextvars.ContextVar[bool]" = contextvars.ContextVar("driver_sheet_requested", default=False)
+_QUESTION_SET: "contextvars.ContextVar[str]" = contextvars.ContextVar("driver_question_set", default="")
 
 
 def mode() -> str:
@@ -31,10 +38,23 @@ def mode() -> str:
 
 def mark_request(headers: Mapping[str, Any], user_switched_on: bool = False) -> None:
     """Call at a turn's arrival: remember whether this turn takes driver mode
-    -- the request asked for it, or an admin switched it on for the user.
-    Honoured only when DRIVER_MODE=request."""
-    asked = str(headers.get(REQUEST_HEADER) or "").strip().lower() in _TRUTHY
-    _REQUESTED.set(mode() == "request" and (asked or bool(user_switched_on)))
+    -- the request asked for it, or an admin switched it on for the user --
+    and whether it asked for the catalogue path (``X-Fork-Driver: sheet``),
+    with the question set its trace record is filed under. Honoured only
+    when DRIVER_MODE=request."""
+    honoured = mode() == "request"
+    value = str(headers.get(REQUEST_HEADER) or "").strip().lower()
+    sheet = honoured and value == SHEET
+    _REQUESTED.set(honoured and (value in _TRUTHY or sheet or bool(user_switched_on)))
+    _SHEET_REQUESTED.set(sheet)
+    named = str(headers.get(QUESTION_SET_HEADER) or "").strip().lower().replace("-", "_")
+    _QUESTION_SET.set(named if sheet else "")
+
+
+def requested_question_set() -> str:
+    """The question set this turn's request named (lower case, ``held-back``
+    read as ``held_back``), or ``""``: only a sheet request carries one."""
+    return _QUESTION_SET.get()
 
 
 def enabled() -> bool:
@@ -103,12 +123,13 @@ def mark_project(on: Any) -> bool:
     context -- a mark set inside the thread would not reach the turn. Every
     later check of this turn (``enabled``, ``on_sheet``) reads the mark."""
     _ON_SHEET.set(bool(on))
-    return bool(on)
+    return bool(on) or _SHEET_REQUESTED.get()
 
 
 def on_sheet() -> Optional[bool]:
-    """The turn's mark: True / False once marked, None when no door marked it."""
-    return _ON_SHEET.get()
+    """The turn's mark: True when its request asked for the sheet; else
+    True / False once a door marked it, None when no door marked it."""
+    return True if _SHEET_REQUESTED.get() else _ON_SHEET.get()
 
 
 def sheet_max_rounds() -> int:
