@@ -108,8 +108,12 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
     Only ``givens``, ``plan`` and ``missing`` are read. An update that carries
     ``steps``, ``done`` or a result is refused whole -- results are code's.
     A given or plan step with the id of an existing one replaces it (a
-    correction); a new id is appended. On any problem the sheet is returned
-    unchanged with the problems, so the model can correct its update."""
+    correction); a new id is appended. When a correction changes a given or
+    a plan step, that step and every step depending on it (directly or
+    through another step, by the plan's inputs) go back to open: their
+    results are cleared and the sheet is not done. On any problem the sheet
+    is returned unchanged with the problems, so the model can correct its
+    update."""
     if not isinstance(update, dict):
         return sheet, ["sheet_update takes an object with givens, plan and missing"]
     foreign = sorted(k for k in update if k not in MODEL_FIELDS)
@@ -121,6 +125,7 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
             return sheet, [f"{key} must be a list"]
     out = copy.deepcopy(sheet)
     problems: List[str] = []
+    replaced: set = set()  # ids whose given or plan step now differs
     for given in update.get("givens") or []:
         found = _given_problems(given)
         if found:
@@ -129,6 +134,8 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
         entry = {"id": given["id"], "what": str(given.get("what") or ""),
                  "value": _number(given["value"]), "unit": str(given["unit"]).strip(),
                  "source": str(given.get("source") or "user")}
+        if _changed(out["givens"], entry, ("value", "unit")):
+            replaced.add(entry["id"])
         _put(out["givens"], entry)
     known = {g["id"] for g in out["givens"]} | {s.get("id") for s in out["plan"]}
     known |= {s.get("id") for s in update.get("plan") or [] if isinstance(s, dict)}
@@ -141,6 +148,8 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
                    "inputs": dict(step["inputs"])}
         if str(step.get("output") or "").strip():
             planned["output"] = str(step["output"]).strip()
+        if _changed(out["plan"], planned, ("entry", "inputs", "output")):
+            replaced.add(planned["id"])
         _put(out["plan"], planned)
     if "missing" in update:
         # The model's list replaces the old one (an input it now has is left
@@ -161,8 +170,32 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
         out["missing"] = missing
     if problems:
         return sheet, problems
+    stale = dependents(out, replaced) | {i for i in replaced if _STEP_ID.match(i)}
+    out["steps"] = [st for st in out["steps"] if st.get("id") not in stale]
     out["done"] = is_done(out)
     return out, []
+
+
+def _changed(items: List[Dict[str, Any]], entry: Dict[str, Any], fields: Tuple[str, ...]) -> bool:
+    """True when ``entry`` replaces an item of the same id whose ``fields``
+    differ (a correction); a new id or the same content is no change."""
+    old = next((i for i in items if i.get("id") == entry["id"]), None)
+    return old is not None and any(old.get(f) != entry.get(f) for f in fields)
+
+
+def dependents(sheet: Dict[str, Any], ids: Any) -> set:
+    """Plan steps that depend on any of ``ids`` (a given or a step), directly
+    or through another step. Dependency is read from the plan's own inputs
+    and nothing else."""
+    found: set = set()
+    frontier = set(ids)
+    while frontier:
+        nxt = {p["id"] for p in sheet.get("plan") or []
+               if p["id"] not in found
+               and any(isinstance(r, str) and r in frontier for r in (p.get("inputs") or {}).values())}
+        found |= nxt
+        frontier = nxt
+    return found
 
 
 def _put(items: List[Dict[str, Any]], entry: Dict[str, Any]) -> None:

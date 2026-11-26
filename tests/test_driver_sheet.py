@@ -210,6 +210,8 @@ def test_render_is_stable(ids):
     ("subtract", 900, 945, "m3", "M3", -45.0, "m3"),
     ("divide", 10, 4, "-", "d", 2.5, "1/d"),
     ("multiply", 3, 7, "-", "-", 21.0, "-"),
+    ("multiply", 6, 5, "-", "kg", 30.0, "kg"),
+    ("multiply", 4, 2.5, "-", "m2", 10.0, "m2"),
 ])
 def test_arithmetic(op, a, b, au, bu, value, unit):
     out = arithmetic_step(op, a, b, au, bu)
@@ -340,3 +342,99 @@ def test_error_status_with_a_number_is_still_failed(payload):
     s = _sheet_with([], [{"id": "s1", "entry": "e", "inputs": {}}])
     s = ws.record_result(s, "s1", "c1", payload)
     assert s["steps"][0]["status"] == "failed"
+
+
+# --- a carried given keeps where it came from ---------------------------------
+
+@pytest.mark.parametrize("value,unit", [(20, "nr"), (3.5, "m")])
+def test_a_carried_given_without_a_source_is_marked_earlier_turn(value, unit):
+    previous = {"givens": [{"id": "g1", "value": value, "unit": unit}],
+                "missing": [{"for": "s1", "input": "depth", "label": "depth", "asked": True}]}
+    nxt = ws.new_sheet("t2", "next", previous=previous)
+    assert nxt["givens"] == [{"id": "g1", "value": value, "unit": unit, "source": "earlier_turn"}]
+    assert nxt["missing"][0]["asked"] is True
+
+
+# --- a correction re-opens what depends on it -----------------------------------
+
+def _chain(a, b, c):
+    """g1 + g2 -> s1; s1 x g3 -> s2; g3 / g2 -> s3 (s3 does not use s1)."""
+    s = _sheet_with([{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"},
+                     {"id": "g3", "value": c, "unit": "-"}])
+    s, problems = ws.apply_update(s, {"plan": [
+        {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
+        {"id": "s2", "entry": "formula:arithmetic_step", "inputs": {"operator": "multiply", "a": "s1", "b": "g3"}},
+        {"id": "s3", "entry": "formula:arithmetic_step", "inputs": {"operator": "divide", "a": "g3", "b": "g2"}},
+    ]})
+    assert problems == []
+    for sid in ("s1", "s2", "s3"):
+        s = ws.run_step(s, sid, "c-" + sid)
+    assert s["done"] is True
+    return s
+
+
+def _results(s):
+    return {st["id"]: round(st.get("result", {}).get("value"), 6) for st in s["steps"]}
+
+
+@pytest.mark.parametrize("a,b,c,new_a", [(100, 4, 2, 150), (7, 3, 5, 9)])
+def test_a_corrected_given_reopens_every_step_that_depends_on_it(a, b, c, new_a):
+    s = _chain(a, b, c)
+    s, problems = ws.apply_update(s, {"givens": [{"id": "g1", "value": new_a, "unit": "m"}]})
+    assert problems == []
+    # s1 uses g1 directly, s2 through s1: both open, results cleared; s3 kept.
+    assert _results(s) == {"s3": round(c / b, 6)}
+    assert s["done"] is False and ws.open_steps(s) == ["s1", "s2"]
+    for sid in ("s1", "s2"):
+        s = ws.run_step(s, sid, "again-" + sid)
+    assert _results(s) == {"s3": round(c / b, 6), "s1": new_a + b, "s2": (new_a + b) * c}
+    assert s["done"] is True
+
+
+@pytest.mark.parametrize("a,b,c", [(100, 4, 2), (7, 3, 5)])
+def test_a_corrected_given_used_by_every_step_reopens_them_all(a, b, c):
+    s = _chain(a, b, c)
+    s, _ = ws.apply_update(s, {"givens": [{"id": "g2", "value": b + 1, "unit": "m"}]})
+    assert s["steps"] == [] and s["done"] is False
+
+
+@pytest.mark.parametrize("a,b,c", [(100, 4, 2), (7, 3, 5)])
+def test_a_replanned_step_reopens_itself_and_its_dependents_only(a, b, c):
+    s = _chain(a, b, c)
+    s, problems = ws.apply_update(s, {"plan": [
+        {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}}]})
+    assert problems == []
+    assert _results(s) == {"s3": round(c / b, 6)} and s["done"] is False
+    s = ws.run_step(s, "s1", "x")
+    assert _results(s)["s1"] == a * b
+
+
+@pytest.mark.parametrize("a,b,c", [(100, 4, 2), (7, 3, 5)])
+def test_the_same_given_or_step_written_again_reopens_nothing(a, b, c):
+    s = _chain(a, b, c)
+    before = _results(s)
+    s, _ = ws.apply_update(s, {"givens": [{"id": "g1", "value": a, "unit": "m", "what": "a new label"}],
+                               "plan": [{"id": "s3", "entry": "formula:arithmetic_step",
+                                         "inputs": {"operator": "divide", "a": "g3", "b": "g2"}}]})
+    assert _results(s) == before and s["done"] is True
+    # A new given that no step uses re-opens nothing either.
+    s, _ = ws.apply_update(s, {"givens": [{"id": "g9", "value": a + c, "unit": "m"}]})
+    assert _results(s) == before and s["done"] is True
+
+
+@pytest.mark.parametrize("unit", ["mm", "ft"])
+def test_a_corrected_unit_alone_reopens_the_dependents(unit):
+    s = _chain(100, 4, 2)
+    s, _ = ws.apply_update(s, {"givens": [{"id": "g3", "value": 2, "unit": unit}]})
+    assert sorted(_results(s)) == ["s1"]  # s2 and s3 use g3
+
+
+@pytest.mark.parametrize("ids,expected", [
+    ({"g1"}, {"s1", "s2"}),
+    ({"g3"}, {"s2", "s3"}),
+    ({"s1"}, {"s2"}),
+    ({"s2"}, set()),
+    (set(), set()),
+])
+def test_dependents_follow_the_plans_own_inputs(ids, expected):
+    assert ws.dependents(_chain(100, 4, 2), ids) == expected

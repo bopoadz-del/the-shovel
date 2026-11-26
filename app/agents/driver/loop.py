@@ -305,7 +305,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     sheet_msg: Dict[str, Any] = {"role": "system", "content": ""}
     question_set = trace_record.UNSET
     if sheet_mode:
-        previous = await off_loop(trace_store.last_sheet, conversation_id)
+        # Carried only for this user, project and stored conversation, through
+        # the conversation's own access check.
+        previous = await off_loop(trace_store.carried_sheet, conversation_id, user_id, project_id)
         work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
         sheet_msg["content"] = _sheet_note(work)
         msgs.insert(len(msgs) - 1, sheet_msg)
@@ -755,6 +757,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     record_id = None
     if sheet_mode:
         ended = "ceiling" if ceiling else "answer" if model_answered else "asked_input"
+        if work is not None and ended == "answer" and sheet.unasked(work):
+            # The model ended the turn with inputs still missing on its sheet:
+            # its answer is where it asked for them. Mark them asked, so the
+            # next turn's sheet does not ask a second time.
+            work = sheet.mark_asked(work)
+            ended = "asked_input"
         record = trace_record.build(
             turn=(work or {}).get("turn", ""), question=user_message, rounds=trace,
             final_answer="".join(sent), figures=provenance, ended=ended,
@@ -763,7 +771,8 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             temperature=llm.DECISION_TEMPERATURE, seed=llm.DECISION_SEED,
             build_sha=_build_sha(), project_setting=driver.CATALOGUE,
             sheet=work)
-        record_id = await off_loop(trace_store.save, record, conversation_id)
+        record_id = await off_loop(trace_store.save, record, conversation_id,
+                                   user_id=user_id, project_id=project_id)
     _LOG.info("DRIVER_TURN %s", json.dumps({
         "conversation": str(conversation_id or ""),  # an id, never the user's words
         "steps": trace, "ended": ("answer" if model_answered else "question" if answer_done else "step_limit"),

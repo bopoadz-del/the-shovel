@@ -186,8 +186,9 @@ def test_a_calculators_question_does_not_end_the_turn_while_a_step_is_open(monke
     assert "unit rate" in _text(events)
     row = trace_store.records(_today(), "ws-p3-1")[0]
     assert row["sheet"]["givens"][0]["value"] == quantity
-    assert row["sheet"]["missing"] == [{"for": "s1", "input": "unit_rate", "label": "unit rate", "asked": False}]
-    assert row["ended"] == "answer"
+    # The model ended the turn with an input still missing: it asked for it.
+    assert row["sheet"]["missing"] == [{"for": "s1", "input": "unit_rate", "label": "unit rate", "asked": True}]
+    assert row["ended"] == "asked_input"
 
 
 @pytest.mark.parametrize("question", ["What is the unit rate?", "What is the crew size?"])
@@ -330,24 +331,252 @@ def test_the_round_ceiling_ends_a_turn_whose_step_stays_open(monkeypatch, rounds
     assert [e for e in events if e.get("type") == "end"][0]["trace_record"]
 
 
+def _owned_conversation(conv, user, title="carry project"):
+    """A stored conversation of ``user`` on a new project of theirs."""
+    from app.core import agent_memory
+    from app.core import projects as store
+    from app.core import users as users_store
+
+    users_store.ensure_user_exists(user, role="user", email=f"{user}@local")
+    pid = store.create_project(title, user_id=user)["id"]
+    agent_memory.get_or_create_conversation(conv, "sheet-probe", pid, owner_id=user)
+    return pid
+
+
 @pytest.mark.parametrize("value,needed", [(12, "width"), (7.5, "depth")])
 def test_the_next_turn_starts_from_the_last_sheet(monkeypatch, value, needed):
+    conv = f"carry-c-{needed}"
+    pid = _owned_conversation(conv, "carry-u")
+    who = {"conversation_id": conv, "user_id": "carry-u", "project_id": pid, "sheet_mode": True}
     _scripted(monkeypatch, [
         {"content": "", "tool_calls": [_call("sheet_update", {
             "givens": [{"id": "g1", "value": value, "unit": "m"}],
             "missing": [{"for": "s1", "input": needed, "label": needed}]}, "c1")]},
         {"content": "What is the width?"},
     ])
-    _run(user_message="first", conversation_id="ws-p7-1", sheet_mode=True)
+    _run(user_message="first", **who)
     trace_store.forget_held()  # read back from the file, as after a restart
     seen = _scripted(monkeypatch, [{"content": "Thanks."}])
-    _run(user_message="second", conversation_id="ws-p7-1", sheet_mode=True)
+    _run(user_message="second", **who)
     sheet = _sheet_in(seen[0]["messages"])
     assert sheet["givens"][0]["value"] == value and sheet["givens"][0]["source"] == "user"
-    assert sheet["missing"][0]["input"] == needed
+    assert sheet["missing"][0]["input"] == needed and sheet["missing"][0]["asked"] is True
+    other = f"carry-o-{needed}"
+    _owned_conversation(other, "carry-u", "carry other")
     seen = _scripted(monkeypatch, [{"content": "New."}])
-    _run(user_message="other", conversation_id="ws-p8-1", sheet_mode=True)
+    _run(user_message="other", **dict(who, conversation_id=other))
     assert _sheet_in(seen[0]["messages"])["givens"] == []
+
+
+def _one_given(monkeypatch, value):
+    return _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "private sum", "value": value, "unit": "currency"}]}, "c1")]},
+        {"content": "Noted."},
+    ])
+
+
+@pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
+def test_no_sheet_is_carried_for_an_id_with_no_stored_conversation(monkeypatch, value, held):
+    from app.core import agent_memory
+
+    who = {"conversation_id": f"nr-c-{value}", "user_id": "nr-u", "project_id": "nr-p", "sheet_mode": True}
+    _one_given(monkeypatch, value)
+    _run(user_message="hold this", **who)
+    assert agent_memory.get_conversation(who["conversation_id"]) is None
+    assert trace_store.last_sheet(who["conversation_id"], "nr-u", "nr-p")["givens"][0]["value"] == value
+    if not held:
+        trace_store.forget_held()
+    seen = _scripted(monkeypatch, [{"content": "Nothing held."}])
+    _run(user_message="what do you hold", **who)
+    assert _sheet_in(seen[0]["messages"])["givens"] == []
+
+
+@pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
+def test_another_users_turn_on_the_same_id_gets_no_sheet(monkeypatch, value, held):
+    from app.core import users as users_store
+
+    conv = f"xu-c-{value}"
+    pid = _owned_conversation(conv, "xu-owner")
+    _one_given(monkeypatch, value)
+    _run(user_message="hold this", conversation_id=conv, user_id="xu-owner", project_id=pid, sheet_mode=True)
+    if not held:
+        trace_store.forget_held()
+    users_store.ensure_user_exists("xu-other", role="user", email="xu-other@local")
+    # Same id and the same project id: the other user fails the
+    # conversation's access check, so nothing is carried.
+    seen = _scripted(monkeypatch, [{"content": "Nothing held."}])
+    _run(user_message="what do you hold", conversation_id=conv, user_id="xu-other", project_id=pid,
+         sheet_mode=True)
+    assert _sheet_in(seen[0]["messages"])["givens"] == []
+    # The owner still gets their own sheet back.
+    if not held:
+        trace_store.forget_held()
+    seen = _scripted(monkeypatch, [{"content": "Held."}])
+    _run(user_message="again", conversation_id=conv, user_id="xu-owner", project_id=pid, sheet_mode=True)
+    assert _sheet_in(seen[0]["messages"])["givens"][0]["value"] == value
+
+
+def _user(uid, role="user"):
+    from app.core import jwt_auth
+    from app.core import users as users_store
+
+    users_store.ensure_user_exists(uid, role=role, email=f"{uid}@local")
+    return {"Authorization": f"Bearer {jwt_auth.create_token(uid)}"}
+
+
+def _sheets_seen(seen):
+    return [_sheet_in(s["messages"]) for s in seen
+            if any(m["role"] == "system" and m["content"].startswith("Working sheet") for m in s["messages"])]
+
+
+@pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
+def test_public_route_two_users_one_id_never_share_a_sheet(monkeypatch, value, held):
+    from fastapi.testclient import TestClient
+
+    from app.core import projects as store
+    from app.main import app
+
+    admin, ua, ub = _user("pu-admin", "admin"), _user("pu-a"), _user("pu-b")
+    pa = store.create_project("A project", user_id="pu-a")["id"]
+    pb = store.create_project("B project", user_id="pu-b")["id"]
+    conv = f"pu-conv-{value}"
+    seen = _one_given(monkeypatch, value)
+    with TestClient(app) as client:
+        for p in (pa, pb):
+            assert client.put(f"/v1/admin/projects/{p}/profile", json={"answer_path": "catalogue"},
+                              headers=admin).status_code == 200
+        client.post("/v1/agents/project-assistant/chat/stream",
+                    json={"message": "hold this", "project_id": pa, "conversation_id": conv}, headers=ua)
+        assert len(seen) == 2
+        if not held:
+            trace_store.forget_held()
+        after = _scripted(monkeypatch, [{"content": "B answer."}])
+        r = client.post("/v1/agents/project-assistant/chat/stream",
+                        json={"message": "what do you hold", "project_id": pb, "conversation_id": conv},
+                        headers=ub)
+    # B is refused at the door or runs with an empty sheet: never A's figure.
+    assert r.status_code in (200, 404)
+    assert all(sh["givens"] == [] for sh in _sheets_seen(after))
+    assert str(value) not in r.text
+
+
+@pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
+def test_public_route_one_user_two_projects_one_id_never_share_a_sheet(monkeypatch, value, held):
+    from fastapi.testclient import TestClient
+
+    from app.core import projects as store
+    from app.main import app
+
+    admin, user = _user("pp-admin", "admin"), _user("pp-u")
+    p1 = store.create_project("first project", user_id="pp-u")["id"]
+    p2 = store.create_project("second project", user_id="pp-u")["id"]
+    conv = f"pp-conv-{value}"
+    seen = _one_given(monkeypatch, value)
+    with TestClient(app) as client:
+        for p in (p1, p2):
+            assert client.put(f"/v1/admin/projects/{p}/profile", json={"answer_path": "catalogue"},
+                              headers=admin).status_code == 200
+        client.post("/v1/agents/project-assistant/chat/stream",
+                    json={"message": "hold this", "project_id": p1, "conversation_id": conv}, headers=user)
+        assert len(seen) == 2
+        if not held:
+            trace_store.forget_held()
+        other = _scripted(monkeypatch, [{"content": "Second project answer."}])
+        r = client.post("/v1/agents/project-assistant/chat/stream",
+                        json={"message": "what do you hold", "project_id": p2, "conversation_id": conv},
+                        headers=user)
+        assert r.status_code == 200 and len(other) == 1
+        assert _sheets_seen(other)[0]["givens"] == []
+        # Back on the first project, the same user gets the first sheet.
+        if not held:
+            trace_store.forget_held()
+        same = _scripted(monkeypatch, [{"content": "First project answer."}])
+        client.post("/v1/agents/project-assistant/chat/stream",
+                    json={"message": "and now", "project_id": p1, "conversation_id": conv}, headers=user)
+        assert _sheets_seen(same)[0]["givens"][0]["value"] == value
+
+
+@pytest.mark.parametrize("needed,label", [("width", "trench width"), ("unit_rate", "unit rate")])
+def test_public_route_an_input_the_model_asked_for_is_marked_asked_next_turn(monkeypatch, needed, label):
+    """Two turns through the door: the model records a missing input and ends
+    its turn asking; the next turn's sheet carries it marked asked."""
+    from fastapi.testclient import TestClient
+
+    from app.core import projects as store
+    from app.main import app
+
+    admin, user = _user("ak-admin", "admin"), _user("ak-u")
+    pid = store.create_project("asking project", user_id="ak-u")["id"]
+    conv = f"ws-{pid}-1700000000020"
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "missing": [{"for": "s1", "input": needed, "label": label}]}, "c1")]},
+        {"content": f"What is the {label}?"},
+    ])
+    with TestClient(app) as client:
+        assert client.put(f"/v1/admin/projects/{pid}/profile", json={"answer_path": "catalogue"},
+                          headers=admin).status_code == 200
+        client.post("/v1/agents/project-assistant/chat/stream",
+                    json={"message": "work it out", "project_id": pid, "conversation_id": conv}, headers=user)
+        assert len(seen) == 2
+        nxt = _scripted(monkeypatch, [{"content": "Thanks."}])
+        client.post("/v1/agents/project-assistant/chat/stream",
+                    json={"message": "go on", "project_id": pid, "conversation_id": conv}, headers=user)
+    assert _sheets_seen(nxt)[0]["missing"] == [{"for": "s1", "input": needed, "label": label, "asked": True}]
+    first, second = trace_store.records(_today(), conv)
+    assert first["ended"] == "asked_input" and first["sheet"]["missing"][0]["asked"] is True
+    # The second turn's missing input was already asked: it is an answer.
+    assert second["ended"] == "answer"
+
+
+@pytest.mark.parametrize("needed", ["width", "depth"])
+def test_a_turn_with_nothing_missing_or_cut_by_the_ceiling_marks_nothing_asked(monkeypatch, needed):
+    _scripted(monkeypatch, [{"content": "A plain answer."}])
+    _run(user_message="q", conversation_id=f"na-1-{needed}", sheet_mode=True)
+    assert trace_store.records(_today(), f"na-1-{needed}")[0]["ended"] == "answer"
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "1")
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {"missing": [{"input": needed}]}, "c1")]},
+        {"content": "Stopped."},
+    ])
+    _run(user_message="q", conversation_id=f"na-2-{needed}", sheet_mode=True)
+    row = trace_store.records(_today(), f"na-2-{needed}")[0]
+    assert row["ended"] == "ceiling" and row["sheet"]["missing"][0]["asked"] is False
+
+
+@pytest.mark.parametrize("pause,seconds,rounds,tool_rounds", [
+    (0.6, "1", "40", 2),   # 0.6 s spent, then 1.2 s: the third round never starts
+    (0.4, "1", "40", 3),   # 0.4, 0.8, 1.2 s
+    (3.0, "10", "40", 4),  # 3, 6, 9, 12 s: the fifth round never starts
+    (2.5, "10", "40", 5),  # exactly 10.0 s spent is not past the ceiling: a fifth round
+    (0.1, "10", "5", 5),   # the seconds are not spent: the rounds run out first
+])
+def test_the_seconds_ceiling_ends_a_turn_before_its_rounds_run_out(monkeypatch, pause, seconds, rounds,
+                                                                  tool_rounds):
+    import time as real_time
+    import types
+
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", rounds)
+    clock = {"now": 0.0}
+    # The loop's own clock: each model round spends ``pause`` seconds.
+    monkeypatch.setattr(loop, "time", types.SimpleNamespace(monotonic=lambda: clock["now"], time=real_time.time))
+    calls = []
+
+    async def slow(agent, messages, offered, model="", timeout=120.0):
+        calls.append(len(offered))
+        clock["now"] += pause
+        return {"status": "success", "message": {"content": "", "tool_calls": [
+            _call("sheet_update", {"givens": [{"id": "g1", "value": len(calls), "unit": "m"}]}, f"c{len(calls)}")]}}
+
+    monkeypatch.setattr(llm, "call", slow)
+    conv = f"sc-{pause}-{rounds}"
+    _run(user_message="q", conversation_id=conv, sheet_mode=True)
+    row = trace_store.records(_today(), conv)[0]
+    assert row["ended"] == "ceiling"
+    # The tool rounds, then the closing call with no tools.
+    assert len([n for n in calls if n]) == tool_rounds and calls[-1] == 0
 
 
 @pytest.mark.parametrize("named,recorded", [("teaching", "teaching"), ("frozen", "frozen"),
