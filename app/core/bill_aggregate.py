@@ -232,17 +232,27 @@ def row_kinds(items: Sequence[SheetRow]) -> list[str]:
     bill's total is the sum of its items; a collection or a repeat restates
     figures that are already in that sum.
     """
+    return _classify(items)[0]
+
+
+def _classify(items: Sequence[SheetRow]) -> tuple[list[str], set[int]]:
+    """:func:`row_kinds`, plus the indices of the collections whose covered
+    lines all print only an amount: a line that adds up other total lines (the
+    page totals a collection page lists), i.e. the total the document prints
+    for the pages it lists. It is read off the cells, so an item the read got
+    wrong does not hide the total it must be checked against."""
     kinds = [ROW_ITEM] * len(items)
+    summaries: set[int] = set()
     order = sorted((i for i, r in enumerate(items) if r.pages), key=lambda i: items[i].pages[-1])
     earlier: list[tuple[float, float]] = []   # (amount, tolerance) of collections on earlier pages
     page: int | None = None
     page_collections: list[tuple[float, float]] = []
-    covered, lines = 0.0, 0
+    covered, lines, totals = 0.0, 0, 0
     for i in order:
         row = items[i]
         if row.pages[-1] != page:
             earlier.extend(page_collections)
-            page, page_collections, covered, lines = row.pages[-1], [], 0.0, 0
+            page, page_collections, covered, lines, totals = row.pages[-1], [], 0.0, 0, 0
         amount = g.parse_number(row.amount)
         if amount is None:
             continue
@@ -250,14 +260,70 @@ def row_kinds(items: Sequence[SheetRow]) -> list[str]:
         if _amount_only(row):
             if lines and _same_figure(amount, covered, tol):
                 kinds[i] = ROW_COLLECTION
+                if totals == lines:
+                    summaries.add(i)
                 page_collections.append((amount, tol))
-                covered, lines = 0.0, 0
+                covered, lines, totals = 0.0, 0, 0
                 continue
             if any(_same_figure(amount, a, max(t, tol)) for a, t in earlier):
                 kinds[i] = ROW_REPEAT
+            totals += 1
         covered += amount
         lines += 1
-    return kinds
+    return kinds, summaries
+
+
+STATE_RECONCILED = "RECONCILED"
+STATE_FAILED = "FAILED"
+STATE_UNCHECKED = "UNCHECKED"
+
+
+def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[str, Any]]:
+    """The arithmetic check of each bill in ``bills`` over its own rows.
+
+    ``items`` are the rows after :func:`join_page_continuations`. A row is in a
+    bill when its own path names the bill (:func:`row_bills`). Per bill:
+
+    * ``rows_summed`` -- the bill's item rows that carry an amount, and
+      ``items_sum`` their sum; ``rows_without_amount`` -- its item rows that
+      carry none (they add nothing; they are reported, not guessed);
+    * ``printed_total`` -- the bill's own total line, found by arithmetic: a
+      collection whose covered lines all print only an amount (the page
+      totals a collection page lists), the last such line of the bill by
+      page. No word of the line is read;
+    * ``state`` -- ``UNCHECKED`` when the bill prints no such line,
+      ``RECONCILED`` when ``items_sum`` equals it within one unit of the
+      printed total's own last place, ``FAILED`` otherwise.
+
+    The sum of a bill that does not reconcile is never stated as the bill's
+    total: the state goes with it.
+    """
+    kinds, summaries = _classify(items)
+    out: list[dict[str, Any]] = []
+    for bill in sorted({_bill_number(b) for b in bills}):
+        mine = [i for i, row in enumerate(items) if bill in row_bills(row)]
+        amounts = [g.parse_number(items[i].amount) for i in mine if kinds[i] == ROW_ITEM]
+        summed = [a for a in amounts if a is not None]
+        total = sum(summed)
+        lines = sorted((i for i in mine if i in summaries), key=lambda i: items[i].pages[-1])
+        check: dict[str, Any] = {
+            "bill": bill,
+            "rows_summed": len(summed),
+            "rows_without_amount": len(amounts) - len(summed),
+            "items_sum": total,
+            "printed_total": None,
+            "printed_page": None,
+            "state": STATE_UNCHECKED,
+        }
+        if lines:
+            line = items[lines[-1]]
+            printed = g.parse_number(line.amount)
+            check["printed_total"] = printed
+            check["printed_page"] = line.pages[-1]
+            check["state"] = (STATE_RECONCILED if _same_figure(total, printed, _last_place(line.amount))
+                              else STATE_FAILED)
+        out.append(check)
+    return out
 
 
 def _words(text: str) -> set[str]:
@@ -773,6 +839,12 @@ def aggregate(
     never defines a scope the ask states. An ask that states none of the four
     leaves ``terms`` and ``section`` to select, exactly as before, so a
     question asked in several parts still gets one result per part.
+
+    Collection and repeat lines are never summed (:func:`row_kinds`); they are
+    listed in ``not_items``. Each bill the ask names gets its check in
+    ``bill_checks`` (:func:`bill_checks`): rows summed, rows without an amount,
+    the bill's printed total and the state, so a sum is never handed back as
+    a bill's total without saying whether it reconciles.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
@@ -787,6 +859,7 @@ def aggregate(
         raise ValueError("give description terms or a section to match")
     used, without = [], []
     sums: dict[str, float] = {}
+    joined = items
     kinds = row_kinds(items)
     not_items = [
         {"ref": row.ref, "pages": row.pages, "section": list(row.path),
@@ -830,6 +903,7 @@ def aggregate(
         } if scope is not None else None),
         "rows_scanned": len(items) + len(not_items),
         "not_items": not_items,
+        "bill_checks": bill_checks(joined, scope.bills if scope is not None else ()),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
         "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
