@@ -93,10 +93,14 @@ def excluded_from_context(path: str, rules: list[tuple[re.Pattern[str], bool]]) 
     return excluded
 
 
-def _load_rules() -> list[tuple[re.Pattern[str], bool]]:
+def _load_rules(root: Path = _ROOT) -> list[tuple[re.Pattern[str], bool]]:
+    """Patterns of ``root/.dockerignore``; an unreadable file excludes nothing
+    (so every non-test file builds) and says so on stderr."""
     try:
-        return parse_dockerignore((_ROOT / ".dockerignore").read_text(encoding="utf-8"))
-    except OSError:
+        return parse_dockerignore((root / ".dockerignore").read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"ci_image_inputs: .dockerignore not read ({exc}); every non-test file builds",
+              file=sys.stderr)
         return []
 
 

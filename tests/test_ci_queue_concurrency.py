@@ -21,6 +21,7 @@ WF = ROOT / ".github" / "workflows"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from ci_image_inputs import (
+    _load_rules,
     excluded_from_context,
     image_needed,
     is_non_image_file,
@@ -375,11 +376,25 @@ def test_image_needed(paths, expected):
     assert image_needed(paths, _IGNORE) is expected
 
 
-def test_an_empty_dockerignore_excludes_nothing():
-    rules = parse_dockerignore("# only a comment\n\n")
+@pytest.mark.parametrize("text", ["# only a comment\n\n", "", "   \n# a\n#b\n"])
+def test_an_empty_dockerignore_excludes_nothing(text):
+    rules = parse_dockerignore(text)
     assert rules == []
     assert image_needed(["README.md"], rules) is True
     assert image_needed(["tests/a.py"], rules) is False
+
+
+def test_an_unreadable_dockerignore_builds_and_says_so(tmp_path, capsys):
+    # No .dockerignore under tmp_path: nothing is excluded, a note goes to stderr.
+    assert _load_rules(tmp_path) == []
+    assert "not read" in capsys.readouterr().err
+    assert image_needed(["README.md"], _load_rules(tmp_path)) is True
+    capsys.readouterr()
+    (tmp_path / ".dockerignore").write_text("*.md\n", encoding="utf-8")
+    rules = _load_rules(tmp_path)
+    assert len(rules) == 1
+    assert capsys.readouterr().err == ""
+    assert image_needed(["README.md"], rules) is False
 
 
 # The repo's own .dockerignore: runtime-read markdown outside the root builds.
