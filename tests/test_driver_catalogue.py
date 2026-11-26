@@ -71,8 +71,11 @@ def _registered_ids(kind):
     if kind == "skill":
         return {f"{h.discipline.value}.{p.id}" for h in catalog.list_hats()
                 for p in (h.playbook.procedures or [] if h.playbook else [])}
+    from app.blocks import _knowledge
+
     root = catalogue.knowledge_dir()
-    return {f[:-3] for f in os.listdir(root) if f.endswith(".md")}
+    return ({f[:-3] for f in os.listdir(root) if f.endswith(".md")}
+            | {e["id"] for e in _knowledge.load_knowledge()})
 
 
 @pytest.mark.parametrize("kind", ["formula", "tool", "workflow", "skill", "knowledge"])
@@ -424,7 +427,8 @@ def test_a_lookup_of_unknown_ids_is_told_to_the_model_not_the_user(monkeypatch, 
 @pytest.mark.parametrize("build,kind", [
     (catalogue._formula_entries, "formula"), (catalogue._tool_entries, "tool"),
     (catalogue._workflow_entries, "workflow"), (catalogue._skill_entries, "skill"),
-    (catalogue._knowledge_entries, "knowledge"),
+    # The knowledge kind has two builders: the knowledge files and the knowledge base.
+    (lambda: catalogue._knowledge_entries() + catalogue.kb_entries(), "knowledge"),
 ])
 def test_each_builder_returns_its_registry_kind(build, kind):
     built = build()

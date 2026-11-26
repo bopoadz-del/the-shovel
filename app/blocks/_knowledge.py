@@ -89,6 +89,18 @@ def _load_kb() -> Dict[str, Any]:
         return _KB_CACHE
 
 
+def kb_identity() -> Tuple[str, Optional[int], Optional[int], Optional[int]]:
+    """The identity of the KB file a read would use now: its resolved path
+    and stat (mtime in ns, size, inode); a missing file has no stat. It
+    changes exactly when ``_load_kb`` would read a different copy."""
+    path = os.path.realpath(_kb_path())
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None, None, None)
+    return (path, st.st_mtime_ns, st.st_size, st.st_ino)
+
+
 def load_knowledge(domain: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return entries; filter by domain (in applicability.applies_to) if given."""
     entries = list(_load_kb().get("entries", []))

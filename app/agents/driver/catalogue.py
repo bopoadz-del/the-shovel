@@ -31,6 +31,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.agents.driver.catalogue_knowledge import kb_entries, markdown_sections
+
 #: Every kind an entry may have, in index order.
 KINDS = ("formula", "tool", "workflow", "skill", "kernel", "knowledge", "document_type")
 
@@ -241,30 +243,37 @@ def _knowledge_entries() -> List[Dict[str, Any]]:
     names = sorted(f for f in os.listdir(root) if f.endswith(".md")) if os.path.isdir(root) else []
     for filename in names:
         with open(os.path.join(root, filename), encoding="utf-8", errors="replace") as f:
-            title, prose = _knowledge_summary(f.read())
+            text = f.read()
+        title, prose = _knowledge_summary(text)
         stem = filename[:-3]
         entry = _entry(
             "knowledge", stem, name=title or stem.replace("_", " "),
             code={"tool": "search_general_knowledge"},
-            source={"registry": "knowledge", "file": f"docs/knowledge/{filename}"})
+            source={"registry": "knowledge", "file": f"docs/knowledge/{filename}",
+                    "sections": markdown_sections(text)})
         entry["for"] = _one_line(prose)
         entry["gaps"] = _gaps(entry)
         out.append(entry)
     return out
 
 
-_BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries, _knowledge_entries)
+_BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries, _knowledge_entries,
+             kb_entries)
 
 _CACHE: Dict[Any, List[Dict[str, Any]]] = {}
 
 
 def _state_key() -> Any:
     from app.agents.core import tool_registry
+    from app.blocks import _knowledge
     from app.lib import formula_registry
 
     tool_registry.load()
     return (tuple((s.name, id(s)) for s in formula_registry.all_specs()),
-            tuple((n, id(s)) for n, s in sorted(tool_registry._TOOLS.items())))
+            tuple((n, id(s)) for n, s in sorted(tool_registry._TOOLS.items())),
+            # The knowledge base reloads when its file changes; the file's
+            # identity (path, mtime, size, inode) is part of the state.
+            _knowledge.kb_identity())
 
 
 def order(entry: Dict[str, Any]) -> Tuple[int, str]:
