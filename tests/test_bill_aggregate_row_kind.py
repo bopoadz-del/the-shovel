@@ -302,3 +302,35 @@ def test_aggregate_without_a_bill_in_the_ask_has_no_checks(terms):
     res = agg.aggregate(_bill("7", "300.00", "700.00", "1,000.00"), terms=terms, measure="amount",
                         ask="how much are the works")
     assert res["bill_checks"] == []
+
+
+@pytest.mark.parametrize("p1, p2", [("39,150,000.00", "700,000.00"), ("120.00", "35.50")])
+def test_a_page_total_is_not_joined_to_the_next_pages_figureless_line(p1, p2):
+    """A page total at the foot of a page and a line with no figure at the head
+    of the next stay two rows, so the total is collected on its own page and
+    the collection page's repeat of it is not summed again."""
+    f = agg.g.parse_number
+    path = ("Bill No. 19 - Works",)
+    total = f"{f(p1) + f(p2):,.2f}"
+    rows = [
+        _r(1, "a", p1, "1", p1, path=path), _r(1, "carried", p1, path=path),
+        _r(2, "b", p2, "1", p2, path=path), _r(2, "carried", p2, path=path),
+        _r(3, "carried", "", path=path),
+        _r(4, "from page 1", p1, path=path), _r(4, "from page 2", p2, path=path),
+        _r(4, "bill total", total, path=path),
+    ]
+    items = agg.join_page_continuations(rows)
+    assert [r.pages for r in items if r.description == "carried" and r.amount] == [[1], [2]]
+    [check] = agg.bill_checks(items, {"19"})
+    assert (check["rows_summed"], check["state"]) == (2, "RECONCILED")
+    assert check["items_sum"] == f(total)
+
+
+@pytest.mark.parametrize("head", [("", "4", "25.00", "100.00"), ("", "2", "7", "14")])
+def test_a_description_split_by_the_page_break_still_joins(head):
+    """The guard does not stop a real continuation: a description with no
+    figure at the foot of a page takes the next page's figures."""
+    ref, qty, rate, amount = head
+    rows = [_r(1, "Supply and fix", ref="A"), _r(2, "pipes complete", amount, qty, rate, ref=ref)]
+    [one] = agg.join_page_continuations(rows)
+    assert (one.amount, one.pages) == (amount, [1, 2])

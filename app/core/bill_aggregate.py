@@ -174,6 +174,9 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
             and row.pages and prev.pages
             and row.pages[0] == prev.pages[-1] + 1
             and not (row.has_figure() and prev.has_figure())
+            # A line printing only an amount is a page total: it closes its
+            # page, so it is never the first half of an item the break split.
+            and not _amount_only(prev)
         ):
             prev.description = " ".join(t for t in (prev.description, row.description) if t)
             for attr in ("unit", "quantity", "rate", "amount"):
