@@ -94,7 +94,6 @@
  "formula:supervision_ratio:standard_or_hand_value",
  "formula:thermal_shrinkage_equivalence:standard_or_hand_value",
  "formula:tolerance_check:standard_or_hand_value",
- "formula:unit_cost_total:standard_or_hand_value",
  "formula:unit_weight_concrete:standard_or_hand_value",
  "formula:validate_design_status:standard_or_hand_value",
  "formula:weld_capacity:standard_or_hand_value",

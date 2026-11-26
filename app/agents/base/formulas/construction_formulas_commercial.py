@@ -5,6 +5,11 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 
+#: The published rule the line extension applies: a bill of quantities states
+#: each item's amount as its quantity times its rate (the Quantity / Rate /
+#: Amount columns of the bill form under CESMM4 and POMI).
+_BILL_EXTENSION_STANDARD = "Bill of quantities item amount = quantity x rate (CESMM4 / POMI bill form)"
+
 
 @formula(
     owner='base',
@@ -15,6 +20,7 @@ from app.lib.formula_registry import Param, formula
         'unit_rate': Param('currency', 0, 1e12, label='unit rate'),
     },
     outputs={'total_cost': 'currency'},
+    standard=_BILL_EXTENSION_STANDARD,
 )
 def unit_cost_total(quantity: float, unit_rate: float) -> dict:
     """Total = quantity * unit_rate (a line-item extension)."""
@@ -22,7 +28,7 @@ def unit_cost_total(quantity: float, unit_rate: float) -> dict:
     total = q * r
     return {
         "total_cost": round(total, 2),
-        "standard": "arithmetic (BOQ line item)",
+        "standard": _BILL_EXTENSION_STANDARD,
         "note": f"Total = qty * rate = {q} * {r} = {total:.2f}.",
     }
 

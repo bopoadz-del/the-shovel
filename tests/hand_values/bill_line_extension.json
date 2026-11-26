@@ -1,0 +1,27 @@
+[
+  {
+    "formula": "unit_cost_total",
+    "inputs": {"quantity": 12, "unit_rate": 4850},
+    "expect": {"total_cost": 58200.0},
+    "working": "Bill item amount = quantity x rate. 12 nr x 4850 per nr: 10 x 4850 = 48500, 2 x 4850 = 9700, 48500 + 9700 = 58200.00."
+  },
+  {
+    "formula": "unit_cost_total",
+    "inputs": {"quantity": 37.5, "unit_rate": 212.4},
+    "expect": {"total_cost": 7965.0},
+    "working": "Bill item amount = quantity x rate. 37.5 m x 212.40 per m: 30 x 212.40 = 6372.00, 7.5 x 212.40 = 1593.00, 6372.00 + 1593.00 = 7965.00."
+  },
+  {
+    "formula": "unit_cost_total",
+    "inputs": {"quantity": 7, "unit_rate": 1.1111},
+    "expect": {"total_cost": 7.78},
+    "rel_tol": 1e-06,
+    "working": "Bill item amount = quantity x rate, stated in currency to 2 decimal places. 7 x 1.1111 = 7.7777, to 2 dp = 7.78."
+  },
+  {
+    "formula": "unit_cost_total",
+    "inputs": {"quantity": 0, "unit_rate": 1250},
+    "expect": {"total_cost": 0.0},
+    "working": "A zero quantity extends to a zero amount: 0 x 1250 = 0.00."
+  }
+]
