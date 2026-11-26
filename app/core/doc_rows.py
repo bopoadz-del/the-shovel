@@ -246,3 +246,83 @@ def rows_query(
     diff = None if a["value"] is None or b["value"] is None else a["value"] - b["value"]
     return {"first": a, "second": b, "difference": diff,
             "rows": a["rows"] + b["rows"]}
+
+
+# ── the doc_rows table ──────────────────────────────────────────────────────
+
+_table_ready_for: str | None = None
+
+
+def _ensure_table() -> None:
+    """Create ``doc_rows`` on a fresh SQLite DB (Alembic 0041 owns PostgreSQL)."""
+    global _table_ready_for
+    from app.core.db import engine, get_database_url
+    from app.core.models import DocRowRecord
+
+    url = get_database_url()
+    if _table_ready_for != url:
+        DocRowRecord.__table__.create(bind=engine, checkfirst=True)
+        _table_ready_for = url
+
+
+def store_document_rows(
+    project_id: str, doc_id: str, rows: Sequence[DocRow], *, keep_existing: bool = False,
+) -> int:
+    """Write one document's rows; returns how many were written.
+
+    The document's rows are its reader's whole output, so a re-index replaces
+    them. With ``keep_existing`` (the additive backfill) a document that
+    already has rows is left as it is and nothing is written.
+    """
+    import json
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.core.db import SessionLocal
+    from app.core.models import DocRowRecord
+
+    _ensure_table()
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        mine = session.query(DocRowRecord).filter(
+            DocRowRecord.project_id == project_id, DocRowRecord.doc_id == doc_id)
+        if keep_existing and mine.first() is not None:
+            return 0
+        mine.delete(synchronize_session=False)
+        session.add_all(
+            DocRowRecord(
+                id=str(uuid.uuid4()), project_id=project_id, doc_id=doc_id,
+                table_no=r.table_no, row_no=r.row_no,
+                path=json.dumps(list(r.path)), fields=json.dumps(dict(r.fields)),
+                extra=json.dumps(dict(r.extra)), page=r.page, sheet=r.sheet or None,
+                sheet_row=r.sheet_row, chunk_index=r.chunk_ordinal,
+                row_check=r.check, created_at=now,
+            )
+            for r in rows
+        )
+        session.commit()
+    return len(rows)
+
+
+def load_rows(project_id: str, doc_id: str | None = None) -> list[DocRow]:
+    """The stored rows of a project (or one of its documents), in table order."""
+    import json
+
+    from app.core.db import SessionLocal
+    from app.core.models import DocRowRecord
+
+    _ensure_table()
+    with SessionLocal() as session:
+        q = session.query(DocRowRecord).filter(DocRowRecord.project_id == project_id)
+        if doc_id is not None:
+            q = q.filter(DocRowRecord.doc_id == doc_id)
+        recs = q.order_by(DocRowRecord.doc_id, DocRowRecord.table_no, DocRowRecord.row_no).all()
+        return [
+            DocRow(
+                document_id=rec.doc_id, table_no=rec.table_no, row_no=rec.row_no,
+                path=tuple(json.loads(rec.path)), fields=json.loads(rec.fields),
+                extra=json.loads(rec.extra), page=rec.page, sheet=rec.sheet or "",
+                sheet_row=rec.sheet_row, chunk_ordinal=rec.chunk_index, check=rec.row_check,
+            )
+            for rec in recs
+        ]

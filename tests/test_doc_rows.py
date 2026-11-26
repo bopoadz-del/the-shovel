@@ -72,12 +72,15 @@ def test_printed_total_that_disagrees_fails(rows, printed):
     assert dr.reconcile_table(rows, printed).state == dr.FAILED
 
 
-def test_tables_reconcile_separately_and_a_total_with_no_rows_is_not_read():
-    rows = [_row(1, 1, "Excavate", "10", "5", "50"),
-            _row(2, 1, "Backfill", "4", "2.5", "11")]
-    out = dr.reconcile_tables(rows, {3: 75.0})
-    assert {t: c.state for t, c in out.items()} == {
-        1: dr.RECONCILED, 2: dr.FAILED, 3: dr.NOT_READ}
+@pytest.mark.parametrize("rows, totals, states", [
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(2, 1, "Backfill", "4", "2.5", "11")],
+     {3: 75.0}, {1: dr.RECONCILED, 2: dr.FAILED, 3: dr.NOT_READ}),
+    ([_row(1, 1, "Formwork", "3", "100", "350"), _row(2, 1, "Lump sum", total="40")],
+     {2: 40.0}, {1: dr.FAILED, 2: dr.RECONCILED}),
+])
+def test_tables_reconcile_separately_and_a_total_with_no_rows_is_not_read(rows, totals, states):
+    out = dr.reconcile_tables(rows, totals)
+    assert {t: c.state for t, c in out.items()} == states
 
 
 # ── rows_query ─────────────────────────────────────────────────────────────
@@ -101,12 +104,16 @@ def test_sum_adds_the_matching_amounts_and_names_the_rows(where, value, used):
     assert [r["row_no"] for r in out["rows"]] == used
 
 
-def test_sum_names_a_row_without_a_figure_as_skipped_not_zero():
-    out = dr.rows_query(ROWS, "sum", {"path": "Concrete"})
-    assert out["value"] == pytest.approx(160.0)
-    assert [r["row_no"] for r in out["skipped"]] == [4]
-    empty = dr.rows_query(ROWS, "sum", {"description": "Provisional"})
-    assert empty["value"] is None
+@pytest.mark.parametrize("where, value, skipped", [
+    ({"path": "Concrete"}, 160.0, [4]),
+    ({"path": "Bill 3"}, 160.0, [4]),
+    ({"description": "Provisional"}, None, [4]),
+    ({"path": "Earthworks"}, 60.0, []),
+])
+def test_sum_names_a_row_without_a_figure_as_skipped_not_zero(where, value, skipped):
+    out = dr.rows_query(ROWS, "sum", where)
+    assert out["value"] == (pytest.approx(value) if value is not None else None)
+    assert [r["row_no"] for r in out["skipped"]] == skipped
 
 
 @pytest.mark.parametrize("where, n", [({"path": "Bill 2"}, 2), ({}, 4), ({"description": "none such"}, 0)])
@@ -153,18 +160,36 @@ def test_unknown_operation_is_an_error_not_a_guess():
 
 # ── readers ────────────────────────────────────────────────────────────────
 
-def test_bill_rows_keep_page_path_and_check():
-    bill = [
-        BillRow(section="Earthworks", source_page=7, path=("Bill 2", "Earthworks"),
-                fields={"description": "Excavate", "quantity": "10", "rate": "5", "total": "50"}),
-        BillRow(section="Concrete", source_page=9,
-                fields={"description": "Blinding", "quantity": "2", "rate": "80", "total": "150"},
-                check="qty x rate != amount"),
-    ]
+@pytest.mark.parametrize("bill, expect, state", [
+    ([BillRow(section="Earthworks", source_page=7, path=("Bill 2", "Earthworks"),
+              fields={"description": "Excavate", "quantity": "10", "rate": "5", "total": "50"}),
+      BillRow(section="Concrete", source_page=9,
+              fields={"description": "Blinding", "quantity": "2", "rate": "80", "total": "150"},
+              check="qty x rate != amount")],
+     [(7, ("Bill 2", "Earthworks"), ""), (9, ("Concrete",), "qty x rate != amount")], dr.FAILED),
+    ([BillRow(section="", source_page=3,
+              fields={"description": "Provisional sum", "total": "500"})],
+     [(3, (), "")], dr.UNCHECKED),
+])
+def test_bill_rows_keep_page_path_and_check(bill, expect, state):
     rows = dr.rows_from_bill("doc-b", bill)
-    assert [(r.page, r.path, r.check) for r in rows] == [
-        (7, ("Bill 2", "Earthworks"), ""), (9, ("Concrete",), "qty x rate != amount")]
-    assert dr.reconcile_table(rows).state == dr.FAILED
+    assert [(r.page, r.path, r.check) for r in rows] == expect
+    assert dr.reconcile_table(rows).state == state
+
+
+# ── locator: a citation names what the row has, and nothing it lacks ──────
+
+@pytest.mark.parametrize("row, loc", [
+    (dr.DocRow("d1", 2, 5, path=("Bill 4",), page=12),
+     {"document_id": "d1", "table_no": 2, "row_no": 5, "path": ["Bill 4"], "page": 12}),
+    (dr.DocRow("d2", 1, 3, sheet="Bill 1", sheet_row=9, chunk_ordinal=0),
+     {"document_id": "d2", "table_no": 1, "row_no": 3, "sheet": "Bill 1",
+      "sheet_row": 9, "chunk_ordinal": 0}),
+    (dr.DocRow("d3", 1, 1),
+     {"document_id": "d3", "table_no": 1, "row_no": 1}),
+])
+def test_locator_names_only_what_the_row_has(row, loc):
+    assert row.locator() == loc
 
 
 def _xlsx(tmp_path, name, sheets):
@@ -209,3 +234,49 @@ def test_spreadsheet_public_path_rows_match_chunks(tmp_path, sheets, states, tot
         assert r.sheet_row is not None and r.sheet_row >= 3   # banner + header above
     assert {t: c.state for t, c in dr.reconcile_tables(rows).items()} == states
     assert dr.rows_query(rows, "sum")["value"] == pytest.approx(total)
+
+
+# ── the doc_rows table ─────────────────────────────────────────────────────
+
+@pytest.fixture()
+def fresh_db(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    yield
+
+
+@pytest.mark.parametrize("rows", [
+    [dr.DocRow("doc-p", 1, 1, path=("Bill 2", "Earthworks"), page=7, check="",
+               fields={"description": "Excavate", "quantity": "10", "rate": "5", "total": "50"}),
+     dr.DocRow("doc-p", 1, 2, path=("Bill 2",), page=8, check="qty x rate != amount",
+               fields={"description": "Fill", "quantity": "2", "rate": "3", "total": "9"})],
+    [dr.DocRow("doc-s", 2, 1, sheet="Bill 3", sheet_row=4, chunk_ordinal=11,
+               fields={"description": "Blockwork"}, extra={"Remarks": "by others"})],
+])
+def test_stored_rows_read_back_as_written(fresh_db, rows):
+    doc = rows[0].document_id
+    assert dr.store_document_rows("proj-1", doc, rows) == len(rows)
+    assert dr.load_rows("proj-1", doc) == rows
+    assert dr.load_rows("proj-other") == []
+
+
+@pytest.mark.parametrize("keep_existing, kept", [(False, ["Second"]), (True, ["First"])])
+def test_reindex_replaces_and_backfill_keeps(fresh_db, keep_existing, kept):
+    first = [dr.DocRow("doc-r", 1, 1, fields={"description": "First"}),
+             dr.DocRow("doc-r", 1, 2, fields={"description": "First b"})]
+    dr.store_document_rows("proj-2", "doc-r", first)
+    written = dr.store_document_rows(
+        "proj-2", "doc-r", [dr.DocRow("doc-r", 1, 1, fields={"description": "Second"})],
+        keep_existing=keep_existing)
+    assert written == (0 if keep_existing else 1)
+    got = [r.fields["description"] for r in dr.load_rows("proj-2", "doc-r")][:1]
+    assert got == kept
+
+
+@pytest.mark.parametrize("docs", [("doc-a", "doc-b"), ("doc-c",)])
+def test_load_rows_scopes_to_the_document_asked(fresh_db, docs):
+    for d in docs:
+        dr.store_document_rows("proj-3", d, [dr.DocRow(d, 1, 1, fields={"description": d})])
+    for d in docs:
+        assert [r.document_id for r in dr.load_rows("proj-3", d)] == [d]
+    assert len(dr.load_rows("proj-3")) == len(docs)
