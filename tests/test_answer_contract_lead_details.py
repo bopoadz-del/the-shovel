@@ -522,3 +522,49 @@ def test_a_stated_line_ending_on_a_colon_takes_what_it_introduces(text, lead, de
     assert done.text == lead
     assert done.details == details
 
+
+
+# ── the length of a reference word: up to four letters joins the number ─────
+
+@pytest.mark.parametrize("line,first", [
+    ("Laps are given in Sect. 4 of the spec. Cover is 50 mm.", "Laps are given in Sect. 4 of the spec."),
+    ("Bars are shown in Appx. 2 of the notes. Cover is 40 mm.", "Bars are shown in Appx. 2 of the notes."),
+])
+def test_a_four_letter_reference_word_keeps_its_number(line, first):
+    parts = [s.strip() for s in answer_contract._sentences(line)]
+    assert parts[0] == first
+    assert len(parts) == 2
+
+
+@pytest.mark.parametrize("line,first", [
+    ("The answer is in Table. 3 rows follow.", "The answer is in Table."),
+    ("It is set out in Annex. 2 items remain.", "It is set out in Annex."),
+])
+def test_a_five_letter_word_ends_its_sentence_before_a_number(line, first):
+    parts = [s.strip() for s in answer_contract._sentences(line)]
+    assert parts[0] == first
+    assert len(parts) == 2
+
+
+# ── "below" points forward like "the following" ────────────────────────────
+
+@pytest.mark.parametrize("text,lead,details", [
+    ("The schedule is set out below.\n\nThe slab is C40 concrete.\n\nCuring is seven days.",
+     "The schedule is set out below.\n\nThe slab is C40 concrete.", "Curing is seven days."),
+    ("The joint details are given below.\n\nJoints are at 6 m centres.\n\nSealant is polysulphide.",
+     "The joint details are given below.\n\nJoints are at 6 m centres.", "Sealant is polysulphide."),
+])
+def test_a_line_pointing_below_takes_the_answer_into_the_lead(text, lead, details):
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details == details
+
+
+@pytest.mark.parametrize("text,lead", [
+    ("The schedule is set out in the spec.\n\nThe slab is C40 concrete.\n\nCuring is seven days.",
+     "The schedule is set out in the spec."),
+    ("The joint details are given on sheet A.\n\nJoints are at 6 m centres.",
+     "The joint details are given on sheet A."),
+])
+def test_the_same_line_not_pointing_forward_leads_alone(text, lead):
+    assert _apply(text).text == lead

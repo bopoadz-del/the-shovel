@@ -1813,17 +1813,26 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     one click away (the stream's ``end`` event, read by the chat bubble).
     Every other reader -- a delegating agent, the heavy-reasoning stream's
     tokens, a JSON API client -- reads ``answer`` alone, so it gets the
-    whole text and no ``details``: nothing rule 5 moves is lost to it."""
+    whole text and no ``details``: nothing rule 5 moves is lost to it.
+
+    The fold is decided once per answer, by the first exit pass that folds,
+    and the decision rides out on the event as ``folded`` (True: ``content``
+    is the lead and ``details`` the rest; False: read whole). One event can
+    pass the exit more than once (the agent's own end check, then the
+    route's), and a later pass may sit in another task whose turn does not
+    know the answer was cut; so a later pass keeps the recorded decision
+    instead of folding again what is already a lead."""
     from app.agents import answer_contract
 
     text = env.get(key)
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
+    decided = fold and isinstance(env.get("folded"), bool)
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
                                  evidence=_handed_evidence(turn, rows),
-                                 lead=fold and not (turn is not None and turn.cut))
+                                 lead=fold and not decided and not (turn is not None and turn.cut))
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations
@@ -1833,6 +1842,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
         env["conflicts"] = done.conflicts
     if done.details:
         env["details"] = done.details
+    if fold and not decided:
+        env["folded"] = bool(done.details)
     return env
 
 
