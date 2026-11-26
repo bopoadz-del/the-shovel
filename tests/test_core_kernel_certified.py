@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.base.formulas.construction_formulas_commercial import unit_cost_total
 from app.lib import formula_registry as fr
 from app.lib.construction_formulas import run_calculation
 
@@ -32,13 +33,28 @@ def _cases() -> list:
     return json.loads(_CASES.read_text(encoding="utf-8"))
 
 
-def test_the_kernel_declares_a_standard_and_reproduces_every_hand_case():
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
+def test_the_kernel_declares_a_standard_and_reproduces_every_hand_case(index):
     spec = fr.get(_KERNEL)
     assert spec is not None and spec.standard.strip()
     assert len(fr.hand_value_cases(_KERNEL)) == len(_cases()) >= 2
     assert fr.hand_value_failures(_KERNEL) == []
     assert fr.certified(_KERNEL)
     assert not [g for g in fr.certification_gaps() if g.startswith(f"formula:{_KERNEL}:")]
+    row = _cases()[index]
+    got = unit_cost_total(**row["inputs"])
+    for key, want in row["expect"].items():
+        assert got[key] == pytest.approx(want, rel=row.get("rel_tol", 1e-3))
+
+
+# The kernel itself, imported from its own module: the total is the product
+# rounded to 2 dp, and the result names the same standard the spec declares.
+@pytest.mark.parametrize("qty,rate,total", [(3, 19.99, 59.97), (250, 0.333, 83.25), (1, 0, 0.0)])
+def test_unit_cost_total_extends_quantity_by_rate(qty, rate, total):
+    got = unit_cost_total(qty, rate)
+    assert got["total_cost"] == total
+    assert got["standard"] == fr.get(_KERNEL).standard
+    assert f"{qty}" in got["note"] and f"{total:.2f}" in got["note"]
 
 
 @pytest.mark.parametrize("qty,rate,total", [(12, 4850, 58200.0), (37.5, 212.4, 7965.0)])
@@ -99,7 +115,9 @@ def test_the_core_hand_file_certifies_no_other_formula(pick, tmp_path, monkeypat
     assert fr.certified(_KERNEL)
 
 
-def test_the_hand_file_names_only_the_core_kernel_and_each_case_is_worked():
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
+def test_the_hand_file_names_only_the_core_kernel_and_each_case_is_worked(index):
     rows = _cases()
-    assert {r["formula"] for r in rows} == {_KERNEL}
-    assert all(str(r["working"]).strip() for r in rows)
+    assert len(rows) == 4
+    assert rows[index]["formula"] == _KERNEL
+    assert str(rows[index]["working"]).strip()
