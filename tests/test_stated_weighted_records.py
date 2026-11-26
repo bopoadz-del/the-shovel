@@ -273,13 +273,16 @@ def test_predispatch_runs_the_scoring_on_the_stated_records(text, ranked_first):
     assert body["result"]["recommended"]["name"] == ranked_first
 
 
-@pytest.mark.parametrize("rule, binds", [
-    ("handling score = 3 points", True),     # not a weighted criterion: no rule of the scorer's
-    ("price score = 3 points", False),       # a weighted amount criterion: a different rule
+@pytest.mark.parametrize("rule, disagrees", [
+    ("handling score = 3 points", False),    # not a weighted criterion: no rule of the scorer's
+    ("price score = 3 points", True),        # a weighted amount criterion: a different rule
 ])
-def test_a_rule_for_a_criterion_the_weights_do_not_name_is_not_read(rule, binds):
+def test_a_rule_for_a_criterion_the_weights_do_not_name_is_not_read(rule, disagrees):
     text = _OFFERS.replace(". Who wins?", f", {rule}. Who wins?")
-    assert (records_completed_by_user_text(text) is not None) is binds
+    assert stated_records._rule_disagrees(text, ["price", "technical"], {"price"}) is disagrees
+    # Either way the ask binds nothing: a rule this reader does not take is
+    # a sentence it does not read in full.
+    assert records_completed_by_user_text(text) is None
 
 
 @pytest.mark.parametrize("text, binds", [
@@ -328,11 +331,11 @@ def test_the_same_figure_called_a_score_and_said_better_higher_binds_and_ranks_h
 
 @pytest.mark.parametrize("text, binds", [
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Quality marks are from the panel. Higher marks are better.", True),
+     "Weights price 50 / quality 50. Quality marks are out of 100. Higher marks are better.", True),
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Ratings for quality are from the panel. Higher marks are better.", True),
+     "Weights price 50 / quality 50. Ratings for quality are out of 100. Higher marks are better.", True),
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Delivery marks are from the panel. Higher marks are better.", False),
+     "Weights price 50 / quality 50. Marks are out of 100. Higher marks are better.", False),
 ])
 def test_a_score_word_must_name_the_criterion_it_scores(text, binds):
     assert (records_completed_by_user_text(text) is not None) is binds
@@ -573,8 +576,8 @@ def test_a_scorer_criterion_the_ask_defines_otherwise_binds_nothing(text):
 
 
 @pytest.mark.parametrize("sentence, first", [
-    ("Technical is the panel's score.", "North"),
-    ("Technical marks come from the panel.", "North"),
+    ("Technical is a score.", "North"),
+    ("Technical marks are out of 100.", "North"),
 ])
 def test_a_sentence_that_calls_the_criterion_a_score_still_binds(sentence, first):
     text = ("Two offers: North 1.2 M technical 80, South 1.0 M technical 60. "
@@ -601,10 +604,11 @@ def test_a_stated_scale_other_than_0_to_100_binds_nothing(scale, binds):
     assert (records_completed_by_user_text(text) is not None) is binds
 
 
-def test_a_scale_said_of_another_criterion_does_not_apply():
+def test_a_scale_other_than_0_to_100_binds_nothing_whichever_criterion_it_names():
     base = ("Two offers: North 1.2 M technical score 80, South 1.0 M technical score 60. "
             "Weights price 50 / technical 50. ")
-    assert records_completed_by_user_text(base + "Price is out of 10 points. Who wins?") is not None
+    assert records_completed_by_user_text(base + "Who wins?") is not None
+    assert records_completed_by_user_text(base + "Price is out of 10 points. Who wins?") is None
     assert records_completed_by_user_text(base + "Technical is out of 10 points. Who wins?") is None
 
 
@@ -652,3 +656,76 @@ def test_records_with_no_heading_are_not_a_sentence_about_their_criterion(text, 
     from app.lib.formula_registry import get
 
     assert get(name).fn(**bound)["recommended"]["name"] == first
+
+
+# -- every sentence read in full --------------------------------------------
+_PLAIN = ("Two offers: North 1.2 M {c} {a}, South 1.0 M {c} {b}. "
+          "Weights price 50 / {c} 50. {sentence}Who wins?")
+
+
+@pytest.mark.parametrize("c, a, b, sentence", [
+    ("technical", 9, 5, "The maximum technical mark is 10. "),
+    ("technical", 9, 5, "Technical uses a ten-point scale. "),
+    ("technical", 4, 2, "Technical scores run 1–5. "),
+    ("technical", 7, 3, "The top mark is 10. "),
+    ("hse", 2, 9, "These figures are incident counts. "),
+    ("hse", 2, 9, "Hse scores count the reportable incidents. "),
+    ("hse", 3, 8, "Note: HSE is the count of incidents. "),
+    ("hse", 3, 8, "The figures come from the site log. "),
+])
+def test_a_sentence_the_reader_does_not_read_binds_nothing(c, a, b, sentence):
+    text = _PLAIN.format(c=c, a=a, b=b, sentence=sentence)
+    assert records_completed_by_user_text(text) is None
+    # The same ask without that sentence binds: the sentence is what decides.
+    assert records_completed_by_user_text(_PLAIN.format(c=c, a=a, b=b, sentence="")) is not None
+
+
+@pytest.mark.parametrize("c, a, b, sentence, first", [
+    ("technical", 80, 60, "Higher technical scores are better. ", "North"),
+    ("hse", 40, 90, "Hse is scored out of 100 and higher is better. ", "South"),
+    ("technical", 50, 95, "Technical scores run from 0 to 100. ", "South"),
+])
+def test_a_sentence_that_restates_the_scorers_reading_binds(c, a, b, sentence, first):
+    name, bound = records_completed_by_user_text(_PLAIN.format(c=c, a=a, b=b, sentence=sentence))
+    from app.lib.formula_registry import get
+
+    assert get(name).fn(**bound)["recommended"]["name"] == first
+
+
+_STEP = ("Three tenders: P 2.40 M technical 70, Q 2.10 M technical 60, R 2.70 M technical 85. "
+         "Weights price 60 / technical 40, price score = lowest/price*100. Who wins? {step}")
+
+
+@pytest.mark.parametrize("step, binds", [
+    ("Pay 20 % progress on the winner, 5 % retention.", True),
+    ("Pay 10 % advance to the winner.", True),
+    ("Release 2.5 M to the winner.", True),
+    ("Pay 20 on the winner.", False),                     # a bare figure: could be a scale
+    ("Pay 20 % on the winner, the maximum is 10.", False),  # one bare figure beside a unit one
+    ("Pay 20 % on the technical winner.", False),          # names a criterion: must be read in full
+    ("Pay 20 % on the top score.", False),                 # speaks of the scores
+    ("Pay the winner.", False),                            # no figure of its own and not read
+])
+def test_a_further_step_binds_only_with_figures_of_its_own(step, binds):
+    out = records_completed_by_user_text(_STEP.format(step=step))
+    assert (out is not None) is binds
+    if binds:
+        from app.lib.formula_registry import get
+
+        assert get(out[0]).fn(**out[1])["recommended"]["name"] == "Q"
+
+
+@pytest.mark.parametrize("heading, binds", [
+    ("Two offers", True),
+    ("Three bids", True),
+    ("Two incident logs", False),
+])
+def test_a_count_word_reads_only_in_the_heading(heading, binds):
+    text = (f"{heading}: North 1.2 M technical 80, South 1.0 M technical 60, Mid 1.1 M technical 70. "
+            "Weights price 50 / technical 50. Who wins?")
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("sentence", ["Technical marks are ten. ", "Two technical marks are scored. "])
+def test_a_count_word_outside_the_heading_binds_nothing(sentence):
+    assert records_completed_by_user_text(_PLAIN.format(c="technical", a=80, b=60, sentence=sentence)) is None

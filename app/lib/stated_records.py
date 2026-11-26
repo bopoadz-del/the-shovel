@@ -89,6 +89,12 @@ def _number(text: str) -> float:
     return float(text.replace(",", ""))
 
 
+def _weight_clause_end(tail: str) -> int:
+    """Where the weight clause that opens ``tail`` ends."""
+    stop = re.search(r"\.(?!\d)|\?|\n|,\s+(?=[a-z]+\s+score\b)", tail, re.IGNORECASE)
+    return stop.start() if stop else len(tail)
+
+
 def stated_weights(text: str) -> dict[str, float] | None:
     """``{criterion: weight}`` from the clause that follows a weight word.
 
@@ -99,8 +105,7 @@ def stated_weights(text: str) -> dict[str, float] | None:
     raw = text or ""
     for match in _WEIGHT_WORD_RE.finditer(raw):
         tail = raw[match.end():]
-        stop = re.search(r"\.(?!\d)|\?|\n|,\s+(?=[a-z]+\s+score\b)", tail, re.IGNORECASE)
-        clause = tail[: stop.start()] if stop else tail
+        clause = tail[: _weight_clause_end(tail)]
         items = [p for p in _WEIGHT_SEP_RE.split(clause) if p.strip()]
         weights: dict[str, float] = {}
         for item in items:
@@ -301,69 +306,102 @@ def _criterion_named(crit: str, text: str) -> bool:
     return re.search(rf"\b{_crit_re(crit)}\b", text, re.IGNORECASE) is not None
 
 
-def _applies_to(sentence: str, crit: str, criteria: list[str]) -> bool:
-    """True when a sentence speaks of the criterion's scores.
-
-    A sentence that names criteria speaks of those; one that names none
-    speaks of every score only when it says "score" (or another score word).
-    """
-    named = {c for c in criteria if _criterion_named(c, sentence)}
-    if named:
-        return crit in named
-    return re.search(rf"\b{_SCORE_WORD}\b", sentence, re.IGNORECASE) is not None
-
-
-# A scale the ask states: "out of 10", "1 to 5", "0-10", "a 5-point scale".
-_SCALE_STATED_RE = re.compile(
-    rf"\bout\s+of\s+(?P<top>{_NUM})\b"
-    rf"|\b(?P<low>{_NUM})\s*(?:to|-|–)\s*(?P<top2>{_NUM})\b"
-    rf"|\b(?P<top3>{_NUM})\s*-?\s*points?\s+scale\b",
+# The one scale the scorer reads: "out of 100", "0 to 100", "0-100".
+_SCORER_SCALE_RE = re.compile(
+    r"\bout\s+of\s+100\b|\b(?:from\s+)?0\s*(?:to|-|–)\s*100\b",
     re.IGNORECASE,
 )
 
+# The words a sentence about weighted records may use and still be read in
+# full: the scorer's own reading of a score (a 0-100 score, higher better),
+# which way is better, and the question of who wins. Any other word in a
+# sentence that is not the records, the weights or the scorer's own rule
+# says something this reader does not read, so the ask binds nothing.
+_READ_WORDS = frozenset("""
+    a an the is are be all each every both for of on and in as with its their it they
+    score scored scoring point mark marked rating rated run range
+    higher highest lower lowest better best preferred prefer win winner
+    who which what should we rank ranking ranked recommend award overall weighted total
+    use using apply evaluate
+    tender bid offer bidder supplier candidate option contractor
+""".split())
+# Candidate counts, read only in the heading before the records ("Two offers:").
+_COUNT_WORDS = frozenset(
+    "two three four five six seven eight nine ten eleven twelve".split()
+)
+_TOKEN_RE = re.compile(rf"[A-Za-z]+(?:'s)?|{_NUM}")
+# A figure that carries its own unit: a percentage or a scaled amount.
+_UNIT_FIGURE_RE = re.compile(rf"(?:{_NUM})\s*(?:%|{_SCALE_RE})", re.IGNORECASE)
 
-def _scale_differs(text: str, crit: str, criteria: list[str]) -> bool:
-    """True when the ask states a scale for the criterion other than 0-100.
 
-    The scorer reads every score on 0-100; a figure "out of 10" or "rated
-    1 to 5" is a different quantity, and a 9 there is not a 9 on 100.
+def _strip_read_parts(sentence: str, criteria: list[str]) -> tuple[str, str]:
+    """``(heading, rest)``: the sentence without its records, weights and rule.
+
+    The scorer's own rule ("<criterion> score = lowest/<criterion>*100") and
+    the weight clause are taken out; a run of records takes the sentence
+    after its colon, and the words before that colon are the heading.
     """
-    for sentence in _sentences(text):
-        if not _applies_to(sentence, crit, criteria):
-            continue
-        for m in _SCALE_STATED_RE.finditer(sentence):
-            top = m.group("top") or m.group("top2") or m.group("top3")
-            low = m.group("low")
-            if _number(top) != _SCORE_MAX or (low is not None and _number(low) != _SCORE_MIN):
-                return True
-    return False
-
-
-def _outside_records_and_weights(sentence: str, criteria: list[str]) -> str:
-    """The part of a sentence that is neither the weights nor the records."""
+    for m in reversed(list(_RULE_RE.finditer(sentence))):
+        crit = _criterion_for(m.group("crit"), criteria)
+        if crit is not None and _agrees(m.group("rule"), crit):
+            sentence = sentence[: m.start()] + sentence[m.end():]
     weight = _WEIGHT_WORD_RE.search(sentence)
     if weight is not None:
-        sentence = sentence[: weight.start()]
+        tail = sentence[weight.end():]
+        sentence = sentence[: weight.start()] + " " + tail[_weight_clause_end(tail):]
     head, colon, tail = sentence.rpartition(":")
     if colon and stated_records(tail, criteria):
-        return head
+        return head, ""
     if stated_records(sentence, criteria):
-        return ""
-    return sentence
+        return "", ""
+    return "", sentence
 
 
-def _described_otherwise(text: str, crit: str, criteria: list[str]) -> bool:
-    """True when the ask says what the criterion's figures are, not as scores.
+def _read_in_full(tokens: list[str], criteria: list[str], extra: frozenset[str] = frozenset()) -> bool:
+    """True when every token is a read word; a figure is never one."""
+    crit_words = {w for c in criteria for w in c.split("_")}
+    for token in tokens:
+        words = _words(token)
+        if not words:
+            return False
+        if any(w not in _READ_WORDS and w not in crit_words and w not in extra for w in words):
+            return False
+    return True
 
-    The criterion's name alone reads as the scorer's own; any other sentence
-    that names it ("<criterion> is the count of ...") without a score word
-    says its figures are something else, and that leaves them in doubt.
+
+def _further_instruction(sentence: str, criteria: list[str]) -> bool:
+    """True for a sentence that asks a further step with figures of its own.
+
+    It names no criterion and no score, and every figure in it carries its
+    own unit (a percentage, a scaled amount), so none of them can be read as
+    a scale or a count of the weighted criteria ("pay 20 % on the winner").
+    """
+    if any(_criterion_named(c, sentence) for c in criteria):
+        return False
+    if re.search(rf"\b{_SCORED_RE}\b", sentence, re.IGNORECASE):
+        return False
+    figures = re.findall(_NUM, sentence)
+    return bool(figures) and len(_UNIT_FIGURE_RE.findall(sentence)) == len(figures)
+
+
+def _every_sentence_read(text: str, criteria: list[str]) -> bool:
+    """True when every sentence of the ask is read in full.
+
+    A sentence outside the records, the weights and the scorer's own rule
+    may only restate the scorer's reading (a score out of 100, higher is
+    better) and ask who wins, or ask a further step with figures of its own.
+    A sentence that says anything else - a scale, a maximum, what the
+    figures count, where they come from - may change what they mean, and
+    this reader does not read it, so nothing binds.
     """
     for sentence in _sentences(text):
-        part = _outside_records_and_weights(sentence, criteria)
-        if _criterion_named(crit, part) and not re.search(rf"\b{_SCORE_WORD}\b", part, re.IGNORECASE):
-            return True
-    return False
+        heading, rest = _strip_read_parts(sentence, criteria)
+        if not _read_in_full(_TOKEN_RE.findall(heading), criteria, _COUNT_WORDS):
+            return False
+        rest = _SCORER_SCALE_RE.sub(" ", rest)
+        if not _read_in_full(_TOKEN_RE.findall(rest), criteria) and not _further_instruction(rest, criteria):
+            return False
+    return True
 
 
 def _scorer_criteria() -> frozenset[str]:
@@ -388,9 +426,7 @@ def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], 
     criterion the ask calls a score and says is better higher. A score
     word alone does not say the direction (a lower score can be the better
     one), and a figure the ask never calls a score may be days, weeks or a
-    dose. The ask saying lower is better, or both ways, binds nothing; so
-    does a scale it states other than 0-100, or a sentence that says what
-    the criterion's figures are without calling them scores.
+    dose. The ask saying lower is better, or both ways, binds nothing.
     """
     own = _scorer_criteria()
     for crit in criteria:
@@ -403,8 +439,6 @@ def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], 
         if "lower" in directions:
             return False
         if crit not in own and not (_called_a_score(text, crit) and directions == {"higher"}):
-            return False
-        if _scale_differs(text, crit, criteria) or _described_otherwise(text, crit, criteria):
             return False
         if any(not (_SCORE_MIN <= v <= _SCORE_MAX) for v in values):
             return False
@@ -454,6 +488,8 @@ def records_completed_by_user_text(text: str) -> tuple[str, dict[str, Any]] | No
         return None
     records = stated_records(raw, criteria)
     if not records or not _figures_fit(raw, records, criteria, amounts):
+        return None
+    if not _every_sentence_read(raw, criteria):
         return None
     from app.lib.formula_registry import all_specs
 
