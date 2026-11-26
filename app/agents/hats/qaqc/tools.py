@@ -9,6 +9,7 @@ import re
 from typing import Any, List, Tuple
 
 from app.agents.core.tool_registry import ToolCall, tool
+from app.lib.formula_registry import Param
 
 # Systems the construction container accepts, and the phrases that name
 # each one. Longer phrases claim their span first so a short word inside
@@ -232,7 +233,7 @@ async def handle_commissioning_checklist(call: ToolCall) -> dict:
     }
 
 
-# ── ids_check: a project's own requirement table against its IFC model ──
+# -- ids_check: a project's own requirement table against its IFC model --
 # S-K3 item 1 part 2. The specification is the user's (or the project
 # document's) requirement table, passed in as given; nothing here names a
 # property set, an entity or a value. bim_extractor reads the model and
@@ -318,7 +319,16 @@ def ids_result_from_extraction(extracted: Any, specifications: Any) -> dict:
     return result
 
 
-@tool("ids_check", owner="qaqc", display_name="IFC requirement check", schema=IDS_CHECK_SCHEMA)
+@tool(
+    "ids_check",
+    owner="qaqc",
+    display_name="IFC requirement check",
+    schema=IDS_CHECK_SCHEMA,
+    params={
+        "ifc_file": Param(label="IFC model file", kind="text", required=True),
+        "specifications": Param(label="requirement table", kind="list", required=True),
+    },
+)
 async def handle_ids_check(call: ToolCall) -> dict:
     """The ``ids_check`` tool."""
     from app.agents.hats.qaqc.ids_check import IdsSpecError
