@@ -141,3 +141,70 @@ def test_the_note_never_calls_a_tiny_product_zero(text, figure):
     note = rt._annotate_derivation_mismatches(text)
     assert f"**{figure}**" in note
     assert "**0**" not in note
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (12.345, "12.35"),
+        (2.0345, "2.035"),
+        (0.0012345, "0.001235"),
+        (0.0020345, "0.002035"),
+    ],
+)
+def test_a_plain_figure_rounds_half_up_from_its_shortest_form(value, written):
+    # Each value sits on a half at the fourth figure as written. Half-even
+    # rounds each one down, and so does reading the float's binary value for
+    # every one but the first (whose binary value lies just over the half).
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (1.2345e20, "1.235 × 10^20"),
+        (-6.0345e-18, "-6.035 × 10^-18"),
+    ],
+)
+def test_a_mantissa_rounds_half_up_from_its_shortest_form(value, written):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (999999999999999.9, "1 × 10^15"),
+        (999999999999999.5, "1 × 10^15"),
+        (-999999999999999.9, "-1 × 10^15"),
+        (9.99996e-16, "0.000000000000001"),
+        (9.9996e-16, "0.000000000000001"),
+    ],
+)
+def test_a_figure_that_rounds_across_a_bound_takes_the_form_of_what_it_shows(
+    value, written
+):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (999999999999999.4, "999,999,999,999,999"),
+        (999999999999998.9, "999,999,999,999,999"),
+        (9.994e-16, "9.994 × 10^-16"),
+        (9.9994e-16, "9.999 × 10^-16"),
+    ],
+)
+def test_a_figure_that_stays_inside_its_bound_keeps_its_form(value, written):
+    assert rt._derivation_figure(value) == written
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        (999999999999999.9, 1e15),
+        (9.99996e-16, 1e-15),
+    ],
+)
+def test_one_displayed_quantity_has_one_form(a, b):
+    assert rt._derivation_figure(a) == rt._derivation_figure(b)

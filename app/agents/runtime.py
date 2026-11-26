@@ -9955,22 +9955,31 @@ def _derivation_figure(value: float) -> str:
     exact = Decimal(repr(float(value)))
     lead = exact.adjusted()
     limit = sys.float_info.dig
+    step = Decimal(1).scaleb(1 - _DERIVATION_SIGNIFICANT)
     if -limit <= lead < limit:
         decimals = max(0, _DERIVATION_SIGNIFICANT - (lead + 1))
         rounded = exact.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
-        figure = f"{rounded:,f}"
-        if "." in figure:
-            figure = figure.rstrip("0").rstrip(".")
-        return figure
-    step = Decimal(1).scaleb(1 - _DERIVATION_SIGNIFICANT)
-    mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
-    if abs(mantissa) >= 10:
-        lead += 1
+    else:
         mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
-    figure = f"{mantissa:f}"
+        if abs(mantissa) >= 10:
+            lead += 1
+            mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
+        rounded = mantissa.scaleb(lead)
+    # The form follows the figure shown, not the float before rounding: a
+    # value that rounds across a bound is written as the figure it rounds to,
+    # so one displayed quantity always has one form.
+    shown = rounded.adjusted()
+    if -limit <= shown < limit:
+        return _derivation_trim(f"{rounded:,f}")
+    mantissa = rounded.scaleb(-shown).quantize(step, rounding=ROUND_HALF_UP)
+    return f"{_derivation_trim(f'{mantissa:f}')} × 10^{shown}"
+
+
+def _derivation_trim(figure: str) -> str:
+    """Drop trailing zeros after the point, and the point when none are left."""
     if "." in figure:
         figure = figure.rstrip("0").rstrip(".")
-    return f"{figure} × 10^{lead}"
+    return figure
 
 
 def _annotate_derivation_mismatches(text: str) -> str:
