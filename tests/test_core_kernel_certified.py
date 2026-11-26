@@ -85,12 +85,18 @@ def test_without_hand_cases_the_kernel_is_not_certified(where, tmp_path, monkeyp
     assert run_calculation(_KERNEL, {"quantity": 2, "unit_rate": 9})["certified"] is False
 
 
-@pytest.mark.parametrize("neighbour", ["cost_per_area", "resource_line_cost"])
-def test_a_neighbour_without_its_own_standard_and_cases_is_not_certified(neighbour):
-    spec = fr.get(neighbour)
-    assert spec is not None
-    assert not fr.hand_value_cases(neighbour)
-    assert not fr.certified(neighbour)
+@pytest.mark.parametrize("pick", [0, -1])
+def test_the_core_hand_file_certifies_no_other_formula(pick, tmp_path, monkeypatch):
+    """With only the core hand file read, a different registered formula --
+    the first and the last by name -- has no case and is not certified."""
+    (tmp_path / "cases.json").write_text(_CASES.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("FORMULA_HAND_VALUES_DIR", str(tmp_path))
+    fr.clear_hand_value_cache()
+    others = sorted(s.name for s in fr.all_specs() if s.name != _KERNEL)
+    other = others[pick]
+    assert not fr.hand_value_cases(other)
+    assert not fr.certified(other)
+    assert fr.certified(_KERNEL)
 
 
 def test_the_hand_file_names_only_the_core_kernel_and_each_case_is_worked():
