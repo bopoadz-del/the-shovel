@@ -141,29 +141,30 @@ _MOB_FULL = {
 }
 
 
-def test_mobilization_all_items_with_remote_factor():
-    out = mobilization_cost_estimate(50, 12, remote_area_factor=1.2, **_MOB_FULL)
-    # monthly: (100+300+50+20) x 50 x 1.2 = 28,200 ; x 12 = 338,400
-    assert out["recurring_monthly"] == 28200
-    assert out["total_recurring"] == 338400
-    # fixed: (20,000+80,000+10,000+5,000 + IT 50x10x12=6,000 + 15,000) x 1.2 = 163,200
-    assert out["total_fixed"] == 163200
-    assert out["grand_total"] == 501600
-    # offices line: (20,000 + 100x50x12) x 1.2 = 96,000
-    assert out["breakdown"]["offices"] == 96000
+_MOB_OFFICES_ONLY = {
+    "include_camp": False, "include_transport": False, "include_safety_medical": False,
+    "office_rate_per_person_month": 150, "it_rate_per_person_month": 25,
+    "office_setup_cost": 10000, "warehouse_equipment_cost": 4000, "demobilization_cost": 3000,
+}
+
+
+@pytest.mark.parametrize("n,months,kw,monthly,recurring,fixed,total,offices", [
+    # (100+300+50+20) x 50 x 1.2 = 28,200/month ; x12 = 338,400
+    # fixed (20,000+80,000+10,000+5,000 + IT 50x10x12=6,000 + 15,000) x 1.2 = 163,200
+    # offices line (20,000 + 100x50x12) x 1.2 = 96,000
+    (50, 12, {**_MOB_FULL, "remote_area_factor": 1.2}, 28200, 338400, 163200, 501600, 96000),
+    # 150 x 20 = 3,000/month ; x6 = 18,000 ; fixed 10,000+3,000+20x25x6=3,000+4,000 = 20,000
+    # offices line 10,000 + 150x20x6 = 28,000
+    (20, 6, _MOB_OFFICES_ONLY, 3000, 18000, 20000, 38000, 28000),
+])
+def test_mobilization_totals(n, months, kw, monthly, recurring, fixed, total, offices):
+    out = mobilization_cost_estimate(n, months, **kw)
+    assert out["recurring_monthly"] == monthly
+    assert out["total_recurring"] == recurring
+    assert out["total_fixed"] == fixed
+    assert out["grand_total"] == total
+    assert out["breakdown"]["offices"] == offices
     assert sum(out["breakdown"].values()) == out["grand_total"]
-
-
-def test_mobilization_offices_only_no_factor():
-    out = mobilization_cost_estimate(
-        20, 6, include_camp=False, include_transport=False, include_safety_medical=False,
-        office_rate_per_person_month=150, it_rate_per_person_month=25,
-        office_setup_cost=10000, warehouse_equipment_cost=4000, demobilization_cost=3000)
-    # monthly 150x20 = 3,000 ; x6 = 18,000 ; fixed 10,000+3,000+20x25x6=3,000+4,000 = 20,000
-    assert out["total_recurring"] == 18000
-    assert out["total_fixed"] == 20000
-    assert out["grand_total"] == 38000
-    assert out["breakdown"]["camp"] == 0
 
 
 @pytest.mark.parametrize("drop", ["camp_rate_per_person_month", "demobilization_cost"])
@@ -181,9 +182,12 @@ def test_mobilization_excluded_item_needs_no_rate():
 
 
 # --- next_ncr_status: the procedure's status sequence ------------------------
-def test_ncr_sequence_is_the_procedure_record():
+@pytest.mark.parametrize("pos,status", [(0, "RAISED"), (4, "APPROVED"), (7, "CLOSED")])
+def test_ncr_sequence_is_the_procedure_record(pos, status):
     from app.core.construction_knowledge import NCR_WORKFLOW_SEQUENCE
-    assert NCR_WORKFLOW_SEQUENCE == _procedure("non_conformance")["statuses"]
+    record = _procedure("non_conformance")["statuses"]
+    assert NCR_WORKFLOW_SEQUENCE == record
+    assert NCR_WORKFLOW_SEQUENCE[pos] == status
 
 
 @pytest.mark.parametrize("given,want", [
@@ -314,11 +318,15 @@ def test_resource_line_with_material(q, out_d, rate, mat, plant, days, lab, pl, 
     assert out["total_is_partial"] is False
 
 
-def test_resource_line_without_material_is_partial():
-    out = resource_line_cost(240, 16, 350)
+@pytest.mark.parametrize("q,out_d,rate,total", [
+    (240, 16, 350, 5250.0),     # 240/16 x 350
+    (100, 5, 200, 4000.0),      # 100/5 x 200
+])
+def test_resource_line_without_material_is_partial(q, out_d, rate, total):
+    out = resource_line_cost(q, out_d, rate)
     assert out["material_cost"] == "NO SOURCED RATE"
     assert out["total_is_partial"] is True
-    _close(out["total_cost"], 5250.0)
+    _close(out["total_cost"], total)
 
 
 @pytest.mark.parametrize("out_d,rate", [(0, 400), (20, 0)])
@@ -327,9 +335,19 @@ def test_resource_line_refuses_a_missing_output_or_rate(out_d, rate):
 
 
 # --- score_risk: P x I, bands from the risk procedure ------------------------
-def test_risk_bands_are_the_procedure_record():
+@pytest.mark.parametrize("band,low,high,low_pi,high_pi", [
+    ("green", 1, 4, (1, 1), (2, 2)),
+    ("amber", 5, 9, (1, 5), (3, 3)),
+    ("red", 10, 25, (2, 5), (5, 5)),
+])
+def test_risk_bands_are_the_procedure_record(band, low, high, low_pi, high_pi):
     th = _procedure("risk_management")["scoring"]["thresholds"]
-    assert th == {"green": [1, 4], "amber": [5, 9], "red": [10, 25]}
+    assert th[band] == [low, high]
+    # the code gives this band at both ends of the recorded range
+    for (p, i), score in ((low_pi, low), (high_pi, high)):
+        out = score_risk(p, i)
+        assert out["score"] == score
+        assert out["band"] == band.upper()
 
 
 @pytest.mark.parametrize("p,i,score,band,action", [
@@ -352,26 +370,23 @@ def test_risk_refuses_a_rating_outside_1_to_5(p, i):
 
 
 # --- supervision_ratio: ceil(quantity / project ratio) -----------------------
-def test_supervision_two_trades():
-    out = supervision_ratio(concrete_m3=12000, area_m2=30000,
-                            concrete_m3_per_supervisor=2500, area_m2_per_supervisor=10000,
-                            supervisors_per_hse_officer=4, staff_per_document_controller=6)
-    # ceil(12000/2500)=5 ; 30000/10000=3 ; total 8 ; HSE ceil(8/4)=2 ; DC ceil(8/6)=2
-    assert out["civil_supervisors"] == 5
-    assert out["general_supervisors"] == 3
-    assert out["total_supervisors"] == 8
-    assert out["hse_officers"] == 2
-    assert out["document_controllers"] == 2
-    assert out["total_supervision_staff"] == 12
-
-
-def test_supervision_steel_only():
-    out = supervision_ratio(structural_steel_t=900, steel_t_per_supervisor=400,
-                            supervisors_per_hse_officer=7, staff_per_document_controller=2)
+@pytest.mark.parametrize("kw,want", [
+    # ceil(12000/2500)=5 ; 30000/10000=3 ; total 8 ; HSE ceil(8/4)=2 ; DC ceil(8/6)=2 ; 12
+    ({"concrete_m3": 12000, "area_m2": 30000, "concrete_m3_per_supervisor": 2500,
+      "area_m2_per_supervisor": 10000, "supervisors_per_hse_officer": 4,
+      "staff_per_document_controller": 6},
+     {"civil_supervisors": 5, "general_supervisors": 3, "total_supervisors": 8,
+      "hse_officers": 2, "document_controllers": 2, "total_supervision_staff": 12}),
     # ceil(900/400)=3 ; HSE ceil(3/7)=1 ; DC ceil(3/2)=2 ; 6
-    assert out["structural_supervisors"] == 3
-    assert out["hse_officers"] == 1
-    assert out["total_supervision_staff"] == 6
+    ({"structural_steel_t": 900, "steel_t_per_supervisor": 400,
+      "supervisors_per_hse_officer": 7, "staff_per_document_controller": 2},
+     {"structural_supervisors": 3, "civil_supervisors": 0, "total_supervisors": 3,
+      "hse_officers": 1, "document_controllers": 2, "total_supervision_staff": 6}),
+])
+def test_supervision_staff(kw, want):
+    out = supervision_ratio(**kw)
+    for key, value in want.items():
+        assert out[key] == value, key
 
 
 @pytest.mark.parametrize("kw,missing", [
@@ -384,8 +399,9 @@ def test_supervision_refuses_a_missing_ratio(kw, missing):
     assert missing in out["needs_input"]
 
 
-def test_supervision_nothing_given_is_zero():
-    out = supervision_ratio()
+@pytest.mark.parametrize("kw", [{}, {"concrete_m3": 0, "area_m2": 0}])
+def test_supervision_nothing_given_is_zero(kw):
+    out = supervision_ratio(**kw)
     assert out["total_supervision_staff"] == 0
 
 
