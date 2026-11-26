@@ -13,12 +13,13 @@ second way:
 * PDF bills: :func:`app.core.bill_table_geometry.extract_bill_rows`.
 
 Each table gets one of four reconciliation states (:func:`reconcile_table`),
-from the figures the table itself prints. :func:`rows_query` answers filter,
-lookup, sum, count and compare over the rows with the arithmetic in code,
-and every answer names the rows it used.
+from the total the document prints for it. :func:`rows_query` answers
+filter, lookup, sum, count and compare over the rows with the arithmetic in
+code, compares typed cell values, and every answer names the rows it used.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -26,14 +27,13 @@ from typing import Any
 
 from app.core.bill_table_geometry import BillRow, check_row, parse_number
 
-#: Every check the table makes possible agrees, and there is at least one:
-#: a row stating quantity, rate and amount, or a printed total the amounts
-#: sum to (within the rounding of the printed figures).
+#: The amounts of the rows read add up to the total the document prints, to
+#: the document's own rounding. Nothing else is RECONCILED.
 RECONCILED = "RECONCILED"
-#: Rows were read, but no row states quantity, rate and amount together and
-#: no printed total was given: nothing in the table can be checked.
+#: Rows were read but the document prints no total for the table: whatever
+#: its rows say, the table as read cannot be checked against the document.
 UNCHECKED = "UNCHECKED"
-#: At least one check the table makes possible disagrees.
+#: A printed total exists and the amounts read do not add up to it.
 FAILED = "FAILED"
 #: The reader returned no row for the table.
 NOT_READ = "NOT READ"
@@ -129,7 +129,12 @@ def rows_from_bill(document_id: str, rows: Sequence[BillRow], table_no: int = 1)
 
 @dataclass(frozen=True)
 class TableCheck:
-    """The reconciliation of one table: its state and the counts behind it."""
+    """The reconciliation of one table: its state and the counts behind it.
+
+    ``checked``/``failed`` count the rows stating quantity, rate and amount
+    and those whose arithmetic disagrees; they are reported, the state does
+    not rest on them.
+    """
 
     state: str
     rows: int
@@ -139,43 +144,54 @@ class TableCheck:
     total_of_rows: float | None = None
 
 
-def reconcile_table(rows: Sequence[DocRow], printed_total: float | None = None) -> TableCheck:
-    """The state of one table from the figures it prints.
+def reconcile_table(
+    rows: Sequence[DocRow], printed_total: float | str | None = None,
+) -> TableCheck:
+    """The state of one table against the total the document prints for it.
 
-    A row is checkable when it states quantity, rate and amount; it fails when
-    they disagree (:func:`check_row`). When ``printed_total`` is given, the
-    amounts of the rows must sum to it within the rounding the printed
-    figures allow (:func:`_rounding_allowance`), never a share of the total:
-    a total short by one row's amount is FAILED. A printed total that is not
-    a finite number is never agreed with.
+    * no rows: NOT READ;
+    * no printed total: UNCHECKED;
+    * RECONCILED only when the amounts of the rows add up to the printed
+      total within half a unit of the last digit the document prints
+      (:func:`_rounding_allowance`); otherwise FAILED. One row's amount
+      missing from the read is therefore FAILED, whatever the row count.
+
+    ``printed_total`` given as the printed text is held to its own last
+    digit (``"6,000"`` to 0.5, ``"6,000.00"`` to 0.005); given as a number,
+    to the finest digit the table prints, in its amounts or in the number.
+    A printed total that is not a finite number is never agreed with.
     """
     if not rows:
-        return TableCheck(NOT_READ, 0, 0, 0, printed_total)
+        return TableCheck(NOT_READ, 0, 0, 0, _as_number(printed_total))
     checked = failed = 0
     for r in rows:
         if all(r.figure(f) is not None for f in FIGURE_FIELDS):
             checked += 1
             failed += 1 if check_row(dict(r.fields)) else 0
-    amounts = [a for a in (r.figure("total") for r in rows) if a is not None]
-    total_of_rows = sum(amounts) if amounts else None
-    total_ok: bool | None = None
-    if printed_total is not None:
-        # A non-finite printed total is never within a finite allowance.
-        total_ok = (total_of_rows is not None
-                    and abs(total_of_rows - printed_total) <= _rounding_allowance(
-                        [r.fields.get("total", "") for r in rows if r.figure("total") is not None],
-                        printed_total))
-    if failed or total_ok is False:
-        state = FAILED
-    elif checked or total_ok:
+    with_amount = [r for r in rows if r.figure("total") is not None]
+    total_of_rows = sum(r.figure("total") for r in with_amount) if with_amount else None
+    total = _as_number(printed_total)
+    if printed_total is None:
+        state = UNCHECKED
+    elif (total is not None and total_of_rows is not None and math.isfinite(total)
+          and abs(total_of_rows - total) <= _rounding_allowance(
+              [r.fields.get("total", "") for r in with_amount], printed_total)):
         state = RECONCILED
     else:
-        state = UNCHECKED
-    return TableCheck(state, len(rows), checked, failed, printed_total, total_of_rows)
+        state = FAILED
+    return TableCheck(state, len(rows), checked, failed, total, total_of_rows)
+
+
+def _as_number(value: float | str | None) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        return parse_number(value)
+    return float(value)
 
 
 def reconcile_tables(
-    rows: Iterable[DocRow], printed_totals: Mapping[int, float] | None = None,
+    rows: Iterable[DocRow], printed_totals: Mapping[int, float | str] | None = None,
 ) -> dict[int, TableCheck]:
     """:func:`reconcile_table` for every ``table_no`` in ``rows``."""
     by_table: dict[int, list[DocRow]] = {}
@@ -196,46 +212,81 @@ def _half_unit(text: str) -> float:
     return 0.5 * 10.0 ** -(len(frac) if dot and frac else 0)
 
 
-def _rounding_allowance(amounts: Sequence[str], printed_total: float) -> float:
-    """How far a sum of printed ``amounts`` may sit from ``printed_total``
-    by rounding alone: half a unit of each figure's own last printed digit."""
-    total_half = 0.5 if float(printed_total).is_integer() else 0.005
-    return sum(_half_unit(a) for a in amounts) + total_half
+def _decimals(text: str) -> int:
+    """How many digits ``text`` prints after its decimal point."""
+    digits = re.sub(r"[^0-9.]", "", text or "")
+    _, dot, frac = digits.rpartition(".")
+    return len(frac) if dot and frac else 0
+
+
+def _rounding_allowance(amounts: Sequence[str], printed_total: float | str) -> float:
+    """How far the sum of the amounts read may sit from the printed total:
+    half a unit of the last digit the document prints for the total. As
+    text, the total's own digits say it; as a number, the finest digit the
+    amounts or the number print. It does not grow with the row count."""
+    if isinstance(printed_total, str):
+        return _half_unit(printed_total)
+    number = float(printed_total)
+    places = [_decimals(a) for a in amounts]
+    if not number.is_integer():
+        places.append(_decimals(repr(number)))
+    return 0.5 * 10.0 ** -max(places, default=0)
 
 
 # ── rows_query ──────────────────────────────────────────────────────────────
 
 OPERATIONS = ("filter", "lookup", "sum", "count", "compare")
+#: How a ``where`` value meets a cell. ``exact`` (the default) compares the
+#: typed value; ``contains`` is a partial text match, used only when asked
+#: for by name and named in the result.
+MATCHES = ("exact", "contains")
 
 
-def _text_of(row: DocRow, column: str) -> str:
+def _cells(row: DocRow, column: str) -> list[str]:
+    """The cell(s) ``column`` names: the path is the whole path and each of
+    its headings; any other column is its one cell (absent: none)."""
     if column == "path":
-        return " > ".join(row.path)
+        return [" > ".join(row.path), *row.path] if row.path else []
     if column in row.fields:
-        return row.fields[column]
-    return row.extra.get(column, "")
+        return [row.fields[column]]
+    if column in row.extra:
+        return [row.extra[column]]
+    return []
 
 
-#: A word or a number; ``.``, ``/`` and ``-`` between letters or digits stay
-#: inside it, so an item reference like ``1.10`` is one token.
-_TOKEN_RE = re.compile(r"[^\W_]+(?:[./-][^\W_]+)*")
+def _norm(text: Any) -> str:
+    """Case and spacing removed: ``"BILL No. 1"`` and ``"bill no.1"`` meet."""
+    return re.sub(r"\s+", "", str(text)).casefold()
 
 
-def _tokens(text: str) -> list[str]:
-    return _TOKEN_RE.findall(str(text).casefold())
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(value) else None
+    return parse_number(str(value))
 
 
-def _matches(row: DocRow, where: Mapping[str, str]) -> bool:
-    """Every ``column -> text`` in ``where`` appears in the row's cell as
-    whole tokens in order, case-insensitively: ``Bill 1`` matches ``Bill 1 >
-    Earthworks`` but not ``Bill 10``. An empty ``where`` keeps every row; a
-    value with no token matches nothing."""
-    for k, v in where.items():
-        want, have = _tokens(v), _tokens(_text_of(row, k))
-        n = len(want)
-        if not n or not any(have[i:i + n] == want for i in range(len(have) - n + 1)):
-            return False
-    return True
+def _cell_matches(column: str, cell: str, value: Any, match: str) -> bool:
+    if match == "exact" and column in FIGURE_FIELDS:
+        want, have = _number(value), parse_number(cell)
+        return want is not None and have is not None and want == have
+    want = _norm(value)
+    if not want:
+        return False
+    return want in _norm(cell) if match == "contains" else want == _norm(cell)
+
+
+def _matches(row: DocRow, where: Mapping[str, Any], match: str = "exact") -> bool:
+    """Every ``column -> value`` in ``where`` meets one of the row's cells for
+    that column (:func:`_cells`). Exact: a figure column (quantity, rate,
+    total) compares numbers, so ``200`` is not ``1,200`` and ``1200`` is
+    ``1,200.00``; any other column compares the whole cell with case and
+    spacing removed, so ``Bill 1`` is not ``Bill 10``. ``contains`` is a
+    partial text match on any column. An empty ``where`` keeps every row; a
+    value that is empty, or not a number on a figure column, matches nothing."""
+    return all(any(_cell_matches(k, c, v, match) for c in _cells(row, k))
+               for k, v in where.items())
 
 
 def rows_query(
@@ -244,6 +295,7 @@ def rows_query(
     where: Mapping[str, str] | None = None,
     column: str = "total",
     other: Mapping[str, str] | None = None,
+    match: str = "exact",
 ) -> dict[str, Any]:
     """Answer one question over ``rows`` with the arithmetic in code.
 
@@ -255,13 +307,27 @@ def rows_query(
       the difference (first minus second); an error when either side is not
       given.
 
+    ``where`` and ``other`` are matched as :func:`_matches` says; ``match``
+    is ``exact`` unless ``contains`` is asked for by name, and every result
+    that is not an error says which was used.
+
     Every result carries ``rows``: the locators of the rows it used. A row
     whose ``column`` prints no number is named under ``skipped``, never
     counted as zero.
     """
     if operation not in OPERATIONS:
         return {"error": f"unknown operation {operation!r}", "operations": list(OPERATIONS)}
-    picked = [r for r in rows if _matches(r, where or {})]
+    if match not in MATCHES:
+        return {"error": f"unknown match {match!r}", "matches": list(MATCHES), "rows": []}
+    out = _rows_query(rows, operation, where, column, other, match)
+    if "error" not in out:
+        out["match"] = match
+    return out
+
+
+def _rows_query(rows: Sequence[DocRow], operation: str, where: Mapping[str, str] | None,
+                column: str, other: Mapping[str, str] | None, match: str) -> dict[str, Any]:
+    picked = [r for r in rows if _matches(r, where or {}, match)]
 
     def summed(rs: Sequence[DocRow]) -> dict[str, Any]:
         used = [r for r in rs if r.figure(column) is not None]
@@ -287,7 +353,7 @@ def rows_query(
     missing = [name for name, side in (("where", where), ("other", other)) if not side]
     if missing:
         return {"error": f"compare needs both sides; missing: {', '.join(missing)}", "rows": []}
-    second = [r for r in rows if _matches(r, other or {})]
+    second = [r for r in rows if _matches(r, other or {}, match)]
     a, b = summed(picked), summed(second)
     diff = None if a["value"] is None or b["value"] is None else a["value"] - b["value"]
     return {"first": a, "second": b, "difference": diff,

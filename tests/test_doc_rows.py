@@ -19,21 +19,25 @@ def _row(table, n, desc, qty="", rate="", total="", path=("Bill A",), unit="m3")
 
 # ── reconciliation states ──────────────────────────────────────────────────
 
-@pytest.mark.parametrize("rows", [
-    [_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "10")],
-    [_row(1, 1, "Formwork", "3", "100", "300.00")],
+@pytest.mark.parametrize("rows, printed", [
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "10")], 60.0),
+    ([_row(1, 1, "Formwork", "3", "100", "300.00")], "300.00"),
 ])
-def test_every_checkable_row_agrees_reconciles(rows):
-    assert dr.reconcile_table(rows).state == dr.RECONCILED
+def test_every_checkable_row_agrees_reconciles(rows, printed):
+    assert dr.reconcile_table(rows, printed).state == dr.RECONCILED
+    assert dr.reconcile_table(rows).state == dr.UNCHECKED
 
 
-@pytest.mark.parametrize("rows, failed", [
-    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "11")], 1),
-    ([_row(1, 1, "Formwork", "3", "100", "200"), _row(1, 2, "Rebar", "2", "7", "15")], 2),
+@pytest.mark.parametrize("rows, failed, printed, state", [
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "11")], 1,
+     61.0, dr.RECONCILED),
+    ([_row(1, 1, "Formwork", "3", "100", "200"), _row(1, 2, "Rebar", "2", "7", "15")], 2,
+     214.0, dr.FAILED),
 ])
-def test_one_disagreeing_row_fails_the_table(rows, failed):
-    check = dr.reconcile_table(rows)
-    assert check.state == dr.FAILED
+def test_one_disagreeing_row_fails_the_table(rows, failed, printed, state):
+    # Row arithmetic is counted and reported; the state is the printed total's.
+    check = dr.reconcile_table(rows, printed)
+    assert check.state == state
     assert check.failed == failed
     assert check.checked == 2
 
@@ -74,9 +78,9 @@ def test_printed_total_that_disagrees_fails(rows, printed):
 
 @pytest.mark.parametrize("rows, totals, states", [
     ([_row(1, 1, "Excavate", "10", "5", "50"), _row(2, 1, "Backfill", "4", "2.5", "11")],
-     {3: 75.0}, {1: dr.RECONCILED, 2: dr.FAILED, 3: dr.NOT_READ}),
+     {1: 50.0, 3: 75.0}, {1: dr.RECONCILED, 2: dr.UNCHECKED, 3: dr.NOT_READ}),
     ([_row(1, 1, "Formwork", "3", "100", "350"), _row(2, 1, "Lump sum", total="40")],
-     {2: 40.0}, {1: dr.FAILED, 2: dr.RECONCILED}),
+     {1: 300.0, 2: 40.0}, {1: dr.FAILED, 2: dr.RECONCILED}),
 ])
 def test_tables_reconcile_separately_and_a_total_with_no_rows_is_not_read(rows, totals, states):
     out = dr.reconcile_tables(rows, totals)
@@ -93,13 +97,13 @@ ROWS = [
 ]
 
 
-@pytest.mark.parametrize("where, value, used", [
-    ({"path": "Earthworks"}, 60.0, [1, 2]),
-    ({"path": "Bill 3"}, 160.0, [3]),
-    ({"description": "trench"}, 60.0, [1, 2]),
+@pytest.mark.parametrize("where, value, used, match", [
+    ({"path": "Earthworks"}, 60.0, [1, 2], "exact"),
+    ({"path": "Bill 3"}, 160.0, [3], "exact"),
+    ({"description": "trench"}, 60.0, [1, 2], "contains"),
 ])
-def test_sum_adds_the_matching_amounts_and_names_the_rows(where, value, used):
-    out = dr.rows_query(ROWS, "sum", where)
+def test_sum_adds_the_matching_amounts_and_names_the_rows(where, value, used, match):
+    out = dr.rows_query(ROWS, "sum", where, match=match)
     assert out["value"] == pytest.approx(value)
     assert [r["row_no"] for r in out["rows"]] == used
 
@@ -107,7 +111,7 @@ def test_sum_adds_the_matching_amounts_and_names_the_rows(where, value, used):
 @pytest.mark.parametrize("where, value, skipped", [
     ({"path": "Concrete"}, 160.0, [4]),
     ({"path": "Bill 3"}, 160.0, [4]),
-    ({"description": "Provisional"}, None, [4]),
+    ({"description": "Provisional item"}, None, [4]),
     ({"path": "Earthworks"}, 60.0, []),
 ])
 def test_sum_names_a_row_without_a_figure_as_skipped_not_zero(where, value, skipped):
@@ -121,7 +125,8 @@ def test_count(where, n):
     assert dr.rows_query(ROWS, "count", where)["value"] == n
 
 
-@pytest.mark.parametrize("where, row_no", [({"description": "Blinding"}, 3), ({"description": "Backfill"}, 2)])
+@pytest.mark.parametrize("where, row_no", [({"description": "Blinding concrete"}, 3),
+                                           ({"description": "backfill  TRENCH"}, 2)])
 def test_lookup_returns_the_one_row_with_its_page(where, row_no):
     out = dr.rows_query(ROWS, "lookup", where)
     assert out["row"]["row_no"] == row_no
@@ -130,13 +135,13 @@ def test_lookup_returns_the_one_row_with_its_page(where, row_no):
 
 @pytest.mark.parametrize("where", [{"description": "trench"}, {"description": "none such"}])
 def test_lookup_refuses_when_not_exactly_one_row(where):
-    out = dr.rows_query(ROWS, "lookup", where)
+    out = dr.rows_query(ROWS, "lookup", where, match="contains")
     assert "error" in out and "row" not in out
 
 
 @pytest.mark.parametrize("a, b, diff", [
     ({"path": "Bill 3"}, {"path": "Bill 2"}, 100.0),
-    ({"description": "Excavate"}, {"description": "Backfill"}, 40.0),
+    ({"description": "Excavate trench"}, {"description": "Backfill trench"}, 40.0),
 ])
 def test_compare_gives_first_minus_second(a, b, diff):
     out = dr.rows_query(ROWS, "compare", a, other=b)
@@ -174,10 +179,11 @@ NUMBERED = [
     ({"path": "bill 10"}, 300.0, 1),
     ({"path": "BILL 1 > site"}, 200.0, 2),
     ({"description": "REBAR"}, 400.0, 1),
-    ({"path": "Bill"}, 1400.0, 5),
+    ({"path": "Bill"}, None, 0),
 ])
 def test_where_matches_whole_tokens_not_a_prefix(where, value, count):
-    assert dr.rows_query(NUMBERED, "sum", where)["value"] == pytest.approx(value)
+    got = dr.rows_query(NUMBERED, "sum", where)["value"]
+    assert got == (pytest.approx(value) if value is not None else None)
     assert dr.rows_query(NUMBERED, "count", where)["value"] == count
 
 
@@ -197,8 +203,8 @@ def test_where_value_without_a_token_matches_nothing(value):
 @pytest.mark.parametrize("amounts, printed, state", [
     (["500000", "495500"], 1_000_000.0, dr.FAILED),      # one row's worth missing
     (["400", "600"], 1004.0, dr.FAILED),
-    (["1000", "2000", "3000"], 6001.0, dr.RECONCILED),   # three halves + the total's half
-    (["1000", "2000", "3000"], 6003.0, dr.FAILED),
+    (["1000", "2000", "3000"], 6000.0, dr.RECONCILED),
+    (["1000", "2000", "3000"], 6001.0, dr.FAILED),       # the allowance does not grow per row
     (["100.25", "200.25"], 300.5, dr.RECONCILED),
     (["100.25", "200.25"], 300.52, dr.FAILED),
     (["400", "600"], float("inf"), dr.FAILED),
@@ -222,24 +228,25 @@ def test_compare_without_both_sides_is_an_error_not_a_figure(where, other, missi
 
 @pytest.mark.parametrize("where, n", [({"description": "trench"}, 2), ({"description": "blinding"}, 1)])
 def test_filter_counts_only_the_rows_that_match(where, n):
-    assert dr.rows_query(ROWS, "filter", where)["count"] == n
+    assert dr.rows_query(ROWS, "filter", where, match="contains")["count"] == n
 
 
-@pytest.mark.parametrize("bill, expect, state", [
+@pytest.mark.parametrize("bill, expect, printed, state", [
     ([BillRow(section="Earthworks", source_page=7, path=("Bill 2", "Earthworks"),
               fields={"description": "Excavate", "quantity": "10", "rate": "5", "total": "50"}),
       BillRow(section="Concrete", source_page=9,
               fields={"description": "Blinding", "quantity": "2", "rate": "80", "total": "150"},
               check="qty x rate != amount")],
-     [(7, ("Bill 2", "Earthworks"), ""), (9, ("Concrete",), "qty x rate != amount")], dr.FAILED),
+     [(7, ("Bill 2", "Earthworks"), ""), (9, ("Concrete",), "qty x rate != amount")],
+     210.0, dr.FAILED),
     ([BillRow(section="", source_page=3,
               fields={"description": "Provisional sum", "total": "500"})],
-     [(3, (), "")], dr.UNCHECKED),
+     [(3, (), "")], None, dr.UNCHECKED),
 ])
-def test_bill_rows_keep_page_path_and_check(bill, expect, state):
+def test_bill_rows_keep_page_path_and_check(bill, expect, printed, state):
     rows = dr.rows_from_bill("doc-b", bill)
     assert [(r.page, r.path, r.check) for r in rows] == expect
-    assert dr.reconcile_table(rows).state == state
+    assert dr.reconcile_table(rows, printed).state == state
 
 
 # ── locator: a citation names what the row has, and nothing it lacks ──────
@@ -273,18 +280,18 @@ def _xlsx(tmp_path, name, sheets):
 HEADER = ["Item", "Description", "Unit", "Qty", "Rate", "Amount"]
 
 
-@pytest.mark.parametrize("sheets, states, total", [
+@pytest.mark.parametrize("sheets, printed, states, total", [
     ({"Bill 1": [["BILL No. 1 - SITE WORKS"], HEADER,
                  ["A", "Excavate to reduce levels", "m3", 120, 15, 1800],
                  ["B", "Fill with imported material", "m3", 40, 22.5, 900]]},
-     {1: dr.RECONCILED}, 2700.0),
+     {1: 2700.0}, {1: dr.RECONCILED}, 2700.0),
     ({"Bill 2": [["BILL No. 2 - CONCRETE"], HEADER,
                  ["A", "Blinding 50 thick", "m2", 300, 12, 3600]],
       "Bill 3": [["BILL No. 3 - MASONRY"], HEADER,
                  ["A", "Blockwork 200 thick", "m2", 50, 40, 2100]]},
-     {1: dr.RECONCILED, 2: dr.FAILED}, 5700.0),
+     {1: 3600.0, 2: 2000.0}, {1: dr.RECONCILED, 2: dr.FAILED}, 5700.0),
 ])
-def test_spreadsheet_public_path_rows_match_chunks(tmp_path, sheets, states, total):
+def test_spreadsheet_public_path_rows_match_chunks(tmp_path, sheets, printed, states, total):
     from app.core import doc_index
 
     path = _xlsx(tmp_path, "priced.xlsx", sheets)
@@ -297,7 +304,7 @@ def test_spreadsheet_public_path_rows_match_chunks(tmp_path, sheets, states, tot
         assert f"Item: {r.fields['description']}" in chunk
         assert f"Sheet: {r.sheet}" in chunk
         assert r.sheet_row is not None and r.sheet_row >= 3   # banner + header above
-    assert {t: c.state for t, c in dr.reconcile_tables(rows).items()} == states
+    assert {t: c.state for t, c in dr.reconcile_tables(rows, printed).items()} == states
     assert dr.rows_query(rows, "sum")["value"] == pytest.approx(total)
 
 
@@ -353,3 +360,111 @@ def test_spreadsheet_keeps_unmapped_cells_in_extra(tmp_path, remark):
     path = _xlsx(tmp_path, "r.xlsx", {"S1": sheet})
     (row,) = dr.rows_from_spreadsheet("d", doc_index.spreadsheet_rows(path, "r.xlsx", ".xlsx"))
     assert dict(row.extra) == {"Item": "A", "Remarks": remark}
+
+
+# ── second verdict: RECONCILED is the printed total only; where is typed ──
+
+def _amounts(amounts):
+    return [_row(1, i + 1, f"Lump sum {i}", total=a) for i, a in enumerate(amounts)]
+
+
+@pytest.mark.parametrize("amounts, printed", [
+    (["1000"] * 100 + ["40"], 100_040.0),              # integer figures
+    (["1000.00"] * 100 + ["0.95"], 100_000.95),        # two-decimal figures
+])
+def test_a_table_short_by_one_row_fails_and_the_whole_table_reconciles(amounts, printed):
+    assert dr.reconcile_table(_amounts(amounts[:-1]), printed).state == dr.FAILED
+    assert dr.reconcile_table(_amounts(amounts), printed).state == dr.RECONCILED
+
+
+@pytest.mark.parametrize("amounts, printed, state", [
+    (["1000.00"] * 100, 100_001.0, dr.FAILED),          # figures print cents: a 1.00 gap is not rounding
+    (["1000.00"] * 100, 100_000.0, dr.RECONCILED),
+    (["1000", "2000", "3000"], 6000.5, dr.FAILED),      # the total prints tenths
+    (["1000", "2000", "3000"], 6000.0, dr.RECONCILED),
+])
+def test_a_numeric_total_is_held_to_the_finest_digit_the_table_prints(amounts, printed, state):
+    assert dr.reconcile_table(_amounts(amounts), printed).state == state
+
+
+@pytest.mark.parametrize("amounts, printed, state", [
+    (["1000", "2000", "3000.50"], "6,000", dr.RECONCILED),    # the total's own half unit, inclusive
+    (["1000", "2000", "3000.51"], "6,000", dr.FAILED),
+    (["1000", "2000", "3000.50"], "6,000.00", dr.FAILED),     # same sum, total printed to cents
+    (["1000", "2000", "3000.004"], "6,000.00", dr.RECONCILED),
+])
+def test_a_printed_total_as_text_is_held_to_its_own_last_digit(amounts, printed, state):
+    assert dr.reconcile_table(_amounts(amounts), printed).state == state
+
+
+@pytest.mark.parametrize("rows, failed", [
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "10")], 0),
+    ([_row(1, 1, "Excavate", "10", "5", "50"), _row(1, 2, "Backfill", "4", "2.5", "11")], 1),
+])
+def test_without_a_printed_total_a_table_is_unchecked_whatever_its_rows_say(rows, failed):
+    check = dr.reconcile_table(rows)
+    assert (check.state, check.checked, check.failed) == (dr.UNCHECKED, 2, failed)
+
+
+@pytest.mark.parametrize("text, half", [("100.25", 0.005), ("7.5", 0.05), ("1,200", 0.5)])
+def test_half_unit_is_half_the_last_printed_digit(text, half):
+    assert dr._half_unit(text) == pytest.approx(half)
+
+
+FIGURES = [
+    _row(1, 1, "Pipe", "1", "1,200", "1000", path=("Bill 1", "Section 2")),
+    _row(1, 2, "Valve", "1", "200", "50", path=("Bill 2", "Section 1")),
+    _row(1, 3, "Valve spindle", "2", "1 200.00", "2400", path=("BILL No.1",)),
+]
+
+
+@pytest.mark.parametrize("where, rows", [
+    ({"rate": "200"}, [2]),                  # not the 200 inside 1,200
+    ({"rate": "1200"}, [1, 3]),              # one number however it is grouped
+    ({"rate": "1,200.00"}, [1, 3]),
+    ({"total": "50.0"}, [2]),
+    ({"rate": "abc"}, []),                   # a figure column never matches text
+])
+def test_a_figure_column_compares_numbers(where, rows):
+    got = dr.rows_query(FIGURES, "filter", where)
+    assert [r["row_no"] for r in got["rows"]] == rows
+    assert got["match"] == "exact"
+
+
+@pytest.mark.parametrize("where, rows", [
+    ({"path": "Bill 1"}, [1]),               # one heading, whole
+    ({"path": "1 Bill"}, []),                # order counts
+    ({"path": "bill   1 > SECTION 2"}, [1]),  # the whole path, case and spacing normalised
+    ({"path": "Section"}, []),               # no partial heading
+    ({"path": "BILL No. 1"}, [3]),           # spacing inside a heading does not count
+    ({"description": "Valve"}, [2]),         # whole cell: not "Valve spindle"
+    ({"description": "valve  SPINDLE"}, [3]),
+])
+def test_a_text_column_compares_the_whole_cell(where, rows):
+    got = dr.rows_query(FIGURES, "filter", where)
+    assert [r["row_no"] for r in got["rows"]] == rows
+
+
+@pytest.mark.parametrize("where, rows", [
+    ({"description": "valve"}, [2, 3]),
+    ({"path": "section"}, [1, 2]),
+])
+def test_contains_is_used_only_when_asked_and_is_reported(where, rows):
+    got = dr.rows_query(FIGURES, "filter", where, match="contains")
+    assert [r["row_no"] for r in got["rows"]] == rows
+    assert got["match"] == "contains"
+    assert dr.rows_query(FIGURES, "count", where)["value"] < len(rows)
+
+
+@pytest.mark.parametrize("match", ["fuzzy", ""])
+def test_unknown_match_is_an_error(match):
+    got = dr.rows_query(FIGURES, "count", {"description": "Valve"}, match=match)
+    assert "error" in got and got["matches"] == list(dr.MATCHES)
+
+
+@pytest.mark.parametrize("value, match", [("", "contains"), ("   ", "contains"), ("", "exact"), (" ", "exact")])
+def test_an_empty_value_matches_no_cell_even_an_empty_one(value, match):
+    rows = [dr.DocRow("d", 1, n, fields={"description": d, "total": "1"}, extra={"Item": ""})
+            for n, d in ((1, "Pipe"), (2, ""))]
+    assert dr.rows_query(rows, "count", {"description": value}, match=match)["value"] == 0
+    assert dr.rows_query(rows, "count", {"Item": value}, match=match)["value"] == 0
