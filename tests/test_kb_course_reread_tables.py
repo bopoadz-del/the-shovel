@@ -89,10 +89,10 @@ def invented_kb(tmp_path, monkeypatch):
     path.write_text(json.dumps(_invented_kb()), encoding="utf-8")
     monkeypatch.setenv("CONSTRUCTION_KB_FILE", str(path))
     monkeypatch.setattr(_knowledge, "_KB_CACHE", None)
-    monkeypatch.setattr(_knowledge, "_KB_MTIME", 0.0)
+    monkeypatch.setattr(_knowledge, "_KB_KEY", None)
     yield path
     monkeypatch.setattr(_knowledge, "_KB_CACHE", None)
-    monkeypatch.setattr(_knowledge, "_KB_MTIME", 0.0)
+    monkeypatch.setattr(_knowledge, "_KB_KEY", None)
 
 
 @pytest.mark.parametrize("rule_id", ["invented.no_such_table", "invented.also_missing"])

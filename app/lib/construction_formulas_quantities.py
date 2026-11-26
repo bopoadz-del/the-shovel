@@ -210,7 +210,7 @@ def format_concrete_volume_line(inner: dict) -> str:
         factor = 1.0 + waste
         net_s = _format_volume_figure(net)
         return (
-            f"Concrete volume including documented {pct:.0f}% waste: "
+            f"Concrete volume including documented {pct:g}% waste: "
             f"{vol_s} m³ (net {net_s} × {factor:g})."
         )
     return f"Concrete volume: {vol_s} m³."

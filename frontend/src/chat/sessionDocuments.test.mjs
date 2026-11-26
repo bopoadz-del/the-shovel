@@ -15,6 +15,8 @@ import {
   sessionDocumentsFor,
   sessionDocumentsLoaded,
   sessionDocumentsView,
+  uploadNotice,
+  uploadSessionFor,
   withSessionId,
 } from './sessionDocuments.js'
 
@@ -155,3 +157,134 @@ for (const sid of [null, '   ']) {
     assert.equal(documentPath('p1', 'd9', '/preview/raw', sid), '/v1/projects/p1/documents/d9/preview/raw')
   })
 }
+
+// The workspace always has a chat open, so "is there a session" cannot pick
+// project vs session. The control the user used picks it: "+ Add to project"
+// sends no session, "+ Upload file" sends the open one.
+for (const sid of ['ws-p1-1000', 'ws-p7-2000']) {
+  test(`a project upload carries no session; a session upload carries ${sid}`, () => {
+    assert.deepEqual(withSessionId(new FakeForm(), uploadSessionFor('project', sid)).fields, [])
+    assert.deepEqual(withSessionId(new FakeForm(), uploadSessionFor('session', sid)).fields,
+      [['session_id', sid]])
+  })
+}
+
+test('only the project target drops the session; no session stays none', () => {
+  for (const target of ['session', 'Project', '', undefined]) {
+    assert.equal(uploadSessionFor(target, 'ws-p1-1000'), 'ws-p1-1000', String(target))
+  }
+  assert.equal(uploadSessionFor('session', null), null)
+  assert.equal(uploadSessionFor('project', null), null)
+})
+
+test('the sidebar has one picker per target, each wired to its own', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+  const wiring = (id) => {
+    const at = src.indexOf(`id="${id}"`)
+    assert.ok(at > 0, id)
+    return src.slice(at, src.indexOf('/>', at))
+  }
+  assert.match(wiring('doc-file-input'), /handleFileChange\(e, 'session'\)/)
+  assert.match(wiring('doc-project-file-input'), /handleFileChange\(e, 'project'\)/)
+  assert.match(src, /withSessionId\(form, uploadSessionFor\(target, sessionId\)\)/)
+})
+
+// The project control does not decide who may index: the server does, and
+// says so on the stored row. The server's card state picks whether the user
+// is told: a file stored outside search, or one that failed, repeats the
+// server's note; a file still waiting to be read (indexing scheduled) or
+// already searchable says nothing.
+const STORED = { state: 'stored', line: 'Stored, not searchable' }
+const FAILED = { state: 'failed', line: 'Failed' }
+for (const [detail, state] of [
+  ["Only an admin adds documents to a project's knowledge base. The file was not indexed.", STORED],
+  ['No text could be read from this file.', FAILED],
+]) {
+  test(`a ${state.state} upload repeats the server note (${detail.slice(0, 20)})`, () => {
+    const doc = {
+      id: 'd1',
+      panel_status: { label: 'Not indexed', detail: `  ${detail} `, status: 'not_indexed' },
+      document_state: state,
+    }
+    assert.equal(uploadNotice(doc), detail)
+  })
+}
+
+// The shape the server returns for an admin's project upload with indexing
+// scheduled in the background: a "Not indexed" panel note with a detail,
+// but the card state says the file is waiting to be read. Not an error.
+for (const [status, detail] of [
+  ['UNVERIFIED', 'This file is stored and has not been added to the project knowledge base.'],
+  ['queued', 'Indexing is queued.'],
+]) {
+  test(`a waiting-to-be-read upload has no notice (${status})`, () => {
+    const doc = {
+      id: 'd9',
+      panel_status: { label: 'Not indexed', detail, status },
+      document_state: { state: 'reading', line: 'Waiting to be read' },
+    }
+    assert.equal(uploadNotice(doc), null)
+    // The same note under a stored card state is shown: the state decides.
+    assert.equal(uploadNotice({ ...doc, document_state: STORED }), detail)
+  })
+}
+
+test('an upload the server holds for search, or a malformed reply, has no notice', () => {
+  const note = { label: 'Not indexed', detail: 'A real note.', status: 'not_indexed' }
+  for (const doc of [
+    { id: 'd1' },
+    { id: 'd1b', document_state: { state: 'searchable', line: 'Searchable' } },
+    { id: 'd1c', panel_status: note, document_state: { state: 'searchable', line: 'Searchable' } },
+    { id: 'd1d', panel_status: note },
+    { id: 'd1e', panel_status: note, document_state: 'stored' },
+    { id: 'd1f', panel_status: note, document_state: { state: 'Stored' } },
+    { id: 'd2', panel_status: null, document_state: STORED },
+    { id: 'd3', panel_status: { label: 'Not indexed', detail: '   ' }, document_state: STORED },
+    { id: 'd4', panel_status: { detail: 7 }, document_state: FAILED },
+    { id: 'd5', panel_status: 'Not indexed', document_state: STORED },
+    null,
+    undefined,
+    'stored',
+  ]) {
+    assert.equal(uploadNotice(doc), null, JSON.stringify(doc))
+  }
+})
+
+test('the project upload shows the server note and its title promises no search', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+  const body = src.slice(src.indexOf('async function handleFileChange('), src.indexOf('function beginReplace('))
+  assert.match(body, /const notice = uploadNotice\(resp\.document\)\s*if \(notice\) \{\s*setUploadError\(notice\)/)
+  const labelAt = src.indexOf('htmlFor="doc-project-file-input"')
+  assert.ok(labelAt > 0)
+  const label = src.slice(labelAt, src.indexOf('+ Add to project', labelAt))
+  assert.match(label, /title=/)
+  assert.doesNotMatch(label, /search/i)
+})
+
+// Each picker opens only from its own label, is off while an upload runs,
+// and is cleared after every pick so the same file can be picked again.
+for (const [id, text] of [['doc-file-input', '+ Upload file'], ['doc-project-file-input', '+ Add to project']]) {
+  test(`the ${text} label opens ${id}, which is off while uploading`, async () => {
+    const fs = await import('node:fs')
+    const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+    const labelAt = src.indexOf(`htmlFor="${id}"`)
+    assert.ok(labelAt > 0, id)
+    const label = src.slice(labelAt, src.indexOf('</label>', labelAt))
+    assert.ok(label.includes(text), label)
+    assert.match(label, /aria-busy=\{uploading\}/)
+    const inputAt = src.indexOf(`id="${id}"`)
+    const input = src.slice(inputAt, src.indexOf('/>', inputAt))
+    assert.match(input, /disabled=\{uploading\}/)
+  })
+}
+
+test('every pick clears its input, so the same file can be picked twice', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+  const body = src.slice(src.indexOf('async function handleFileChange('), src.indexOf('function beginReplace('))
+  const fin = body.slice(body.indexOf('} finally {'))
+  assert.ok(body.indexOf('} finally {') > 0, body)
+  assert.match(fin, /e\.target\.value = ''/)
+})

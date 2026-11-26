@@ -35,8 +35,10 @@ _STATE_PREFIXES = ("Searchable", "Stored, not searchable", "Waiting to be read",
 
 
 def _upload_own(page: Page, tmp_path, docs: dict[str, str]) -> dict[str, str]:
-    """Upload the test's own two files; return name -> document id."""
-    picker = page.locator("#doc-file-input")
+    """Add the test's own two files to the project; return name -> document id.
+    "+ Upload file" attaches to the open chat (W2), and a chat's file is never
+    in the project's list (#451); "+ Add to project" is the project path."""
+    picker = page.locator("#doc-project-file-input")
     ids: dict[str, str] = {}
     for name, body in docs.items():
         path = tmp_path / name

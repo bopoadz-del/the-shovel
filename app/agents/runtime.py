@@ -21,6 +21,7 @@ import bisect
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -9931,6 +9932,55 @@ def derivation_mismatches(text: str) -> list[tuple[str, float, float]]:
     return out
 
 
+_DERIVATION_SIGNIFICANT = 4
+
+
+def _derivation_figure(value: float) -> str:
+    """A computed figure written the way the working writes figures.
+
+    Grouped digits, not e-notation: the client reads "1,088,000", never
+    "1.088e+06". The value is rounded (half up, from its shortest decimal
+    form) to four significant figures, but never fewer than its whole-number
+    digits, and trailing zeros after the point are dropped. Plain digits are
+    written only while every position shown is one a float carries
+    (``sys.float_info.dig`` on either side of the point); beyond that the
+    figure is written "m × 10^n" with a four-figure m, so no digit is
+    invented and no figure is cut to 0.
+    """
+    import sys
+    from decimal import ROUND_HALF_UP, Decimal
+
+    if value == 0 or not math.isfinite(value):
+        return f"{value:g}"
+    exact = Decimal(repr(float(value)))
+    lead = exact.adjusted()
+    limit = sys.float_info.dig
+    step = Decimal(1).scaleb(1 - _DERIVATION_SIGNIFICANT)
+    if -limit <= lead < limit:
+        decimals = max(0, _DERIVATION_SIGNIFICANT - (lead + 1))
+        rounded = exact.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+    else:
+        mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
+        rounded = mantissa.scaleb(lead)
+    # The form follows the figure shown, not the float before rounding: a
+    # value that rounds across a bound is written as the figure it rounds to,
+    # so one displayed quantity always has one form.
+    shown = rounded.adjusted()
+    if -limit <= shown < limit:
+        return _derivation_trim(f"{rounded:,f}")
+    # Already four figures at most: past the bound, a plain figure is only
+    # ever a carry to a power of ten.
+    mantissa = rounded.scaleb(-shown)
+    return f"{_derivation_trim(f'{mantissa:f}')} × 10^{shown}"
+
+
+def _derivation_trim(figure: str) -> str:
+    """Drop trailing zeros after the point, and the point when none are left."""
+    if "." in figure:
+        figure = figure.rstrip("0").rstrip(".")
+    return figure
+
+
 def _annotate_derivation_mismatches(text: str) -> str:
     """Append a note naming each disagreement. Never edits the figures."""
     if not _derivation_enabled() or not text:
@@ -9947,7 +9997,7 @@ def _annotate_derivation_mismatches(text: str) -> str:
         _LOG.warning(
             "derivation mismatch: %s stated %s, computes to %s", expr, stated, computed,
         )
-        lines.append(f"- `{expr}` is **{computed:,.4g}**, not {stated:,.10g}.")
+        lines.append(f"- `{expr}` is **{_derivation_figure(computed)}**, not {stated:,.10g}.")
     more = len(mismatches) - len(lines)
     if more > 0:
         lines.append(f"- …and {more} more.")
@@ -12220,8 +12270,9 @@ def _finished_on_length(choice: Any) -> bool:
 def _end_cut_answer(text: str, notice: str = _LENGTH_CUT_NOTICE) -> str:
     """An answer the model stopped writing part-way, ending on its last whole
     sentence and then ``notice``: never mid-sentence."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_cut
 
+    note_cut()
     kept = end_on_a_sentence(text or "")
     if notice in kept:
         return kept
@@ -13232,6 +13283,7 @@ class Agent:
     _fetch_named_missing_input = _core_context._fetch_named_missing_input
     _search_before_refusal = _core_context._search_before_refusal
     _search_first_nudges = _core_context._search_first_nudges
+    _tool_offered = _core_context._tool_offered
     _intent_hard_excludes = _core_context._intent_hard_excludes
 
     chat_stream = _core_loop.chat_stream

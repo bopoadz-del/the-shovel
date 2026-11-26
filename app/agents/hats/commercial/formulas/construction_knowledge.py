@@ -10,12 +10,22 @@ from typing import Dict, Optional
 @formula(
     owner='commercial',
     display_name='Payment due on a claim',
-    description='Payment due on a claim: certified amount less retention and previous certificates.',
+    # The card is the contract the model fills the call from, so it states
+    # what the function computes: retention comes off the amount certified
+    # for this period, and earlier certificates only add to the running
+    # total. A card promising "less previous certificates" led the model to
+    # pass a to-date valuation as the certified amount, expecting earlier
+    # certificates to come off it; they never did.
+    description=('Payment due this period: the amount certified for this period less '
+                 'retention on it. Certificates issued before are not deducted here; '
+                 'they only add to the cumulative certified, so give this period\'s '
+                 'amount, not a to-date total.'),
     inputs={
-        'claimed_amount': Param('currency', 0, 1e13, label='amount claimed'),
-        'certified_amount': Param('currency', 0, 1e13, label='amount certified'),
+        'claimed_amount': Param('currency', 0, 1e13, label='amount claimed', basis='period'),
+        'certified_amount': Param('currency', 0, 1e13, label='amount certified', basis='period'),
         'retention_rate': Param('fraction', 0, 1, label='retention'),
-        'cumulative_previous_certified': Param('currency', 0, 1e13, label='previously certified amount'),
+        'cumulative_previous_certified': Param('currency', 0, 1e13, label='previously certified amount',
+                                               basis='cumulative'),
         'contract_value': Param('currency', 0, 1e13, label='contract value'),
     },
     outputs={'claimed_amount': 'currency', 'certified_amount': 'currency', 'retention_held': 'currency', 'net_payment_due': 'currency', 'cumulative_certified': 'currency', 'percent_complete': '%', 'disputed_amount': 'currency', 'retention_rate_pct': '%'},
@@ -167,9 +177,13 @@ def calculate_evm(
         "status": {
             "cost": "UNDER BUDGET" if cv >= 0 else "OVER BUDGET",
             "schedule": "AHEAD" if sv >= 0 else "BEHIND",
+            # The band reads the unrounded CPI (a 0.8996 CPI shows as 0.9
+            # but is below the 0.9 band). With no actual cost CPI is
+            # undefined, and so is its band -- not CRITICAL.
             "cpi_health": (
-                "GOOD" if cpi and cpi >= 1
-                else ("WARNING" if cpi and cpi >= 0.9 else "CRITICAL")
+                "UNDEFINED" if cpi_raw is None
+                else "GOOD" if cpi_raw >= 1
+                else ("WARNING" if cpi_raw >= 0.9 else "CRITICAL")
             ),
         },
     }

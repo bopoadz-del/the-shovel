@@ -80,14 +80,27 @@ class Param:
     #: A tool parameter's required / optional; a formula's comes from its
     #: signature (no default = required).
     required: Optional[bool] = None
+    #: For an amount that can be stated either way, which one this input
+    #: takes (``BASES``): this period's amount or the total to date. Empty
+    #: when the amount has only one reading.
+    basis: str = ""
     #: The knowledge-read constant this input falls back to when it is not
     #: given (a :class:`KnowledgeConstant`; see its ``as_input``). A
     #: description of the input names that entry and its value.
     default_from: Any = None
 
+    def __post_init__(self) -> None:
+        if self.basis and self.basis not in BASES:
+            raise ValueError(f"basis must be one of {BASES}, not {self.basis!r}")
+
     @property
     def display_label(self) -> str:
         return self.label
+
+
+#: The bases an amount input can declare: the amount for this period alone,
+#: or the total to date (which includes every earlier period).
+BASES = ("period", "cumulative")
 
 
 @dataclass(frozen=True)
@@ -101,6 +114,7 @@ class ParamSpec:
     grade: str
     required: bool
     default: Any = None
+    basis: str = ""
 
     @property
     def display_label(self) -> str:
@@ -510,6 +524,7 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
             unit=declared.unit, lo=declared.lo, hi=declared.hi,
             label=declared.label, grade=declared.grade, required=required,
             default=None if no_default else param.default,
+            basis=declared.basis,
         )
     return out
 

@@ -56,7 +56,9 @@ def _create_project(page: Page, name: str) -> None:
 
 
 def _upload(page: Page, *rel_names: str) -> None:
-    picker = page.locator("#doc-file-input")
+    """Add fixture files to the project, searchable from every chat. The
+    session picker (#doc-file-input) keeps a file out of the project (#451)."""
+    picker = page.locator("#doc-project-file-input")
     for name in rel_names:
         picker.set_input_files(str(FIXTURE_DIR / name))
         expect(page.locator(".doc-row__name").filter(has_text=name)).to_be_visible(

@@ -1,0 +1,48 @@
+The Shovel (the-fork)
+Copyright (c) 2025 Cerebrum Blocks. Licensed under the MIT License (see LICENSE).
+
+This product includes procedure text derived from third-party works. Each
+derived procedure carries its own attribution in its hat manifest
+(app/agents/manifests/fork.hat.*.json, field "attribution"). Procedures whose
+attribution reads "see NOTICE" are credited below, by licence.
+
+-------------------------------------------------------------------------------
+Apache-2.0
+-------------------------------------------------------------------------------
+Source: Consulting Skills (https://github.com/fzfclee/consulting-skills),
+licensed under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0). Method frames used by the
+contracts and planning hats' procedures; the procedure wording here is ours.
+The source's NOTICE file is retained verbatim below, as section 4(d) of the
+licence requires.
+
+----- begin retained NOTICE (Consulting Skills) -----
+Consulting Skills
+Copyright 2026 Li Zhi
+
+This repository contains original instructional text, executable skill structures,
+templates, examples, catalog metadata, and validation code licensed under the
+Apache License, Version 2.0.
+
+No ownership is claimed over established consulting tools, analytical methods,
+academic theories, or management frameworks described by these skills. Those
+methods and their names remain associated with their respective creators,
+researchers, institutions, and rights holders.
+
+Use of a method name in this repository is descriptive and educational. It does
+not imply endorsement by, affiliation with, or certification from the method's
+creator or any consulting firm.
+
+Consulting Skills is maintained as an open-source method library in the broader
+O2V Framework knowledge ecosystem. O2V Framework, CLEAR, Signal-to-Action, and
+their original framework text, architecture, diagrams, branded assets, related
+method materials, and delivery assets are separate works by Li Zhi. They are not
+included in, and are not licensed by, this repository's Apache-2.0 license.
+
+Official website: https://www.o2vframework.com
+Contact: contact@o2vframework.com
+
+See ATTRIBUTIONS.md for method-specific source and attribution notes.
+----- end retained NOTICE (Consulting Skills) -----
+(ATTRIBUTIONS.md named above is the source repository's file:
+https://github.com/fzfclee/consulting-skills/blob/main/ATTRIBUTIONS.md)

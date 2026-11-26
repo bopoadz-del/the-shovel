@@ -40,8 +40,8 @@ def excavation_volume(
         "bulked_volume_m3": loose_r,
         "bulking_factor": bulking_factor,
         "standard": "geometry / soil bulking",
-        "note": (f"Bank = {length_m}*{width_m}*{depth_m} = {bank:.2f} m3; "
-                 f"loose = bank*(1+{bulking_factor}) = {loose:.2f} m3 (haulage)."),
+        "note": (f"Bank = {length_m}*{width_m}*{depth_m} = {bank:.3f} m3; "
+                 f"loose = bank*(1+{bulking_factor}) = {loose:.3f} m3 (haulage)."),
     }
 
 @formula(
@@ -66,15 +66,19 @@ def backfill_volume(
         return {"error": "excavation_bank_m3 and structure_volume_m3 must be >= 0."}
     if float(swell_factor) < 0:
         return {"error": "swell_factor must be >= 0."}
-    void = float(excavation_bank_m3) - float(structure_volume_m3)
-    void = max(void, 0.0)
+    difference = float(excavation_bank_m3) - float(structure_volume_m3)
+    void = max(difference, 0.0)
     loose_needed = void * (1.0 + swell_factor)
+    void_working = f"{difference:.3f} m3"
+    if difference < 0:
+        # The working states the floor it applied, never "a - b = 0".
+        void_working += f", below zero: no void, {void:.3f} m3"
     return {
         "void_volume_m3": round(void, 3),
         "loose_backfill_needed_m3": round(loose_needed, 3),
         "swell_factor": swell_factor,
         "standard": "geometry / soil swell",
         "note": (f"Void = {excavation_bank_m3} - {structure_volume_m3} = "
-                 f"{void:.2f} m3; loose to import = void*(1+{swell_factor}) = "
-                 f"{loose_needed:.2f} m3."),
+                 f"{void_working}; loose to import = void*(1+{swell_factor}) = "
+                 f"{loose_needed:.3f} m3."),
     }

@@ -1299,7 +1299,11 @@ def _partition_bound_params(
         if dest is None:
             unknown.append(str(key))
             continue
-        if isinstance(val, (list, tuple)) and len(val) == 1:
+        # A one-item list is read as its item for a scalar input only: an
+        # input the calculator declares as a list keeps its list, however
+        # many items it holds (a one-activity network is still a network).
+        if (isinstance(val, (list, tuple)) and len(val) == 1
+                and not _annotation_wants_list(sig.parameters[dest].annotation)):
             val = val[0]
         scaled = _scale_bound_value(str(key), dest, val)
         if dest not in bound or bound[dest] in (None, ""):
@@ -1731,6 +1735,7 @@ def _coerce_bound_values(fn: Any, bound: Dict[str, Any], converted: frozenset = 
         if _annotation_wants_list(param.annotation):
             out[key] = _coerce_list(val)
             continue
+        # A one-item list for a scalar input is read as its item.
         if isinstance(val, (list, tuple)) and len(val) == 1:
             val = val[0]
             out[key] = val
