@@ -239,6 +239,104 @@
      "forecast_completion"
     ]
    }
+  ],
+  "rules": "dates and durations come from the supplied programme; float is stated only when the programme supplies it or the executor computed it from supplied logic; no productivity rate or duration is estimated by the hat.",
+  "procedures": [
+   {
+    "id": "l1",
+    "title": "Lookahead constraint sweep",
+    "purpose": "for the next weeks of the programme, test every activity's readiness against named constraints and demand proof of clearance.",
+    "inputs": "the lookahead activities with planned starts; the constraint classes the project tracks (design, procurement, access, permits, predecessors, resources, inspections); the evidence available per constraint.",
+    "refusals": "marking a constraint cleared without evidence; moving a date.",
+    "steps": [
+     "per activity and constraint: cleared with evidence, open with owner and date needed, or UNKNOWN",
+     "list activities that cannot start as planned and the single constraint that blocks each",
+     "propose the crew fallback only as a question to the planner"
+    ],
+    "output": "the readiness grid, the cannot-start list with blocking constraint and owner.",
+    "done_when": "every cleared cell has evidence, every open cell has an owner.",
+    "lineage": "CC BY 4.0 prompt library (Constructelligence, credited); text is ours.",
+    "attribution": {
+     "licence": "CC BY 4.0",
+     "credit": "Constructelligence",
+     "link": "https://creativecommons.org/licenses/by/4.0/"
+    }
+   },
+   {
+    "id": "l2",
+    "title": "Critical path and delay impact (executor-backed)",
+    "purpose": "compute early and late dates, total and free float, and the impact of a stated delay, from supplied activities and logic.",
+    "inputs": "activities with durations and dependencies as supplied; the delay (activity and days) to test.",
+    "refusals": "assuming durations, logic or crash percentages; netting concurrent delays without the contract's rule.",
+    "steps": [
+     "forward and backward pass in the executor",
+     "total float and free float per activity",
+     "the critical path",
+     "for the delay, days absorbed by float and days to the completion date",
+     "show the working"
+    ],
+    "output": "the dates table, the critical path, the delay impact lines, the working.",
+    "done_when": "free float is computed, no assumption was introduced.",
+    "lineage": "standard CPM; text is ours."
+   },
+   {
+    "id": "l3",
+    "title": "Schedule narrative for the owner",
+    "purpose": "explain programme movement in plain words with the records as the source of every figure.",
+    "inputs": "the previous and current programme comparison as supplied; the causes as recorded in diaries, instructions and RFIs; the recovery measures proposed by the planner.",
+    "refusals": "attributing a cause without a record; stating recovered days not in the programme.",
+    "steps": [
+     "what moved and by how much (figures from the comparison)",
+     "why, with the record for each cause",
+     "what is being done, as stated by the planner",
+     "what is needed from the owner, as questions"
+    ],
+    "output": "a one-page narrative with citations.",
+    "done_when": "every movement figure cites the comparison, every cause cites a record.",
+    "lineage": "as L1; text is ours.",
+    "attribution": {
+     "licence": "CC BY 4.0",
+     "credit": "Constructelligence",
+     "link": "https://creativecommons.org/licenses/by/4.0/"
+    }
+   },
+   {
+    "id": "l4",
+    "title": "Meeting minutes to actions",
+    "purpose": "turn meeting notes into decisions and actions with owner and date, and an open-items carry-forward.",
+    "inputs": "the notes; the attendee list; the previous minutes' open actions.",
+    "refusals": "inventing an owner or a date; converting a discussion into a decision that was not recorded.",
+    "steps": [
+     "decisions as recorded",
+     "actions with owner, date or UNKNOWN, and source line",
+     "previous actions carried forward with status",
+     "items raised with no decision listed as open"
+    ],
+    "output": "decisions, actions table, carry-forward table.",
+    "done_when": "every action has an owner or UNKNOWN and a source line.",
+    "lineage": "site-office practice (dgcruzing, MIT); text is ours."
+   },
+   {
+    "id": "l5",
+    "title": "Binding-constraint analysis",
+    "purpose": "identify the one constraint that currently bounds throughput of a work front and the response class.",
+    "inputs": "the work front's activities and their rates as recorded; resource and access facts supplied; the recorded waiting time per activity.",
+    "refusals": "estimating rates or capacities; proposing resource changes with a cost.",
+    "steps": [
+     "locate where work waits most, from the records",
+     "name the binding constraint",
+     "classify the response: exploit (use it fully), elevate (add capacity, as a question to the planner), subordinate (pace the rest to it)",
+     "name the next constraint to watch once this one moves"
+    ],
+    "output": "the constraint statement, the response class, the watch item.",
+    "done_when": "the constraint is tied to recorded waiting, not to opinion.",
+    "lineage": "theory-of-constraints frame via a consulting method library (Apache-2.0, credited in NOTICE); text is ours.",
+    "attribution": {
+     "licence": "Apache-2.0",
+     "credit": "see NOTICE",
+     "notice": "Apache-2.0 NOTICE retained"
+    }
+   }
   ]
  }
 }

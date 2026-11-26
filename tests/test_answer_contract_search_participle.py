@@ -41,7 +41,7 @@ _SEARCH_WORD = re.compile(r"\b(?:retrieved|fetched|passages?|excerpts?|chunks?)\
     # A search-unit noun is machinery too: in the reader's words, documents.
     ("No lintel schedule is in the retrieved passages.",
      # the absence lead is also turned to the contract form (absence_names_thing)
-     "A lintel schedule is not in the documents I read."),
+     "The lintel schedule is not in the documents I read."),
     ("The sill height is not given in the fetched context.",
      "The sill height is not given in the documents I read."),
 ])

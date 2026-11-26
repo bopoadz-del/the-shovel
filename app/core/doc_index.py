@@ -3039,7 +3039,13 @@ def index_project(
 # primary text indexing.
 
 _BOQ_NAME_RE = re.compile(
-    r"\bbo[q]\b|bill[\s_-]*of[\s_-]*quantit|schedule[\s_-]*of[\s_-]*quantit|priced",
+    # The ``boq`` token is bounded by lookarounds, not ``\b``: underscore is a
+    # word character, so ``\bboq\b`` missed ``Tender_BOQ_rev2.pdf`` and
+    # ``BOQ_Section4.pdf``, a separator shape real corpora use. ``_``, ``-``,
+    # ``.`` and space count alike, as in ``_DRAWING_NAME_RE``. ``s?`` takes
+    # the plural (``BOQs.pdf``).
+    r"(?<![A-Za-z0-9])boqs?(?![A-Za-z0-9])"
+    r"|bill[\s_-]*of[\s_-]*quantit|schedule[\s_-]*of[\s_-]*quantit|priced",
     re.IGNORECASE,
 )
 
