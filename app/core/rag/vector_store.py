@@ -1895,6 +1895,41 @@ class VectorStore:
                     out.setdefault(did, []).append(txt or "")
         return out
 
+    def doc_chunk_rows(
+        self, project_id: str, doc_id: str, *, with_vectors: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return one document's chunk rows, ordered by chunk_index. Read only.
+
+        Each row carries chunk_id, chunk_index, page, ocr, knowledge_layer and
+        authority; ``with_vectors`` adds text and embedding. Used by the
+        page-copy plan (ids and pages only) and its execute step (the stored
+        text and vector, so a copy is never re-embedded).
+        """
+        cls = self._rag_chunk_cls
+        cols = [cls.chunk_id, cls.chunk_index, cls.page, cls.ocr,
+                cls.knowledge_layer, cls.authority]
+        if with_vectors:
+            cols += [cls.text, cls.embedding]
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            with self._session_factory()() as session:
+                stmt = (
+                    select(*cols)
+                    .where(cls.project_id == project_id, cls.doc_id == doc_id)
+                    .order_by(cls.chunk_index)
+                )
+                for row in session.execute(stmt).all():
+                    item = {
+                        "chunk_id": row[0], "chunk_index": int(row[1]),
+                        "page": row[2], "ocr": bool(row[3]),
+                        "knowledge_layer": row[4], "authority": row[5],
+                    }
+                    if with_vectors:
+                        item["text"] = row[6] or ""
+                        item["embedding"] = np.asarray(row[7], dtype=np.float32)
+                    out.append(item)
+        return out
+
     def chunks_for_docs(
         self,
         project_id: str,

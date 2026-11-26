@@ -2294,6 +2294,64 @@ def admin_corpus_chunk_resplit_execute(
         raise HTTPException(400, str(exc)) from exc
 
 
+class PageCopyRequest(BaseModel):
+    source_project_id: str
+    selections: List[Dict[str, Any]]
+    execute: bool = False
+    expected_plan_hash: Optional[str] = None
+    reason: str = ""
+    name: Optional[str] = None
+    profile: Optional[Dict[str, Any]] = None
+
+
+@router.post("/v1/admin/projects/{target_project_id}/copy-pages")
+def admin_copy_pages(
+    target_project_id: str,
+    body: PageCopyRequest = Body(...),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) copy selected pages of documents into a NEW project.
+
+    ``execute=false`` (default) writes nothing and returns per-selection
+    counts and a ``plan_hash``. ``execute=true`` writes only when the live
+    plan is eligible (source exists, target does not, every selection takes
+    at least one chunk), a reason is given and ``expected_plan_hash`` equals
+    the live plan's; otherwise ``refused`` says why. The source project is
+    only read. ``profile`` is set on the new project after the copy.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core import page_copy
+
+    try:
+        if not body.execute:
+            return {
+                "plan": page_copy.plan_page_copy(
+                    body.source_project_id, target_project_id,
+                    body.selections, body.profile,
+                ),
+                "executed": False,
+            }
+        out = page_copy.execute_page_copy(
+            body.source_project_id, target_project_id, body.selections,
+            expected_plan_hash=body.expected_plan_hash, reason=body.reason,
+            name=body.name, profile=body.profile,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if out.get("executed"):
+        audit.record(
+            "project.pages_copied",
+            project_id=target_project_id,
+            source_project_id=body.source_project_id,
+            user_id=auth.get("user_id"),
+            reason=body.reason.strip(),
+            documents=len(out["documents"]),
+            chunks=out["chunks_copied"],
+        )
+    return out
+
+
 @router.post("/v1/admin/documents/{document_id}/include")
 def admin_include_document(
     document_id: str,
