@@ -36,6 +36,7 @@ import {
   belongsToProjectList,
   readSessionDocuments,
   sessionDocumentsView,
+  uploadNotice,
   uploadSessionFor,
   withSessionId,
   type SessionDocumentsState,
@@ -421,11 +422,11 @@ export function DocumentsPanel({
         form,
       )
       onDocumentAdded(resp.document)
-      // Tell a non-admin AT upload time that the file was stored but not
-      // indexed, instead of leaving it to the sidebar label only.
-      const notIndexed = resp.document.panel_status?.detail
-      if (notIndexed) {
-        setUploadError(notIndexed)
+      // Say AT upload time what the server says about a file it stored but
+      // search does not hold, instead of leaving it to the sidebar label only.
+      const notice = uploadNotice(resp.document)
+      if (notice) {
+        setUploadError(notice)
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
@@ -623,7 +624,8 @@ export function DocumentsPanel({
         <label
           htmlFor="doc-project-file-input"
           className={`docs-upload__btn btn btn--ghost${uploading ? ' btn--disabled' : ''}`}
-          title="Add a document to the project: every chat can search it"
+          aria-busy={uploading}
+          title="Add a document to the project's files (not only this chat)"
         >
           + Add to project
         </label>

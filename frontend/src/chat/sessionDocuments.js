@@ -16,10 +16,22 @@ export function withSessionId(form, sessionId) {
 /** The session an upload is filed under. The workspace always has a chat
  *  open, so the target is chosen by the control the user used, not by
  *  whether a session exists: ``'project'`` files the upload as a project
- *  document (no session, searchable with the project's files), any other
- *  target attaches it to the open session. */
+ *  document (no session; the server decides whether it is indexed for the
+ *  project's search, see ``uploadNotice``), any other target attaches it to
+ *  the open session. */
 export function uploadSessionFor(target, sessionId) {
   return target === 'project' ? null : sessionId
+}
+
+/** What to tell the user right after an upload: the server's own note for a
+ *  stored file that search does not hold (``panel_status.detail``, e.g. a
+ *  file the server stored but did not index), or null when the server sent
+ *  no note. The client never guesses who may index; it repeats the server. */
+export function uploadNotice(doc) {
+  const status = doc && typeof doc === 'object' ? doc.panel_status : null
+  const detail = status && typeof status === 'object' ? status.detail : null
+  const text = typeof detail === 'string' ? detail.trim() : ''
+  return text || null
 }
 
 /** The by-id route of one document (``tail``: ``/preview``,
