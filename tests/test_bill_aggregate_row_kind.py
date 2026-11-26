@@ -61,14 +61,17 @@ def test_tolerance_is_one_unit_of_the_amount_cells_own_last_place(cell, total, k
     assert _kinds(rows)[-1] == kind
 
 
-def test_lines_on_another_page_are_not_collected():
-    rows = [_r(1, "x", "40", "1", "40"), _r(2, "y", "60", "1", "60"), _r(2, "t", "100")]
+@pytest.mark.parametrize("a, b", [("40", "60"), ("1,250.00", "750.00")])
+def test_lines_on_another_page_are_not_collected(a, b):
+    tot = f"{float(a.replace(',', '')) + float(b.replace(',', '')):.2f}"
+    rows = [_r(1, "x", a, "1", a), _r(2, "y", b, "1", b), _r(2, "t", tot)]
     assert _kinds(rows) == ["item", "item", "item"]
 
 
-def test_a_collection_resets_the_running_sum():
-    rows = [_r(1, "a", "10", "1", "10"), _r(1, "s1", "10"),
-            _r(1, "b", "5", "1", "5"), _r(1, "s2", "5"), _r(1, "lump", "15")]
+@pytest.mark.parametrize("a, b, both", [("10", "5", "15"), ("200.00", "35.50", "235.50")])
+def test_a_collection_resets_the_running_sum(a, b, both):
+    rows = [_r(1, "a", a, "1", a), _r(1, "s1", a),
+            _r(1, "b", b, "1", b), _r(1, "s2", b), _r(1, "lump", both)]
     assert _kinds(rows) == ["item", "collection", "item", "collection", "item"]
 
 
@@ -88,19 +91,22 @@ def test_brought_forward_and_collection_page(p1, p2):
     assert kinds[7] == "collection"
 
 
-def test_a_lump_equal_to_a_later_page_total_is_not_a_repeat():
+@pytest.mark.parametrize("fig", ["90", "4,321.75"])
+def test_a_lump_equal_to_a_later_page_total_is_not_a_repeat(fig):
     """A repeat restates a collection read on an EARLIER page only."""
-    rows = [_r(1, "lump", "90"), _r(2, "a", "90", "1", "90"), _r(2, "t", "90")]
+    rows = [_r(1, "lump", fig), _r(2, "a", fig, "1", fig), _r(2, "t", fig)]
     assert _kinds(rows) == ["item", "item", "collection"]
 
 
-def test_rows_with_no_page_stay_items():
-    rows = [_r(None, "a", "10", "1", "10"), _r(None, "t", "10")]
+@pytest.mark.parametrize("fig", ["10", "880.25"])
+def test_rows_with_no_page_stay_items(fig):
+    rows = [_r(None, "a", fig, "1", fig), _r(None, "t", fig)]
     assert _kinds(rows) == ["item", "item"]
 
 
-def test_empty_sheet_has_no_kinds():
-    assert _kinds([]) == []
+@pytest.mark.parametrize("rows", [[], ()])
+def test_empty_sheet_has_no_kinds(rows):
+    assert _kinds(rows) == []
 
 
 # --- the tool sums items only and names what it left out ---------------------
@@ -117,9 +123,10 @@ def test_aggregate_amount_sums_items_only(a, b):
     assert [(n["kind"], n["amount"]) for n in out["not_items"]] == [("collection", float(total))]
 
 
-def test_aggregate_without_totals_reports_no_left_out_rows():
-    rows = [_r(4, "pipe x", "5", "1", "5"), _r(4, "pipe y", "6", "1", "6")]
+@pytest.mark.parametrize("a, b", [("5", "6"), ("120.00", "30.25")])
+def test_aggregate_without_totals_reports_no_left_out_rows(a, b):
+    rows = [_r(4, "pipe x", a, "1", a), _r(4, "pipe y", b, "1", b)]
     out = agg.aggregate(rows, terms=["pipe"], measure=agg.MEASURE_AMOUNT)
-    assert out["sum"] == pytest.approx(11.0)
+    assert out["sum"] == pytest.approx(float(a) + float(b))
     assert out["not_items"] == []
     assert out["rows_scanned"] == 2
