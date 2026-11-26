@@ -199,3 +199,52 @@ def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
             },
         },
     }
+
+
+#: The working-sheet tools a catalogue-path turn adds (DESIGN V2).
+SHEET_UPDATE = "sheet_update"
+RUN_STEP = "run_step"
+
+
+def sheet_schemas() -> List[Dict[str, Any]]:
+    """``sheet_update`` (the model writes givens, plan and missing) and
+    ``run_step`` (code runs one planned formula step and writes its result).
+    The same two schemas for every turn and project."""
+    given = {"type": "object", "properties": {
+        "id": {"type": "string", "description": "g1, g2, ..."},
+        "what": {"type": "string"}, "value": {"type": "number"},
+        "unit": {"type": "string", "description": "the value's unit; '-' for a pure number"},
+        "source": {"type": "string", "description": "user, or the document and page it was read from"}},
+        "required": ["id", "value", "unit"]}
+    step = {"type": "object", "properties": {
+        "id": {"type": "string", "description": "s1, s2, ..."},
+        "entry": {"type": "string", "description": "formula:<calculation name>, e.g. formula:arithmetic"},
+        "inputs": {"type": "object", "additionalProperties": True,
+                   "description": "each input of the formula: a given id (g1), an earlier step id (s1), "
+                                  "or a literal option such as an operator"},
+        "output": {"type": "string", "description": "which output of the formula this step keeps "
+                                                    "(optional when the formula has one main output)"}},
+        "required": ["id", "entry", "inputs"]}
+    missing = {"type": "object", "properties": {
+        "for": {"type": "string"}, "input": {"type": "string"}, "label": {"type": "string"}},
+        "required": ["input"]}
+    return [
+        {"type": "function", "function": {
+            "name": SHEET_UPDATE,
+            "description": ("Write this turn's working sheet: the givens (each figure with its unit and "
+                            "source), the plan (one step per formula, inputs by reference) and the inputs "
+                            "still missing. A given or step with an existing id replaces it. Results are "
+                            "never written here: run_step writes them. The sheet is handed back after "
+                            "every call."),
+            "parameters": {"type": "object", "properties": {
+                "givens": {"type": "array", "items": given},
+                "plan": {"type": "array", "items": step},
+                "missing": {"type": "array", "items": missing}}}}},
+        {"type": "function", "function": {
+            "name": RUN_STEP,
+            "description": ("Run one plan step. Code resolves its inputs from the sheet, converts them to "
+                            "the formula's units, runs the formula and writes the result on the sheet. "
+                            "Every arithmetic step, even one division, is a step (formula:arithmetic)."),
+            "parameters": {"type": "object", "properties": {"step": {"type": "string"}},
+                           "required": ["step"]}}},
+    ]

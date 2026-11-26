@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
-from app.agents.driver import context, llm, render, routes, sources, tools
+from app.agents.driver import context, llm, render, routes, sheet, sources, tools, trace_record, trace_store
 from app.core import turn_progress
 from app.core.offload import off_loop
 
@@ -243,6 +243,27 @@ def _named_calculator_note(user_message: str) -> str:
             "say what it needs.")
 
 
+#: What the model is told with its sheet each round. The same words for
+#: every turn and project: how the sheet works, never what to answer.
+_SHEET_RULES = (
+    "Working sheet for this turn (JSON, below). Write the givens (each figure with its unit and "
+    "where it came from), a plan of formula steps whose inputs name givens or earlier steps, and "
+    "any input still missing, with sheet_update. Run each step with run_step: code runs the formula "
+    "and writes the result here. Every arithmetic step, even one division, is a step "
+    "(formula:arithmetic); never work a figure in your own text. Ask the user for a missing input "
+    "only when no document or tool gives it.")
+
+
+def _sheet_note(work: Dict[str, Any]) -> str:
+    return _SHEET_RULES + "\n" + sheet.render(work)
+
+
+def _build_sha() -> str:
+    from app.routers.health import _deployed_build_sha
+
+    return _deployed_build_sha() or ""
+
+
 def _args(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     raw = (tool_call.get("function") or {}).get("arguments") or "{}"
     try:
@@ -257,7 +278,12 @@ def _args(tool_call: Dict[str, Any]) -> Dict[str, Any]:
 async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                  project_id: Optional[str] = None, conversation_id: Optional[str] = None,
                  user_id: Optional[str] = None, api_key: Optional[str] = None,
-                 **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
+                 sheet_mode: bool = False, **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
+    """One driver turn. ``sheet_mode`` (the project's ``answer_path`` is
+    ``catalogue``): the turn carries a working sheet, handed back to the model
+    every round; while a plan step is open the tools stay offered and no code
+    ends the turn short of the round / seconds ceiling; one trace record is
+    written per turn."""
     t0 = time.monotonic()
     # 6b: anchor llm_first_token to the generation-turn start (the model-call
     # wait), not to turn_timing's `last` stage marker, which intervening
@@ -274,6 +300,17 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     note = await off_loop(_named_calculator_note, user_message)
     if note:
         msgs.insert(len(msgs) - 1, {"role": "system", "content": note})
+    work: Optional[Dict[str, Any]] = None  # the working sheet (sheet_mode only)
+    sheet_msg: Dict[str, Any] = {"role": "system", "content": ""}
+    question_set = trace_record.UNSET
+    if sheet_mode:
+        previous = await off_loop(trace_store.last_sheet, conversation_id)
+        work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
+        sheet_msg["content"] = _sheet_note(work)
+        msgs.insert(len(msgs) - 1, sheet_msg)
+        chosen_set = await off_loop(driver.project_setting, project_id, user_id, "question_set")
+        if chosen_set in trace_record.QUESTION_SETS:
+            question_set = chosen_set
     used: List[str] = []
     ran: List[tuple] = []  # (tool, arguments) of every tool run, for the credit lines
     computed: List[tuple] = []  # (envelope, inputs) of every calculation that succeeded
@@ -377,8 +414,17 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     filled_from_ask: set = set()  # workflows whose inputs were read from the ask once
     reminded = False  # the model was told once to call a refused workflow again
     step = 0
-    for step in range(driver.max_steps()):
+    ceiling = False  # the sheet turn ran out of rounds or seconds
+    for step in range(driver.sheet_max_rounds() if sheet_mode else driver.max_steps()):
+        if sheet_mode and time.monotonic() - t0 > driver.sheet_max_seconds():
+            ceiling = True
+            break
         offered = tools.offered(agent, project_id, hat, disciplines)
+        if work is not None:
+            # The sheet as it stands, handed back every round; its tools are
+            # offered every round -- never withdrawn while a step is open.
+            sheet_msg["content"] = _sheet_note(work)
+            offered = offered + tools.sheet_schemas()
         trace.append({"step": step + 1, "hat": hat, "offered": len(offered),
                       "workflows": _offered_workflows(offered), "calls": []})
         # Streamed: each finished sentence is checked and sent while the model
@@ -462,6 +508,21 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 else:
                     result_of_call = {"ok": False,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
+            elif work is not None and name == tools.SHEET_UPDATE:
+                work, problems = sheet.apply_update(work, args)
+                result_of_call = {"ok": not problems, "problems": problems, "sheet": work}
+                if problems:
+                    result_of_call["error"] = "; ".join(problems)
+            elif work is not None and name == tools.RUN_STEP:
+                used.append(name)
+                step_id = str(args.get("step") or "")
+                work = await off_loop(sheet.run_step, work, step_id, call.get("id") or "")
+                entry = next((s for s in work["steps"] if s.get("id") == step_id), {})
+                result_of_call = {"ok": entry.get("status") == "done", "step": entry, "sheet": work}
+                if entry.get("status") == "waiting_input":
+                    result_of_call["needs_input"] = True
+                elif entry.get("status") != "done":
+                    result_of_call["error"] = entry.get("error") or "the step did not run"
             elif name == routes.RUN_WORKFLOW:
                 used.append(f"{name}:{args.get('workflow')}")
                 result_of_call = await routes.run(args, user_message, project_id, user_id, conversation_id)
@@ -499,6 +560,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 # A calculator's own verdict: success, or needs_input and which inputs.
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
+                **({"step": str(args.get("step") or "")} if name == tools.RUN_STEP else {}),
             })
             if name != tools.SELECT_HAT:
                 if ok:
@@ -538,10 +600,14 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})
             answer_exit.note_tool_message(call, evidence[-1])
+        if work is not None:
+            trace[-1]["sheet"] = json.loads(sheet.render(work))
         # A calculator that rejected or lacks an input ends the turn with its
         # own question: the model is never given the chance to compute a
-        # figure the calculator refused (lane 2: it did).
-        if questions:
+        # figure the calculator refused (lane 2: it did). On the sheet, while
+        # a plan step is open, the question is the model's to place: it
+        # records the missing input and asks, or reads it from a document.
+        if questions and not (work is not None and sheet.open_steps(work)):
             for question in dict.fromkeys(questions):
                 event = await off_loop(_release, question + "\n", model_text=False)
                 if event:
@@ -558,6 +624,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         answer_done = True
     if not answer_done:
         # Out of steps: answer from the evidence already gathered, no tools.
+        ceiling = True  # the round (or seconds) ceiling ended the tool rounds
         msgs.append({"role": "system", "content": _FINISH})
         finished = False
         buffer = ""
@@ -679,6 +746,18 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         notes = "\n\n" + credit + notes
     if notes.strip():
         yield {"type": "token", "content": notes}
+    record_id = None
+    if sheet_mode:
+        ended = "ceiling" if ceiling else "answer" if model_answered else "asked_input"
+        record = trace_record.build(
+            turn=(work or {}).get("turn", ""), question=user_message, rounds=trace,
+            final_answer="".join(sent), figures=provenance, ended=ended,
+            question_set=question_set, seconds=time.monotonic() - t0,
+            provider=str(getattr(agent, "provider", "") or ""), model=driver.model(),
+            temperature=llm.DECISION_TEMPERATURE, seed=llm.DECISION_SEED,
+            build_sha=_build_sha(), project_setting=driver.CATALOGUE,
+            sheet=work)
+        record_id = await off_loop(trace_store.save, record, conversation_id)
     _LOG.info("DRIVER_TURN %s", json.dumps({
         "conversation": str(conversation_id or ""),  # an id, never the user's words
         "steps": trace, "ended": ("answer" if model_answered else "question" if answer_done else "step_limit"),
@@ -686,10 +765,11 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         # Lengths only: the answer's characters after each stage, what was
         # shown, and why a reply was withheld with its lengths (never text).
         "stage_chars": stage_chars, "shown_chars": len("".join(sent)),
-        "withheld": withheld,
+        "withheld": withheld, "trace_record": record_id,
         "elapsed_s": round(time.monotonic() - t0, 2)}, default=str))
     yield {"type": "end", "complete": True, "mode": "driver", "hat": hat, "tools": used, "exports": exports,
            "provenance": provenance, "exit_check": check,
            "sources": sources.panel(_trail(), provenance, "".join(sent),
                                     calculated=any(n == "construction_calc" for n, _ in ran)),
-           "steps": step + 1, "elapsed_s": round(time.monotonic() - t0, 2)}
+           "steps": step + 1, "elapsed_s": round(time.monotonic() - t0, 2),
+           **({"trace_record": record_id} if sheet_mode else {})}

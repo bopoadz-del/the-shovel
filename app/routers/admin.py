@@ -386,6 +386,25 @@ def admin_set_driver_mode(body: Dict[str, Any] = Body(...), auth: dict = Depends
     return {"email": user["email"], "driver_mode": user["driver_mode"]}
 
 
+@router.get("/v1/admin/trace-records")
+def admin_trace_records(day: str = Query(..., description="UTC day, YYYY-MM-DD"),
+                        conversation_id: Optional[str] = Query(None),
+                        auth: dict = Depends(require_api_key)):
+    """The trace records (schema trace/1) of catalogue-path turns on one UTC
+    day, optionally one conversation's, as a JSON download for the owner and
+    the testers."""
+    _require_admin(auth)
+    from app.agents.driver import trace_store
+    try:
+        rows = trace_store.records(day, conversation_id)
+    except ValueError:
+        raise HTTPException(422, "day must be a date written YYYY-MM-DD.")
+    body = json.dumps({"day": day, "conversation_id": conversation_id, "count": len(rows),
+                       "records": rows}, ensure_ascii=False, default=str)
+    return Response(content=body, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="trace_records_{day}.json"'})
+
+
 _USER_PAGE_MAX = 50
 _USER_OFFSET_MAX = 10_000
 _USER_QUERY_MAX = 200
