@@ -144,3 +144,91 @@ async def test_tracker_with_one_figure_still_answers(container, params, want_spi
     out = await container.progress_tracker(input_data={}, params=params)
     assert out["status"] == "success", out
     assert out["overall_progress"]["schedule_performance_index"] == want_spi
+
+
+# --- Inside a chat turn: the turn's ask is set (as app.agents.core.loop sets it)
+# and the tracker's own figures must still reach the kernel unchanged.
+
+
+@pytest.fixture
+def turn_ask():
+    # An async test sets the ask in its own task's context, so the token cannot
+    # be reset here; the ask is set back to the module default instead.
+    yield cf.set_current_ask
+    cf.set_current_ask("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ask,planned,actual", [
+    ("Track progress: planned 40%, nothing done", 40.0, 0.0),
+    ("Where are we? 55 percent planned by now, the crew has not started", 55.0, 0.0),
+])
+async def test_in_a_turn_a_zero_actual_is_an_spi_of_zero(container, turn_ask, ask, planned, actual):
+    turn_ask(ask)
+    overall = await _overall(container, planned, actual)
+    assert overall["schedule_performance_index"] == 0.0
+    assert "schedule_performance_index_error" not in overall
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ask,actual", [
+    ("Track progress: planned 0%, actual 5%", 5.0),
+    ("Nothing was planned this month but we did 12%", 12.0),
+])
+async def test_in_a_turn_nothing_planned_is_undefined_without_error(container, turn_ask, ask, actual):
+    turn_ask(ask)
+    overall = await _overall(container, 0.0, actual)
+    assert overall["schedule_performance_index"] is None
+    assert "schedule_performance_index_error" not in overall
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ask,planned,actual", [
+    ("Planned 60%, actual 45%, variance -15%", 60.0, 45.0),
+    ("Track progress, planned 0 and actual 0", 0.0, 0.0),
+])
+async def test_the_kernel_runs_without_the_turn_ask_and_the_ask_comes_back(
+        container, turn_ask, monkeypatch, ask, planned, actual):
+    seen = []
+    real = cf.run_calculation
+
+    def spy(name, params=None):
+        seen.append(cf._CURRENT_ASK.get())
+        return real(name, params)
+
+    monkeypatch.setattr(cf, "run_calculation", spy)
+    turn_ask(ask)
+    await _overall(container, planned, actual)
+    assert seen == [""]
+    assert cf._CURRENT_ASK.get() == ask
+
+
+@pytest.mark.parametrize("ask", ["planned 30%, actual 10%", "Track progress please"])
+def test_the_turn_ask_comes_back_when_the_kernel_raises(turn_ask, monkeypatch, ask):
+    def boom(name, params=None):
+        raise RuntimeError("kernel down")
+
+    monkeypatch.setattr(cf, "run_calculation", boom)
+    turn_ask(ask)
+    with pytest.raises(RuntimeError):
+        schedule_mod._progress_spi(30.0, 10.0)
+    assert cf._CURRENT_ASK.get() == ask
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ask,planned,actual", [
+    ("planned -10%, actual 5%", -10.0, 5.0),
+    ("planned 50%, actual minus 1%", 50.0, -1.0),
+])
+async def test_in_a_turn_a_refusal_names_no_internal_input(container, turn_ask, ask, planned, actual):
+    turn_ask(ask)
+    overall = await _overall(container, planned, actual)
+    assert overall["schedule_performance_index"] is None
+    err = overall["schedule_performance_index_error"]
+    assert err and "_cum" not in err and "Expected:" not in err
+
+
+@pytest.mark.parametrize("envelope", [{"status": "success"}, {"status": "success", "result": None}])
+def test_progress_spi_helper_success_without_a_result_is_absent(monkeypatch, envelope):
+    monkeypatch.setattr(cf, "run_calculation", lambda name, params=None: envelope)
+    assert schedule_mod._progress_spi(50.0, 40.0) == (None, None)

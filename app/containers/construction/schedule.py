@@ -31,12 +31,22 @@ def _progress_spi(planned_pct: float, actual_pct: float) -> Tuple[Optional[float
     when the kernel says the ratio is undefined (nothing planned yet), and
     ``(None, error)`` when the envelope refuses the inputs. No ratio is
     computed here, so no value can be reported that the kernel would not give.
-    """
-    from app.lib.construction_formulas import run_calculation
 
-    env = run_calculation(
-        "progress_kpi", {"planned_cum": planned_pct, "actual_cum": actual_pct},
-    )
+    The two figures are the tracker's own, already read from its inputs, so
+    the kernel runs with no turn ask: the envelope's repairs that read the
+    user's words (an unwritten zero dropped, a written sign restored) are for
+    a model's call to a calculator, and would otherwise turn the tracker's
+    stated 0 % into a "missing" input.
+    """
+    from app.lib import construction_formulas as calc
+
+    ask_token = calc.set_current_ask("")
+    try:
+        env = calc.run_calculation(
+            "progress_kpi", {"planned_cum": planned_pct, "actual_cum": actual_pct},
+        )
+    finally:
+        calc._CURRENT_ASK.reset(ask_token)
     if not isinstance(env, dict) or env.get("status") != "success":
         err = (env or {}).get("error") if isinstance(env, dict) else None
         return None, str(err or "progress_kpi did not return a result")
