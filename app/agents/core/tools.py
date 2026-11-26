@@ -75,6 +75,15 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
             },
         })
 
+    # ── synthetic tool: ids_check (project IFC model vs a requirement table)
+    # Offered only where it can run: a project to hold the model and the
+    # bim_extractor block to read it.
+    if project_id and "bim_extractor" in self.allowed_blocks:
+        from app.agents.core import tool_registry as _tool_registry
+        _ids_spec = _tool_registry.get("ids_check")
+        if _ids_spec is not None and _ids_spec.schema:
+            tools.append(_ids_spec.schema)
+
     # ── synthetic tool: remember_fact (always available) ─────────────────
     tools.append({
         "type": "function",

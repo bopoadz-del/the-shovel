@@ -230,3 +230,134 @@ async def handle_commissioning_checklist(call: ToolCall) -> dict:
         "ok": isinstance(result, dict) and result.get("status") == "success",
         "result": result,
     }
+
+
+# ── ids_check: a project's own requirement table against its IFC model ──
+# S-K3 item 1 part 2. The specification is the user's (or the project
+# document's) requirement table, passed in as given; nothing here names a
+# property set, an entity or a value. bim_extractor reads the model and
+# app.agents.hats.qaqc.ids_check applies the table.
+IDS_CHECK_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "ids_check",
+        "description": (
+            "Check the elements of a project IFC model against an "
+            "information requirement table (IDS-style): which elements a "
+            "requirement applies to, and what each must carry (entity, "
+            "property 'Pset.Prop', attribute or material; required / "
+            "optional / prohibited; value, enumeration, pattern or min/max). "
+            "Build the specifications ONLY from the requirements the user "
+            "wrote or a project document states - never invent a property "
+            "set, property or value. Returns per-specification pass / fail "
+            "/ incomplete with the failing element ids and reasons."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ifc_file": {
+                    "type": "string",
+                    "description": "The project's .ifc model, by its file name.",
+                },
+                "specifications": {
+                    "type": "array",
+                    "description": (
+                        "One object per requirement: {name, cardinality "
+                        "(required|optional|prohibited), applicability: "
+                        "[facet], requirements: [facet]}. A facet is "
+                        "{entity} | {property: 'Pset.Prop'} | {attribute: "
+                        "name|description|object_type} | {material}, plus "
+                        "optional cardinality and value / enumeration / "
+                        "pattern / min / max."
+                    ),
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["ifc_file", "specifications"],
+        },
+    },
+}
+
+
+def ids_result_from_extraction(extracted: Any, specifications: Any) -> dict:
+    """Apply ``specifications`` to one bim_extractor result.
+
+    Elements whose property sets could not be read are not checked. When
+    the extractor returned only part of the model's elements, a
+    specification that found no fault cannot be called a pass: the
+    elements it did not see may be in its scope, so it is ``incomplete``.
+    Raises ``IdsSpecError`` for an empty or invalid specification.
+    """
+    from app.agents.hats.qaqc.ids_check import check_ids
+
+    data = extracted if isinstance(extracted, dict) else {}
+    elements = data.get("building_elements") or []
+    unreadable = [
+        str(row.get("global_id"))
+        for row in (data.get("psets_failed") or [])
+        if isinstance(row, dict) and row.get("global_id")
+    ]
+    result = check_ids(elements, specifications, unreadable_ids=unreadable)
+    total = data.get("element_count")
+    read = len(elements)
+    unread = (total - read) if isinstance(total, int) and total > read else 0
+    if unread:
+        for spec in result["specifications"]:
+            if spec["status"] == "pass":
+                spec["status"] = "incomplete"
+        summary = result["summary"]
+        summary["passing"] = sum(1 for s in result["specifications"] if s["status"] == "pass")
+        summary["incomplete"] = sum(
+            1 for s in result["specifications"] if s["status"] == "incomplete"
+        )
+        result["elements_not_read"] = unread
+        result["notes"] = [
+            f"{unread} of {total} model elements were beyond the extraction "
+            "cap and were not checked; no specification is reported as passing."
+        ]
+    return result
+
+
+@tool("ids_check", owner="qaqc", display_name="IFC requirement check", schema=IDS_CHECK_SCHEMA)
+async def handle_ids_check(call: ToolCall) -> dict:
+    """The ``ids_check`` tool."""
+    from app.agents.hats.qaqc.ids_check import IdsSpecError
+    from app.agents.runtime import _off_loop, _resolve_file_path
+
+    name = call.name
+    args = call.args or {}
+    raw = str(args.get("ifc_file") or args.get("file_path") or "").strip()
+    if not raw.lower().endswith(".ifc"):
+        return {
+            "name": name, "ok": False,
+            "result": {"status": "error", "error": "name the project's .ifc model to check"},
+        }
+    if "bim_extractor" not in call.agent.allowed_blocks:
+        return {
+            "name": name, "ok": False,
+            "result": {"status": "error", "error": "bim_extractor not in agent's allowed_blocks"},
+        }
+    try:
+        from app.dependencies import get_block_instance
+        extractor = get_block_instance("bim_extractor")
+        resolved = await _off_loop(_resolve_file_path, call.project_id, raw)
+        extracted = await extractor.process(
+            {"file_path": resolved}, {"run_clash_detection": False},
+        )
+    except Exception as e:  # noqa: BLE001 -- a tool error is a payload, not a crash
+        return {
+            "name": name, "ok": False,
+            "result": {"status": "error", "error": f"bim_extractor failed: {e}"},
+        }
+    if not isinstance(extracted, dict) or extracted.get("status") != "success":
+        error = extracted.get("error") if isinstance(extracted, dict) else None
+        return {
+            "name": name, "ok": False,
+            "result": {"status": "error", "error": error or "bim_extractor failed"},
+        }
+    try:
+        result = ids_result_from_extraction(extracted, args.get("specifications"))
+    except IdsSpecError as e:
+        return {"name": name, "ok": False, "result": {"status": "error", "error": str(e)}}
+    result["file"] = raw
+    return {"name": name, "ok": True, "result": result}
