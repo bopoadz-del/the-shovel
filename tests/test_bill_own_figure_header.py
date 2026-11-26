@@ -127,14 +127,23 @@ def test_complete_header(own, want):
     assert [c.left for c in out] == sorted(c.left for c in out)
 
 
-def test_a_column_touching_an_own_column_edge_gives_way():
-    carried = [_col("D", "description", 100, 200), _col("X", None, 700, 850)]
-    out = g.complete_header(carried, [_col("Rate", "rate", 850, 900),
-                                      _col("Amount", "total", 1000, 1060)])
-    assert [c.label for c in out] == ["D", "Rate", "Amount"]
-    out = g.complete_header(carried, [_col("Rate", "rate", 851, 900),
-                                      _col("Amount", "total", 1000, 1060)])
-    assert [c.label for c in out] == ["D", "X", "Rate", "Amount"]
+# The rate column read on this page spans 850..900 (or 760..810); the carried
+# column X sits left or right of it, touching it or one unit clear of it.
+@pytest.mark.parametrize("x_span, own_left, expected", [
+    ((700, 850), 850, ["D", "Rate", "Amount"]),         # X right edge on Rate left
+    ((700, 850), 851, ["D", "X", "Rate", "Amount"]),    # one unit clear: X stays
+    ((610, 760), 760, ["D", "Rate", "Amount"]),
+    ((610, 760), 761, ["D", "X", "Rate", "Amount"]),
+    ((900, 980), 850, ["D", "Rate", "Amount"]),         # X left edge on Rate right
+    ((901, 980), 850, ["D", "Rate", "X", "Amount"]),
+    ((810, 890), 760, ["D", "Rate", "Amount"]),
+    ((811, 890), 760, ["D", "Rate", "X", "Amount"]),
+])
+def test_a_column_touching_an_own_column_edge_gives_way(x_span, own_left, expected):
+    carried = [_col("D", "description", 100, 200), _col("X", None, *x_span)]
+    out = g.complete_header(carried, [_col("Rate", "rate", own_left, own_left + 50),
+                                      _col("Amount", "total", 1100, 1160)])
+    assert [c.label for c in out] == expected
 
 
 # Three reconciling rows: the page proves its own columns, and a header that
