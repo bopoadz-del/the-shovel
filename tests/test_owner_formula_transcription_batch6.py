@@ -220,8 +220,13 @@ def test_crane_refuses_degenerate_input(chart, ded, load):
 
 
 # --- thermal_shrinkage_equivalence: dT = strain / alpha (owner KB) --------------
-def test_owner_kb_states_strain_over_alpha():
-    assert _kb_entry("concrete.equivalent_temperature_drop")["expression"] == "strain/thermal_coefficient"
+@pytest.mark.parametrize("field,want", [
+    ("expression", "strain/thermal_coefficient"),
+    ("variables", {"strain", "thermal_coefficient"}),
+])
+def test_owner_kb_states_strain_over_alpha(field, want):
+    got = _kb_entry("concrete.equivalent_temperature_drop")[field]
+    assert (set(got) if isinstance(want, set) else got) == want
 
 
 @pytest.mark.parametrize("strain,alpha,dt", [
