@@ -132,20 +132,22 @@ def test_declared_fields_fill_the_entry_and_each_missing_one_is_a_gap(registered
     assert entry["standard"] == declared.get("standard")
 
 
-@pytest.mark.parametrize("bad", [
-    _example(invented=False),
-    {k: v for k, v in _example().items() if k != "invented"},
-    _example(result=""),
-    _example(given=None),
-    _example(chain="not a list"),
-    _example(figure_from="a document"),
-    "an example as text",
+@pytest.mark.parametrize("examples,why", [
+    ((_example(invented=False),), "invented: True"),
+    (({k: v for k, v in _example().items() if k != "invented"},), "invented: True"),
+    ((_example(result=""),), "needs a result text"),
+    ((_example(given=None),), "needs a given text"),
+    ((_example(chain="not a list"),), "chain is a list of strings"),
+    ((_example(chain=["ok", 3]),), "chain is a list of strings"),
+    ((_example(figure_from="a document"),), "unknown example keys"),
+    ("an example as text", "must be a sequence of dicts"),
+    (_example(), "must be a sequence of dicts"),  # one dict, not a sequence of them
+    (["an example as text"], "an example must be a dict"),
 ])
-def test_an_example_that_is_not_invented_and_whole_is_refused(bad):
-    examples = bad if isinstance(bad, str) else (bad,)
-    with pytest.raises(ValueError):
+def test_an_example_that_is_not_invented_and_whole_is_refused(examples, why):
+    with pytest.raises(ValueError, match=why):
         fr.declared_examples("formula", "zz", examples)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=why):
         tool_registry.tool("zz_cat_tool_refused", owner="base", display_name="Z", examples=examples)
 
 
@@ -261,10 +263,14 @@ def test_lookup_names_unknown_ids_once(pick):
     assert [e["id"] for e in catalogue.lookup(known)["entries"]] == [known]  # one id as text
 
 
-@pytest.mark.parametrize("nothing", [[], None, 7, [""], ["formula:no_such_thing"], {"ids": ["formula:x"]}])
-def test_lookup_of_nothing_it_holds_is_refused(nothing):
+@pytest.mark.parametrize("nothing,why", [
+    ([], "Name the entry ids"), (None, "Name the entry ids"), (7, "Name the entry ids"),
+    ([""], "Name the entry ids"), ({"ids": ["formula:x"]}, "Name the entry ids"),
+    (["formula:no_such_thing"], "None of these ids"),
+])
+def test_lookup_of_nothing_it_holds_is_refused(nothing, why):
     out = catalogue.lookup(nothing)
-    assert out["ok"] is False and out.get("entries", []) == [] and out["error"]
+    assert out["ok"] is False and out.get("entries", []) == [] and out["error"].startswith(why)
 
 
 @pytest.mark.parametrize("extra", [1, 3])
@@ -411,3 +417,133 @@ def test_a_lookup_of_unknown_ids_is_told_to_the_model_not_the_user(monkeypatch, 
     text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
     # The answer is the model's own words: no failure line is added for it.
     assert text.strip() == "Answered without it."
+
+
+# -- each builder and helper, named (the mutation gate selects tests by name) -------
+
+@pytest.mark.parametrize("build,kind", [
+    (catalogue._formula_entries, "formula"), (catalogue._tool_entries, "tool"),
+    (catalogue._workflow_entries, "workflow"), (catalogue._skill_entries, "skill"),
+    (catalogue._knowledge_entries, "knowledge"),
+])
+def test_each_builder_returns_its_registry_kind(build, kind):
+    built = build()
+    assert built and {e["kind"] for e in built} == {kind}
+    assert {e["id"].split(":", 1)[1] for e in built} == _registered_ids(kind)
+    assert all(e["for"] == catalogue._one_line(e["for"]) for e in built)
+
+
+@pytest.mark.parametrize("unit", ["m", "kN"])
+def test_formula_entries_read_the_registered_formula(registered, unit):
+    _formula(registered, "zz_cat_built", {"a": Param(unit, 1, 9, label="aa", required=True)}, {"b": unit},
+             standard="std")
+    entry = next(e for e in catalogue._formula_entries() if e["id"] == "formula:zz_cat_built")
+    assert entry["inputs"] == [{"name": "a", "label": "aa", "type": "number", "unit": unit, "range": [1, 9],
+                                "required": True, "basis": ""}]
+    assert entry["standard"] == "std" and entry["source"]["owner"] == "base"
+
+
+@pytest.mark.parametrize("obj,ends", [(_example, "test_driver_catalogue.py"), (len, "")])
+def test_source_file_is_the_repo_path_or_empty(obj, ends):
+    path = catalogue._source_file(obj)
+    assert path.endswith(ends) and "\\" not in path
+    assert (path == "") == (ends == "")
+
+
+@pytest.mark.parametrize("param,want", [
+    (Param("m", 0, 5, label="len", kind="number", required=True),
+     {"name": "x", "label": "len", "type": "number", "unit": "m", "range": [0, 5], "required": True, "basis": ""}),
+    (Param("-", label="", kind="text", required=False),
+     {"name": "x", "label": "x", "type": "text", "unit": "", "range": None, "required": False, "basis": ""}),
+])
+def test_input_reads_a_declared_param(param, want):
+    assert catalogue._input("x", param) == want
+
+
+@pytest.mark.parametrize("entry,extra,want", [
+    ({"for": "f", "when_to_use": "u", "when_not": "n", "examples": [1]}, (), []),
+    ({"for": "", "when_to_use": "", "when_not": "n", "examples": []}, (), ["for", "when_to_use", "examples"]),
+    ({"for": "f", "when_to_use": "u", "when_not": "n", "examples": [1]}, ("card",), ["card"]),
+])
+def test_gaps_name_each_missing_declaration(entry, extra, want):
+    assert catalogue._gaps(entry, extra) == want
+
+
+@pytest.mark.parametrize("kind,key", [("formula", "a_b"), ("skill", "qaqc.q1")])
+def test_entry_has_every_field_and_its_id(kind, key):
+    entry = catalogue._entry(kind, key, name="N")
+    assert set(entry) == FIELDS
+    assert (entry["id"], entry["kind"], entry["name"]) == (f"{kind}:{key}", kind, "N")
+    assert entry["stamps"] == {"verified": None, "tested": None, "approved": None}
+
+
+def _linked(out_unit, in_unit):
+    a = catalogue._entry("formula", "a", inputs=[], outputs=[{"name": "q", "unit": out_unit}])
+    b = catalogue._entry("formula", "b", inputs=[{"name": "q", "unit": in_unit}], outputs=[])
+    catalogue._link_formulas([a, b])
+    return a, b
+
+
+@pytest.mark.parametrize("in_unit,fed", [("m3", True), ("m2", False), ("", False)])
+def test_link_formulas_by_name_and_unit(in_unit, fed):
+    a, b = _linked("m3", in_unit)
+    assert a["feeds"] == (["formula:b"] if fed else [])
+    assert b["fed_by"] == (["formula:a"] if fed else [])
+
+
+@pytest.mark.parametrize("card,needs,gaps", [
+    ({"produces": "A register", "use_when": "asked for one", "needs": "a list",
+      "inputs": {"items": "Items"}}, "a list", ["when_not", "examples"]),
+    (None, None, ["for", "when_to_use", "when_not", "examples", "card"]),
+])
+def test_workflow_entries_read_the_card(monkeypatch, card, needs, gaps):
+    from app.agents.driver import routes
+
+    monkeypatch.setattr(routes, "catalogue", lambda: ["zz_register"])
+    monkeypatch.setattr(routes, "cards", lambda: {"zz_register": card} if card else {})
+    (entry,) = catalogue._workflow_entries()
+    assert entry["id"] == "workflow:zz_register" and entry.get("needs") == needs
+    assert entry["gaps"] == gaps
+    assert entry["code"] == {"tool": "run_workflow", "workflow": "zz_register"}
+    assert entry["inputs"] == ([{"name": "items", "label": "Items", "type": "", "unit": "", "range": None,
+                                 "required": False, "basis": ""}] if card else [])
+
+
+@pytest.mark.parametrize("text,want", [
+    ("# Title\n\n| a | b |\n\nFirst prose line.\nSecond.", ("Title", "First prose line.")),
+    ("Prose before.\n## Later heading\n", ("Later heading", "Prose before.")),
+    ("", ("", "")),
+])
+def test_knowledge_summary_is_the_heading_and_first_prose(text, want):
+    assert catalogue._knowledge_summary(text) == want
+
+
+@pytest.mark.parametrize("files", [{"zz_one.md": "# One\n\nAbout one."},
+                                   {"zz_a.md": "# A\n\nAbout a.", "zz_b.md": "no heading", "x.txt": "skip"}])
+def test_knowledge_entries_read_each_markdown_file(monkeypatch, tmp_path, files):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(catalogue, "knowledge_dir", lambda: str(tmp_path))
+    built = catalogue._knowledge_entries()
+    md = sorted(n for n in files if n.endswith(".md"))
+    assert [e["id"] for e in built] == [f"knowledge:{n[:-3]}" for n in md]
+    assert [e["source"]["file"] for e in built] == [f"docs/knowledge/{n}" for n in md]
+
+
+@pytest.mark.parametrize("pick", [0, -1])
+def test_skill_entries_carry_purpose_and_refusals(pick):
+    from app.agents import catalog
+
+    procs = [(h.discipline.value, p) for h in sorted(catalog.list_hats(), key=lambda h: h.discipline.value)
+             for p in (h.playbook.procedures or [] if h.playbook else [])]
+    hat, proc = procs[pick]
+    entry = next(e for e in catalogue._skill_entries() if e["id"] == f"skill:{hat}.{proc.id}")
+    assert (entry["when_to_use"], entry["when_not"]) == (proc.purpose.strip(), proc.refusals.strip())
+    assert entry["code"] == {"hat": hat, "procedure": proc.id}
+
+
+@pytest.mark.parametrize("pick", [0, -1])
+def test_index_block_lists_the_index_and_the_lookup(pick):
+    block = catalogue.index_block()
+    assert catalogue.LOOKUP in block.split("\n", 1)[0]
+    assert catalogue.index_lines()[pick] in block.split("\n")
