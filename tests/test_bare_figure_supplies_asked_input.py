@@ -193,6 +193,20 @@ def test_a_question_that_names_a_numbered_thing_still_lists_its_amounts(question
     assert "these stand: " in note
 
 
+@pytest.mark.parametrize("question, standing", [
+    ("Gross 300,000 excluding VAT, props 40. What is due?", "gross: 300,000"),
+    ("Hire rate 12.5 weekly per prop, props 40. What is the cost?", "hire rate: 12.5"),
+    ("Retention 5 % held back, gross 80,000. What is due?", "retention: 5 %"),
+    ("Adjustment -2 credited later, gross 80,000. What is due?", "adjustment: -2"),
+])
+def test_an_amount_followed_by_more_words_still_stands(question, standing):
+    # A figure with thousands commas, decimals, a percent or a minus sign is an
+    # amount even when more words follow it in its clause; only a plain whole
+    # number so placed names a thing ("clause 14 say").
+    note = supplied_input_note("7.", [question])
+    assert standing in note.split("these stand: ")[1].split(". The question")[0]
+
+
 @pytest.mark.parametrize("thread, message", [
     ([DRAINAGE], "1,600,000 and 45,000."),
     ([FORMWORK], "3 or 4."),
