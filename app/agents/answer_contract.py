@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -854,13 +854,18 @@ _ABSENCE_FILLER = frozenset((
     "what", "where", "who", "whom", "whose", "how", "no", "not", "none", "nothing", "neither", "cannot",
     "can't", "could", "couldn't", "unable", "without", "missing", "file", "files", "record", "records",
     "document", "documents", "project", "projects", "excerpt", "excerpts", "context", "provided", "available",
-    "uploaded", "indexed", "given", "shown", "stated", "listed", "included", "found", "contain", "contains",
+    "uploaded", "indexed", "given", "as", "per", "shown", "stated", "listed", "included", "found", "contain", "contains",
     "contained", "give", "gives", "gave", "show", "shows", "showed", "state", "states", "list", "lists",
     "include", "includes", "hold", "holds", "held", "appear", "appears", "appeared", "find", "see", "seen",
     "yet", "currently",
 ))
 _CLAUSE_END_RE = re.compile(r"\s[—–-]\s|[—–;:]")
 _WORD_RE = re.compile(r"[a-z][a-z'’]+")
+#: What separates one named thing from the next inside a sentence: a marker,
+#: a figure, or punctuation other than a word's own hyphen or apostrophe.
+_THING_SPLIT_RE = re.compile(r"\[\d+\]|\d[\d,.]*|[^\w\s'’-]")
+#: A list item's bullet or number and the indent before it.
+_ITEM_LEAD_RE = re.compile(r"\s*(?:(?:[-*+•]|\d+[.)])\s+)?")
 
 
 def _stem(word: str) -> str:
@@ -868,46 +873,72 @@ def _stem(word: str) -> str:
     return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
 
 
+def _content(text: str) -> set[str]:
+    """The content words of a stretch of text, stemmed."""
+    return {_stem(w) for w in _WORD_RE.findall(text.lower()) if w not in _ABSENCE_FILLER}
+
+
 def _absence_terms(sentence: str) -> set[str]:
     """What an absence sentence says is absent: the content words of its
-    first clause (a remedy after a dash or semicolon is not the thing). Empty
-    when the sentence states no absence, carries a figure or a marker, or
-    names nothing."""
+    first clause (a remedy after a dash or semicolon is not the thing).
+
+    A sentence states an absence only when its negation stands on one side
+    of the thing with nothing but filler on the other: "No X is listed",
+    "There is no X", "X is not given", "X: not listed". A negation between
+    two named things ("the X does not include Y") qualifies X; it does not
+    say X is absent. Empty when the sentence states no absence, carries a
+    figure or a marker, or names nothing."""
     plain = sentence.strip().strip("*_ ")
     if _FIGURE_RE.search(plain) or _MARKER_RE.search(plain):
         return set()
-    clause = _CLAUSE_END_RE.split(plain, maxsplit=1)[0]
-    if not _NEGATIVE_RE.search(clause):
+    neg = _NEGATIVE_RE.search(plain)
+    if not neg:
         return set()
-    return {_stem(w) for w in _WORD_RE.findall(clause.lower()) if w not in _ABSENCE_FILLER}
+    before = plain[: neg.start()]
+    after = _CLAUSE_END_RE.split(plain[neg.end():], maxsplit=1)[0]
+    if _content(before) and _content(after):
+        return set()
+    return _content(_CLAUSE_END_RE.split(plain, maxsplit=1)[0])
 
 
-def _drop_overridden_absence(text: str) -> str:
+def _names_exactly(sentence: str, terms: set[str]) -> bool:
+    """True when one stretch of ``sentence`` (between markers, figures and
+    punctuation) names exactly ``terms``: every word of the absent thing and
+    no other content word. "rock excavation" is not "excavation", and
+    "rebar couplers" is not "rebar"."""
+    return any(_content(part) == terms for part in _THING_SPLIT_RE.split(sentence))
+
+
+def _drop_overridden_absence(text: str, cited: Collection[str]) -> str:
     """An answer never says a thing is absent and then states it.
 
     A sentence stating that something is absent goes when a LATER sentence of
-    the same answer states a figure, carries a citation marker and names every
-    content word of what the absence sentence said was missing. The cited
-    figure is the answer; the absence line it overrides only contradicts it.
+    the same answer states a figure, carries one of this turn's citation
+    markers (``cited``) and names exactly the thing the absence sentence said
+    was missing. The cited figure is the answer; the absence line it
+    overrides only contradicts it.
 
     It stays when no later sentence states a cited figure, when the figure is
-    uncited (nothing here turns an uncited figure into the answer, rule 5),
-    when the cited sentence is about something else (a word of the absent
-    thing is not in it), and when it names nothing. The answer is never left
-    empty: the cited figure sentence itself is never dropped."""
+    uncited or its bracket is not one of this turn's citations (nothing here
+    turns an uncited figure into the answer, rule 5), when the cited sentence
+    names something else, wider or narrower (a word is missing or added), and
+    when it names nothing. The answer is never left empty: the cited figure
+    sentence itself is never dropped."""
+    if not cited:
+        return text
     lines = text.split("\n")
+    leads = [_ITEM_LEAD_RE.match(line).group(0) for line in lines]
     # Every sentence, in reading order, with the line it sits on.
-    spans = [(i, s) for i, line in enumerate(lines) for s in _sentences(line)]
+    spans = [(i, s) for i, line in enumerate(lines) for s in _sentences(line[len(leads[i]):])]
     drop: set[int] = set()
     for k, (_, s) in enumerate(spans):
         terms = _absence_terms(s)
         if not terms:
             continue
         for _, later in spans[k + 1:]:
-            if not (_MARKER_RE.search(later) and _FIGURE_RE.search(_MARKER_RE.sub("", later))):
+            if not (any(m in later for m in cited) and _FIGURE_RE.search(_MARKER_RE.sub("", later))):
                 continue
-            named = {_stem(w) for w in _WORD_RE.findall(later.lower())}
-            if terms <= named:
+            if _names_exactly(later, terms):
                 drop.add(k)
                 break
     out: list[str] = []
@@ -918,8 +949,7 @@ def _drop_overridden_absence(text: str) -> str:
             continue
         kept = " ".join(s.strip() for k, s in mine if k not in drop).strip()
         if kept:
-            lead = line[: len(line) - len(line.lstrip())]
-            out.append(lead + kept)
+            out.append(leads[i] + kept)
     return "\n".join(out)
 
 
@@ -969,7 +999,7 @@ def apply(
             body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
-            body = _drop_overridden_absence(body)
+            body = _drop_overridden_absence(body, {f"[{e['marker']}]" for e in markers.entries})
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
