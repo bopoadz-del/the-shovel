@@ -23,12 +23,23 @@ export function uploadSessionFor(target, sessionId) {
   return target === 'project' ? null : sessionId
 }
 
-/** What to tell the user right after an upload: the server's own note for a
- *  stored file that search does not hold (``panel_status.detail``, e.g. a
- *  file the server stored but did not index), or null when the server sent
- *  no note. The client never guesses who may index; it repeats the server. */
+/** The server's card states (``document_state.state``) that end with the
+ *  file outside search: stored without being indexed, or failed to read.
+ *  A file still waiting to be read, or already searchable, has no note. */
+const NOTICE_STATES = new Set(['stored', 'failed'])
+
+/** What to tell the user right after an upload: the server's own note
+ *  (``panel_status.detail``) when the server's card state for the row says
+ *  the file is stored outside search or failed, or null otherwise. A row
+ *  the server is still reading (indexing scheduled) is not an error, so it
+ *  has no notice. The client never guesses who may index or whether
+ *  indexing will happen; it repeats the server's state and note. */
 export function uploadNotice(doc) {
-  const status = doc && typeof doc === 'object' ? doc.panel_status : null
+  if (!doc || typeof doc !== 'object') return null
+  const state = doc.document_state
+  const family = state && typeof state === 'object' ? state.state : null
+  if (!NOTICE_STATES.has(family)) return null
+  const status = doc.panel_status
   const detail = status && typeof status === 'object' ? status.detail : null
   const text = typeof detail === 'string' ? detail.trim() : ''
   return text || null

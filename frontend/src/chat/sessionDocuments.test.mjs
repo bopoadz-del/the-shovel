@@ -191,27 +191,61 @@ test('the sidebar has one picker per target, each wired to its own', async () =>
 })
 
 // The project control does not decide who may index: the server does, and
-// says so on the stored row. Whatever the server's note is, the user sees it
-// right after the upload; a row with no note says nothing.
-for (const detail of [
-  'Only an admin adds documents to a project\'s knowledge base. The file was not indexed.',
-  'No text could be read from this file.',
+// says so on the stored row. The server's card state picks whether the user
+// is told: a file stored outside search, or one that failed, repeats the
+// server's note; a file still waiting to be read (indexing scheduled) or
+// already searchable says nothing.
+const STORED = { state: 'stored', line: 'Stored, not searchable' }
+const FAILED = { state: 'failed', line: 'Failed' }
+for (const [detail, state] of [
+  ["Only an admin adds documents to a project's knowledge base. The file was not indexed.", STORED],
+  ['No text could be read from this file.', FAILED],
 ]) {
-  test(`a stored-but-not-searchable upload repeats the server note (${detail.slice(0, 20)})`, () => {
-    const doc = { id: 'd1', panel_status: { label: 'Not indexed', detail: `  ${detail} `, status: 'not_indexed' } }
+  test(`a ${state.state} upload repeats the server note (${detail.slice(0, 20)})`, () => {
+    const doc = {
+      id: 'd1',
+      panel_status: { label: 'Not indexed', detail: `  ${detail} `, status: 'not_indexed' },
+      document_state: state,
+    }
     assert.equal(uploadNotice(doc), detail)
   })
 }
 
+// The shape the server returns for an admin's project upload with indexing
+// scheduled in the background: a "Not indexed" panel note with a detail,
+// but the card state says the file is waiting to be read. Not an error.
+for (const [status, detail] of [
+  ['UNVERIFIED', 'This file is stored and has not been added to the project knowledge base.'],
+  ['queued', 'Indexing is queued.'],
+]) {
+  test(`a waiting-to-be-read upload has no notice (${status})`, () => {
+    const doc = {
+      id: 'd9',
+      panel_status: { label: 'Not indexed', detail, status },
+      document_state: { state: 'reading', line: 'Waiting to be read' },
+    }
+    assert.equal(uploadNotice(doc), null)
+    // The same note under a stored card state is shown: the state decides.
+    assert.equal(uploadNotice({ ...doc, document_state: STORED }), detail)
+  })
+}
+
 test('an upload the server holds for search, or a malformed reply, has no notice', () => {
+  const note = { label: 'Not indexed', detail: 'A real note.', status: 'not_indexed' }
   for (const doc of [
     { id: 'd1' },
-    { id: 'd2', panel_status: null },
-    { id: 'd3', panel_status: { label: 'Not indexed', detail: '   ' } },
-    { id: 'd4', panel_status: { detail: 7 } },
-    { id: 'd5', panel_status: 'Not indexed' },
+    { id: 'd1b', document_state: { state: 'searchable', line: 'Searchable' } },
+    { id: 'd1c', panel_status: note, document_state: { state: 'searchable', line: 'Searchable' } },
+    { id: 'd1d', panel_status: note },
+    { id: 'd1e', panel_status: note, document_state: 'stored' },
+    { id: 'd1f', panel_status: note, document_state: { state: 'Stored' } },
+    { id: 'd2', panel_status: null, document_state: STORED },
+    { id: 'd3', panel_status: { label: 'Not indexed', detail: '   ' }, document_state: STORED },
+    { id: 'd4', panel_status: { detail: 7 }, document_state: FAILED },
+    { id: 'd5', panel_status: 'Not indexed', document_state: STORED },
     null,
     undefined,
+    'stored',
   ]) {
     assert.equal(uploadNotice(doc), null, JSON.stringify(doc))
   }
@@ -222,7 +256,10 @@ test('the project upload shows the server note and its title promises no search'
   const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
   const body = src.slice(src.indexOf('async function handleFileChange('), src.indexOf('function beginReplace('))
   assert.match(body, /const notice = uploadNotice\(resp\.document\)\s*if \(notice\) \{\s*setUploadError\(notice\)/)
-  const label = src.slice(src.indexOf('htmlFor="doc-project-file-input"'), src.indexOf('+ Add to project'))
+  const labelAt = src.indexOf('htmlFor="doc-project-file-input"')
+  assert.ok(labelAt > 0)
+  const label = src.slice(labelAt, src.indexOf('+ Add to project', labelAt))
+  assert.match(label, /title=/)
   assert.doesNotMatch(label, /search/i)
 })
 
