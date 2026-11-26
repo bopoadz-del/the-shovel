@@ -17,8 +17,8 @@ from app.agents.answer_contract import _drop_overridden_absence
 CITED = frozenset(f"[{n}]" for n in range(1, 10))
 
 
-def drop(text: str, cited=CITED) -> str:
-    return _drop_overridden_absence(text, cited)
+def drop(text: str, cited=CITED, question: str | None = None) -> str:
+    return _drop_overridden_absence(text, cited, question)
 
 
 # ── GO: a later cited figure states exactly the thing said to be absent ────
@@ -300,3 +300,146 @@ def test_an_asking_turn_is_left_as_asked(text, absence):
     assert absence in answer_contract.apply(text, asking=True).text
     # The same answer on a turn that is not asking loses the absence line.
     assert absence not in answer_contract.apply(text).text
+
+
+# ── An absence that points at the ask ("for that") ──────────────────────────
+
+_FIXED = "No rate on file for that — upload your priced BOQ / rate schedule, or get a supplier quote.\n\n"
+
+
+@pytest.mark.parametrize(
+    "text, question, kept",
+    [
+        (_FIXED + "The blockwork rate is 12 per block [1].",
+         "What is the rate for blockwork?", "The blockwork rate is 12 per block [1]."),
+        (_FIXED + "The rate for plastering is 9 per m2 [2].",
+         "plastering rate please", "The rate for plastering is 9 per m2 [2]."),
+        ("**No price on file for this** — ask the supplier.\n\n**The anchor bolt price is 3 each** [1].",
+         "price of anchor bolts", "**The anchor bolt price is 3 each** [1]."),
+    ],
+)
+def test_an_absence_pointing_at_the_ask_goes_when_the_figure_uses_the_asks_words(text, question, kept):
+    # The blank line after the dropped absence is left for the exit's tidy.
+    assert drop(text, question=question) == "\n" + kept
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _FIXED + "The blockwork rate is 12 per block [1].",
+        "No price on file for this — ask the supplier.\n\nThe anchor bolt price is 3 each [1].",
+    ],
+)
+def test_without_the_question_a_pointing_absence_needs_the_exact_name(text):
+    assert drop(text) == text
+    assert drop(text, question=None) == text
+
+
+@pytest.mark.parametrize(
+    "text, question",
+    [
+        # A word the question never used: a different, narrower thing.
+        ("No price on file for that — upload a priced schedule.\n\n"
+         "Indicative prices: 2,750 to 3,100 QAR per tonne [1].", "What is the price of rebar?"),
+        (_FIXED + "The plaster rate is 9 per m2 [1].", "What is the rate for blockwork?"),
+        # The figure line never says it is a rate.
+        (_FIXED + "- Blockwork: 12 per block [1].", "What is the rate for blockwork?"),
+    ],
+)
+def test_a_pointing_absence_stays_when_the_figure_adds_words_the_ask_did_not_use(text, question):
+    assert drop(text, question=question) == text
+
+
+@pytest.mark.parametrize(
+    "text, question",
+    [
+        # The question's words widen only a pointing absence, never a named one.
+        ("There is no rate for excavation. The rate for rock excavation is 45 per m3 [1].",
+         "rock excavation rate?"),
+        ("No pump duty is given. The standby pump duty is 30 l/s [2].", "standby pump duty"),
+    ],
+)
+def test_the_question_never_widens_an_absence_that_names_its_thing(text, question):
+    assert drop(text, question=question) == text
+
+
+@pytest.mark.parametrize(
+    "text, question, gone",
+    [
+        (_FIXED + "The blockwork rate is 12 per block (boq.pdf, p. 4).",
+         "What is the rate for blockwork?", "No rate on file"),
+        ("No price on file for that — ask the supplier.\n\nThe anchor bolt price is 3 each (prices.pdf, p. 2).",
+         "anchor bolt price", "No price on file"),
+    ],
+)
+def test_through_apply_the_question_reaches_the_rule(text, question, gone):
+    assert gone not in answer_contract.apply(text, question=question).text
+    assert gone in answer_contract.apply(text).text
+
+
+# ── An absence after a statement qualifies the thing stated ─────────────────
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The lump sum is 1,200,000 [1]. No VAT is included. VAT is 15 % [2].",
+        "The rates are fixed for the contract period [1]. No escalation is included. Escalation is 3 % per year [2].",
+        "- The crane hire charge covers fuel [1].\n- No operator is included.\n- The operator is 900 per week [2].",
+    ],
+)
+def test_an_absence_after_a_statement_in_its_paragraph_stays(text):
+    assert drop(text) == text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # A statement in an EARLIER paragraph does not make it a qualifier.
+        ("The lump sum is 1,200,000 [1].\n\nNo VAT is given. VAT is 15 % [2].",
+         "The lump sum is 1,200,000 [1].\n\nVAT is 15 % [2]."),
+        # An earlier negation or a lead-in ending in ':' is not a statement.
+        ("Nothing else was found. No pump duty is given. The pump duty is 45 l/s [1].",
+         "Nothing else was found. The pump duty is 45 l/s [1]."),
+        ("Pumps:\nNo pump duty is given. The pump duty is 45 l/s [1].",
+         "Pumps:\nThe pump duty is 45 l/s [1]."),
+    ],
+)
+def test_an_absence_that_opens_its_paragraph_or_follows_no_statement_still_goes(text, expected):
+    assert drop(text) == expected
+
+
+# ── Clause end, possessive, bullet (each on two inputs) ─────────────────────
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("No rate on file: upload your BOQ.\nThe rate is 12 per block [1].", "The rate is 12 per block [1]."),
+        ("No pump duty given: ask the supplier.\nThe pump duty is 45 l/s [2].", "The pump duty is 45 l/s [2]."),
+    ],
+)
+def test_a_colon_ends_the_absence_clause(text, expected):
+    assert drop(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, gone",
+    [
+        ("No contractor's rate is listed.\nThe contractor rate is 50 per hour [1].", "contractor's rate"),
+        ("The engineer’s fee is not stated. The engineer fee is 4 % [2].", "is not stated"),
+    ],
+)
+def test_a_possessive_names_the_same_thing(text, gone):
+    assert gone not in drop(text)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("• No lead time is listed. See the glazing spec.\n• Lead time is 14 weeks [1].",
+         "• See the glazing spec.\n• Lead time is 14 weeks [1]."),
+        ("+ No pump duty is given. Ask the supplier.\n+ The pump duty is 45 l/s [2].",
+         "+ Ask the supplier.\n+ The pump duty is 45 l/s [2]."),
+    ],
+)
+def test_a_bullet_stays_on_the_line_it_leads(text, expected):
+    assert drop(text) == expected

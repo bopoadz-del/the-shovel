@@ -901,15 +901,46 @@ def _absence_terms(sentence: str) -> set[str]:
     return _content(_CLAUSE_END_RE.split(plain, maxsplit=1)[0])
 
 
-def _names_exactly(sentence: str, terms: set[str]) -> bool:
+#: An absence clause that ends on a pronoun ("No rate on file for that")
+#: points at the thing the user asked about instead of naming it.
+_POINTS_AT_ASK_RE = re.compile(r"\b(?:that|this|it|these|those|them)[\s*_]*$", re.IGNORECASE)
+
+
+def _points_at_ask(sentence: str) -> bool:
+    """True when the absence clause of ``sentence`` ends on a pronoun: the
+    thing it says is absent is the one the user asked about."""
+    clause = _CLAUSE_END_RE.split(sentence.strip().strip("*_ "), maxsplit=1)[0]
+    return bool(_POINTS_AT_ASK_RE.search(clause.rstrip(" .!?")))
+
+
+def _names_exactly(sentence: str, terms: set[str], asked: set[str] = frozenset()) -> bool:
     """True when one stretch of ``sentence`` (between markers, figures and
     punctuation) names exactly ``terms``: every word of the absent thing and
     no other content word. "rock excavation" is not "excavation", and
-    "rebar couplers" is not "rebar"."""
-    return any(_content(part) == terms for part in _THING_SPLIT_RE.split(sentence))
+    "rebar couplers" is not "rebar".
+
+    ``asked`` is what an absence that points at the ask stands for (the
+    content words of the user's question): a stretch may add words, but only
+    words the question itself used. "blockwork rate" names "No rate for
+    that" when the question asked for the blockwork rate; "indicative
+    prices" does not name "No price for that" unless the question asked for
+    indicative prices."""
+    for part in _THING_SPLIT_RE.split(sentence):
+        named = _content(part)
+        if named == terms or (asked and terms < named and named - terms <= asked):
+            return True
+    return False
 
 
-def _drop_overridden_absence(text: str, cited: Collection[str]) -> str:
+def _states_something(sentence: str) -> bool:
+    """True when ``sentence`` asserts something about a named thing: it has
+    content words, is not itself a negation, and does not introduce what
+    follows (a lead-in ending in ``:``)."""
+    plain = _MARKER_RE.sub("", sentence).strip().strip("*_ ")
+    return bool(_content(plain)) and not _NEGATIVE_RE.search(plain) and not plain.endswith(":")
+
+
+def _drop_overridden_absence(text: str, cited: Collection[str], question: str | None = None) -> str:
     """An answer never says a thing is absent and then states it.
 
     A sentence stating that something is absent goes when a LATER sentence of
@@ -923,20 +954,38 @@ def _drop_overridden_absence(text: str, cited: Collection[str]) -> str:
     turns an uncited figure into the answer, rule 5), when the cited sentence
     names something else, wider or narrower (a word is missing or added), and
     when it names nothing. The answer is never left empty: the cited figure
-    sentence itself is never dropped."""
+    sentence itself is never dropped.
+
+    An absence that points at the ask ("No rate on file for that") stands
+    for the thing the user's ``question`` named, so a cited figure that
+    names it with the question's own words overrides it ("The blockwork
+    rate is 12 per block [1]" when the blockwork rate was asked). Without a
+    question only the exact name overrides.
+
+    An absence that follows a statement in the same paragraph qualifies the
+    thing that statement is about ("The lump sum is 1,200,000 [1]. No VAT is
+    included.") and stays: its subject is that thing, not the answer's
+    missing figure. A refusal opens its paragraph, or follows only a lead-in
+    that ends in ``:``."""
+    asked = _content(question) if isinstance(question, str) else set()
     lines = text.split("\n")
     leads = [_ITEM_LEAD_RE.match(line).group(0) for line in lines]
     # Every sentence, in reading order, with the line it sits on.
     spans = [(i, s) for i, line in enumerate(lines) for s in _sentences(line[len(leads[i]):])]
+    # The paragraph each line sits in: a blank line starts the next one.
+    para = [sum(1 for ln in lines[:i] if not ln.strip()) for i in range(len(lines))]
     drop: set[int] = set()
-    for k, (_, s) in enumerate(spans):
+    for k, (i, s) in enumerate(spans):
         terms = _absence_terms(s)
         if not terms:
             continue
+        if any(para[j] == para[i] and _states_something(earlier) for j, earlier in spans[:k]):
+            continue
+        scope = asked if _points_at_ask(s) else set()
         for _, later in spans[k + 1:]:
             if not (any(m in later for m in cited) and _FIGURE_RE.search(_MARKER_RE.sub("", later))):
                 continue
-            if _names_exactly(later, terms):
+            if _names_exactly(later, terms, scope):
                 drop.add(k)
                 break
     out: list[str] = []
@@ -997,7 +1046,7 @@ def apply(
             body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
-            body = _drop_overridden_absence(body, {f"[{e['marker']}]" for e in markers.entries})
+            body = _drop_overridden_absence(body, {f"[{e['marker']}]" for e in markers.entries}, question)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
