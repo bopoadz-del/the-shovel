@@ -119,7 +119,7 @@ def test_a_sheet_turn_plans_runs_in_code_and_records_the_trace(monkeypatch, tota
         {"content": "", "tool_calls": [_call("sheet_update", {
             "givens": [{"id": "g1", "what": "total", "value": total, "unit": "currency", "source": "user"},
                        {"id": "g2", "what": "area", "value": area, "unit": "m2", "source": "user"}],
-            "plan": [{"id": "s1", "entry": "formula:arithmetic",
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
                       "inputs": {"operator": "divide", "a": "g1", "b": "g2"}}]}, "c1")]},
         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
         {"content": f"The rate is {shown} currency/m2."},

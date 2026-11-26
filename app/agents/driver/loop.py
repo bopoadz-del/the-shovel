@@ -250,7 +250,7 @@ _SHEET_RULES = (
     "where it came from), a plan of formula steps whose inputs name givens or earlier steps, and "
     "any input still missing, with sheet_update. Run each step with run_step: code runs the formula "
     "and writes the result here. Every arithmetic step, even one division, is a step "
-    "(formula:arithmetic); never work a figure in your own text. Ask the user for a missing input "
+    "(formula:arithmetic_step); never work a figure in your own text. Ask the user for a missing input "
     "only when no document or tool gives it.")
 
 

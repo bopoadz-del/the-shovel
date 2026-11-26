@@ -1,4 +1,4 @@
-"""The ``arithmetic`` formula: one step of plain arithmetic on two values.
+"""The ``arithmetic_step`` formula: one step of plain arithmetic on two values.
 
 Every in-between step of a chained answer -- a sum, a difference, a product,
 even a single division -- is a calculator call, never arithmetic written in
@@ -22,8 +22,10 @@ _LOG = logging.getLogger(__name__)
 
 OPERATORS = ("add", "subtract", "multiply", "divide")
 
-#: The declared unit of a value whose unit is given beside it (``a_unit``).
-ANY_UNIT = "any"
+#: A value's declared unit: a bare number. Its real unit is given beside it
+#: (``a_unit`` / ``b_unit``); a value written with a unit is refused and asked
+#: for by its label, so the unit goes where the arithmetic reads it.
+BARE_NUMBER = "ratio"
 
 #: The magnitude either value may have. Wide on purpose: this is plain
 #: arithmetic on figures that already passed their own formula's checks.
@@ -73,9 +75,8 @@ def _compose(a: str, b: str, operator: str) -> str:
                  "converted to the other's unit."),
     inputs={
         "operator": Param("-", label="operator (add, subtract, multiply or divide)"),
-        # The value's unit is whatever its companion unit input says.
-        "a": Param(ANY_UNIT, -_LIMIT, _LIMIT, label="first value"),
-        "b": Param(ANY_UNIT, -_LIMIT, _LIMIT, label="second value"),
+        "a": Param(BARE_NUMBER, -_LIMIT, _LIMIT, label="first value"),
+        "b": Param(BARE_NUMBER, -_LIMIT, _LIMIT, label="second value"),
         "a_unit": Param("-", label="unit of the first value"),
         "b_unit": Param("-", label="unit of the second value"),
     },
@@ -83,7 +84,7 @@ def _compose(a: str, b: str, operator: str) -> str:
     main_output="result",
     standard="arithmetic",
 )
-def arithmetic(operator: str, a: float, b: float, a_unit: str = "-", b_unit: str = "-") -> Dict[str, Any]:
+def arithmetic_step(operator: str, a: float, b: float, a_unit: str = "-", b_unit: str = "-") -> Dict[str, Any]:
     """``a <operator> b`` with units. An unknown operator, a value that is
     not a finite number, a sum or difference of two different units, or a
     division by zero is refused with the reason -- never a guessed result."""

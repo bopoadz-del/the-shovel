@@ -218,7 +218,7 @@ def sheet_schemas() -> List[Dict[str, Any]]:
         "required": ["id", "value", "unit"]}
     step = {"type": "object", "properties": {
         "id": {"type": "string", "description": "s1, s2, ..."},
-        "entry": {"type": "string", "description": "formula:<calculation name>, e.g. formula:arithmetic"},
+        "entry": {"type": "string", "description": "formula:<calculation name>, e.g. formula:arithmetic_step"},
         "inputs": {"type": "object", "additionalProperties": True,
                    "description": "each input of the formula: a given id (g1), an earlier step id (s1), "
                                   "or a literal option such as an operator"},
@@ -244,7 +244,7 @@ def sheet_schemas() -> List[Dict[str, Any]]:
             "name": RUN_STEP,
             "description": ("Run one plan step. Code resolves its inputs from the sheet, converts them to "
                             "the formula's units, runs the formula and writes the result on the sheet. "
-                            "Every arithmetic step, even one division, is a step (formula:arithmetic)."),
+                            "Every arithmetic step, even one division, is a step (formula:arithmetic_step)."),
             "parameters": {"type": "object", "properties": {"step": {"type": "string"}},
                            "required": ["step"]}}},
     ]

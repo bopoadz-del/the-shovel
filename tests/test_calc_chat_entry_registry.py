@@ -84,6 +84,11 @@ def _check(result: Dict[str, Any], expect: Dict[str, Any]) -> None:
 _DEFL = {"ec_mpa": 200000, "i_mm4": 1e8}
 
 CASES: Dict[str, Case] = {
+    # One arithmetic step with units: 2,059,200 currency / 3,000 m2
+    # = 686.4 currency/m2 (the unit is composed from the two given beside).
+    "arithmetic_step": Case(
+        {"operator": "divide", "a": 2059200, "b": 3000, "a_unit": "currency", "b_unit": "m2"},
+        {"result": 686.4, "result_unit": "currency/m2"}, "b", None),
     # Cantilever, UDL: d = wL^4/(8EI). w = 10 kN/m = 10 N/mm, L = 2000 mm,
     # E = 200000 MPa, I = 1e8 mm4 -> 10 * 2000^4 / (8 * 2e5 * 1e8)
     # = 1.6e14 / 1.6e14 = 1.00 mm.

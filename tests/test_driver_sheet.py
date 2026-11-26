@@ -3,7 +3,7 @@ every result and resolves references; arithmetic runs in code with units.
 Every input below is invented for the test."""
 import pytest
 
-from app.agents.base.formulas.arithmetic import arithmetic
+from app.agents.base.formulas.arithmetic import arithmetic_step
 from app.agents.driver import sheet as ws
 
 
@@ -100,7 +100,7 @@ def test_resolve_given_and_earlier_step(a, b):
     # s2 waits for s1: never guessed
     vals2, problems2 = ws.resolve_inputs(s, "s2")
     assert problems2 and "s1" in problems2[0] and "x" not in vals2
-    s = ws.record_result(s, "s1", "c1", {"result": arithmetic("multiply", a, b, "m", "-"),
+    s = ws.record_result(s, "s1", "c1", {"result": arithmetic_step("multiply", a, b, "m", "-"),
                                          "units": {"result": "m"}}, output="result")
     vals2, problems2 = ws.resolve_inputs(s, "s2")
     assert problems2 == []
@@ -212,7 +212,7 @@ def test_render_is_stable(ids):
     ("multiply", 3, 7, "-", "-", 21.0, "-"),
 ])
 def test_arithmetic(op, a, b, au, bu, value, unit):
-    out = arithmetic(op, a, b, au, bu)
+    out = arithmetic_step(op, a, b, au, bu)
     assert "error" not in out
     assert out["result"] == pytest.approx(value) and out["result_unit"] == unit
     assert f"{out['result']:g}" in out["method"]
@@ -229,16 +229,16 @@ def test_arithmetic(op, a, b, au, bu, value, unit):
     ("add", True, 2, "-", "-", "numbers"),
 ])
 def test_arithmetic_refuses(op, a, b, au, bu, fragment):
-    out = arithmetic(op, a, b, au, bu)
+    out = arithmetic_step(op, a, b, au, bu)
     assert fragment in out["error"] and "result" not in out
 
 
 def test_arithmetic_is_a_registered_base_formula():
     from app.lib import formula_registry
 
-    spec = formula_registry.get("arithmetic")
+    spec = formula_registry.get("arithmetic_step")
     assert spec is not None and spec.owner == "base" and spec.main_output == "result"
-    assert "arithmetic" in {s.name for s in formula_registry.specs_for(None)}
+    assert "arithmetic_step" in {s.name for s in formula_registry.specs_for(None)}
 
 
 # --- run_step: code runs the planned formula and writes the result -------------
@@ -250,7 +250,7 @@ def test_arithmetic_is_a_registered_base_formula():
 def test_run_step_divides_through_code(total, area, expect, unit):
     s = _sheet_with([{"id": "g1", "value": total, "unit": "currency"},
                      {"id": "g2", "value": area, "unit": "m2"}],
-                    [{"id": "s1", "entry": "formula:arithmetic",
+                    [{"id": "s1", "entry": "formula:arithmetic_step",
                       "inputs": {"operator": "divide", "a": "g1", "b": "g2"}}])
     s = ws.run_step(s, "s1", "c1")
     step = s["steps"][0]
@@ -264,9 +264,9 @@ def test_run_step_divides_through_code(total, area, expect, unit):
 def test_run_step_chains_a_result_into_the_next_step(a, b):
     s = _sheet_with([{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"},
                      {"id": "g3", "value": 2, "unit": "-"}],
-                    [{"id": "s1", "entry": "formula:arithmetic",
+                    [{"id": "s1", "entry": "formula:arithmetic_step",
                       "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}},
-                     {"id": "s2", "entry": "formula:arithmetic",
+                     {"id": "s2", "entry": "formula:arithmetic_step",
                       "inputs": {"operator": "divide", "a": "s1", "b": "g3"}}])
     s = ws.run_step(s, "s2", "c0")  # s1 has not run: s2 is not guessed
     assert s["steps"][0]["status"] == "failed" and "s1" in s["steps"][0]["error"]
@@ -280,11 +280,11 @@ def test_run_step_chains_a_result_into_the_next_step(a, b):
 @pytest.mark.parametrize("plan,fragment,status", [
     ({"id": "s1", "entry": "formula:no_such_formula", "inputs": {}}, "not a registered formula", "failed"),
     ({"id": "s1", "entry": "arithmetic", "inputs": {}}, "formula:<name>", "failed"),
-    ({"id": "s1", "entry": "formula:arithmetic", "inputs": {"operator": "add", "a": "g1", "zz": 1}},
+    ({"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "zz": 1}},
      "zz", "failed"),
-    ({"id": "s1", "entry": "formula:arithmetic", "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
+    ({"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
      "convert", "failed"),
-    ({"id": "s1", "entry": "formula:arithmetic", "inputs": {"operator": "add", "a": "g1"}},
+    ({"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1"}},
      "second value", "waiting_input"),
 ])
 def test_run_step_refuses_never_guesses(plan, fragment, status):

@@ -101,9 +101,13 @@ def _err(name: str, *, expect: str = "error", **params):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_audit_slice_matches_live_registry():
-    """sorted(available_calculations())[51:] must stay the owned F–W set (51 = the A–F list, which gained cpm_network,
-    then check_review_timeline and enforce_critical_rules)."""
-    assert available_calculations()[51:] == _AUDIT_SLICE
+    """Every registered calculation from the first owned name on must be the
+    owned F–W set. The boundary is the first owned name, not an index into the
+    sorted list: an index moved with every calculation added before "f"
+    (cpm_network, check_review_timeline, enforce_critical_rules, ...)."""
+    names = available_calculations()
+    assert names == sorted(names)
+    assert [n for n in names if n >= _AUDIT_SLICE[0]] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():

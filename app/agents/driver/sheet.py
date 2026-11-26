@@ -24,7 +24,7 @@ Who writes what -- the point of the sheet:
 (``formula:<name>``): code resolves its inputs from the sheet, holds them to
 the formula's declared units and ranges, runs it and writes the result. An
 in-between step (a sum, a difference, a product, a quotient) is the
-``arithmetic`` formula like any other: arithmetic is never done in the
+``arithmetic_step`` formula like any other: arithmetic is never done in the
 model's text.
 
 Nothing here names a formula, a project or a document: the sheet holds what
