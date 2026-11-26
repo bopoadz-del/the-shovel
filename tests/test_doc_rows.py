@@ -468,3 +468,22 @@ def test_an_empty_value_matches_no_cell_even_an_empty_one(value, match):
             for n, d in ((1, "Pipe"), (2, ""))]
     assert dr.rows_query(rows, "count", {"description": value}, match=match)["value"] == 0
     assert dr.rows_query(rows, "count", {"Item": value}, match=match)["value"] == 0
+
+
+BIG = [_row(1, 1, "Tunnel", "1", "10,000,000,000,000,000", "10,000,000,000,000,000"),
+       _row(1, 2, "Survey", "0", "100", "0")]
+
+
+@pytest.mark.parametrize("where, rows", [
+    ({"rate": 1e16}, [1]),                   # a JSON number is compared as the number it is
+    ({"rate": 100}, [2]),
+    ({"quantity": True}, []),                # a boolean is not the number 1
+    ({"quantity": False}, []),               # nor 0
+])
+def test_a_figure_column_takes_a_number_value_and_refuses_a_boolean(where, rows):
+    assert [r["row_no"] for r in dr.rows_query(BIG, "filter", where)["rows"]] == rows
+
+
+@pytest.mark.parametrize("printed, state", [(True, dr.FAILED), (1, dr.RECONCILED), ("1", dr.RECONCILED)])
+def test_a_boolean_printed_total_is_not_the_number_1(printed, state):
+    assert dr.reconcile_table(_amounts(["1"]), printed).state == state
