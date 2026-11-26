@@ -45,8 +45,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.core import doc_rows_backfill as rb  # noqa: E402
-from scripts import bill_plan_once as bpo  # noqa: E402
+from app.core import doc_rows_backfill as rb
+from scripts import bill_plan_once as bpo
 
 SUMMARY_PREFIX = "ROWSBACKFILLSUMMARY "
 MODE_PLAN = "plan"
