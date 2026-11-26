@@ -88,11 +88,34 @@ def test_every_pr_workflow_keeps_the_concurrency_policy(name):
     assert concurrency_violations(_wf(name)) == []
 
 
-def test_groups_are_one_per_workflow():
-    prefixes = [
-        str(_load(_wf(n))["concurrency"]["group"]).split("$")[0] for n in PR_WORKFLOWS
-    ]
-    assert len(set(prefixes)) == len(prefixes), prefixes
+def _group(text: str) -> str:
+    return str(_load(text)["concurrency"]["group"])
+
+
+def shared_group_prefixes(texts: list[str]) -> list[str]:
+    """Group prefixes (the part before the first expression) used by more
+    than one workflow: two workflows sharing one would cancel each other."""
+    prefixes = [_group(t).split("$")[0] for t in texts]
+    return sorted({p for p in prefixes if prefixes.count(p) > 1})
+
+
+def _wf_text(prefix: str) -> str:
+    return (
+        "on:\n  pull_request:\nconcurrency:\n"
+        f"  group: {prefix}${{{{ github.ref }}}}\n  cancel-in-progress: true\njobs: {{}}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "texts,expected",
+    [
+        ([_wf(n) for n in PR_WORKFLOWS], []),
+        ([_wf_text("lint-"), _wf_text("fast-"), _wf_text("tests-")], []),
+        ([_wf_text("lint-"), _wf_text("fast-"), _wf_text("lint-")], ["lint-"]),
+    ],
+)
+def test_groups_are_one_per_workflow(texts, expected):
+    assert shared_group_prefixes(texts) == expected
 
 
 _GOOD = (
@@ -219,11 +242,40 @@ def test_probes_have_their_own_group_and_are_never_cancelled(name):
                 assert step.get("with", {}).get("sparse-checkout"), name
 
 
-def test_probe_groups_differ_from_every_pr_group():
-    pr = {str(_load(_wf(n))["concurrency"]["group"]) for n in PR_WORKFLOWS}
-    probes = {str(_load(_wf(n))["concurrency"]["group"]) for n in PROBES}
-    assert len(probes) == 2
-    assert not (pr & probes)
+def probe_group_clashes(pr_texts: list[str], probe_texts: list[str]) -> list[str]:
+    """Groups a probe shares with a PR workflow or with another probe; a
+    shared group would queue the probe behind that run."""
+    pr = {_group(t) for t in pr_texts}
+    probes = [_group(t) for t in probe_texts]
+    return sorted({g for g in probes if g in pr or probes.count(g) > 1})
+
+
+def _probe_text(group: str) -> str:
+    return (
+        "on:\n  schedule:\n    - cron: '*/15 * * * *'\nconcurrency:\n"
+        f"  group: {group}\n  cancel-in-progress: false\njobs: {{}}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "pr_texts,probe_texts,expected",
+    [
+        ([_wf(n) for n in PR_WORKFLOWS], [_wf(n) for n in PROBES], []),
+        ([_wf_text("lint-")], [_probe_text("a-probe"), _probe_text("b-probe")], []),
+        (
+            [_wf_text("lint-")],
+            [_probe_text("a-probe"), _probe_text("a-probe")],
+            ["a-probe"],
+        ),
+        (
+            [_wf_text("lint-")],
+            [_probe_text("lint-${{ github.ref }}"), _probe_text("b-probe")],
+            ["lint-${{ github.ref }}"],
+        ),
+    ],
+)
+def test_probe_groups_differ_from_every_pr_group(pr_texts, probe_texts, expected):
+    assert probe_group_clashes(pr_texts, probe_texts) == expected
 
 
 @pytest.mark.parametrize(
