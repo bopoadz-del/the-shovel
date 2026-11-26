@@ -366,10 +366,8 @@ def page_labels(pages: Sequence[Sequence[Sequence[str]]],
     page's own label is the one label on a line whose other words recur on at
     least ``furniture_share`` of the pages (the running footer or header);
     a label inside the page body (an index, a cross-reference) is not. A
-    label two pages claim is dropped from both.
+    label two pages claim is dropped from both. No pages claim nothing.
     """
-    if not pages:
-        return {}
     seen: dict[str, int] = {}
     for lines in pages:
         for word in {t for line in lines for t in line}:
