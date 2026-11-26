@@ -308,6 +308,14 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         # Carried only for this user, project and stored conversation, through
         # the conversation's own access check.
         previous = await off_loop(trace_store.carried_sheet, conversation_id, user_id, project_id)
+        if conversation_id:
+            # Stored as the default path stores it at a turn's start (after the
+            # door's access check), so the next turn's carry finds the row.
+            # Read above first: a row this turn creates carries nothing now.
+            from app.core import agent_memory
+
+            await off_loop(agent_memory.get_or_create_conversation, conversation_id,
+                           getattr(agent, "name", "") or "driver", project_id, owner_id=user_id)
         work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
         sheet_msg["content"] = _sheet_note(work)
         msgs.insert(len(msgs) - 1, sheet_msg)

@@ -379,17 +379,34 @@ def _one_given(monkeypatch, value):
 @pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
 def test_no_sheet_is_carried_for_an_id_with_no_stored_conversation(monkeypatch, value, held):
     from app.core import agent_memory
+    from app.core import projects as store
+    from app.core import users as users_store
 
-    who = {"conversation_id": f"nr-c-{value}", "user_id": "nr-u", "project_id": "nr-p", "sheet_mode": True}
-    _one_given(monkeypatch, value)
-    _run(user_message="hold this", **who)
-    assert agent_memory.get_conversation(who["conversation_id"]) is None
-    assert trace_store.last_sheet(who["conversation_id"], "nr-u", "nr-p")["givens"][0]["value"] == value
+    users_store.ensure_user_exists("nr-u", role="user", email="nr-u@local")
+    pid = store.create_project("no row project", user_id="nr-u")["id"]
+    conv = f"nr-c-{value}"
+    # A record for this very user, project and id -- but no stored conversation.
+    trace_store.save({"schema": "trace/1", "sheet": {"givens": [
+        {"id": "g1", "value": value, "unit": "currency", "source": "user"}], "missing": []}},
+        conv, user_id="nr-u", project_id=pid)
+    assert agent_memory.get_conversation(conv) is None
+    assert trace_store.last_sheet(conv, "nr-u", pid)["givens"][0]["value"] == value
     if not held:
         trace_store.forget_held()
     seen = _scripted(monkeypatch, [{"content": "Nothing held."}])
-    _run(user_message="what do you hold", **who)
+    _run(user_message="what do you hold", conversation_id=conv, user_id="nr-u", project_id=pid, sheet_mode=True)
     assert _sheet_in(seen[0]["messages"])["givens"] == []
+    # The sheet turn stored its conversation, owned by its user, so the next
+    # turn of the same user and project carries this turn's sheet.
+    row = agent_memory.get_conversation(conv)
+    assert row is not None and row.get("owner_id") == "nr-u"
+    _one_given(monkeypatch, value + 1)
+    _run(user_message="hold this", conversation_id=conv, user_id="nr-u", project_id=pid, sheet_mode=True)
+    if not held:
+        trace_store.forget_held()
+    seen = _scripted(monkeypatch, [{"content": "Held."}])
+    _run(user_message="again", conversation_id=conv, user_id="nr-u", project_id=pid, sheet_mode=True)
+    assert _sheet_in(seen[0]["messages"])["givens"][0]["value"] == value + 1
 
 
 @pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
@@ -415,6 +432,28 @@ def test_another_users_turn_on_the_same_id_gets_no_sheet(monkeypatch, value, hel
     seen = _scripted(monkeypatch, [{"content": "Held."}])
     _run(user_message="again", conversation_id=conv, user_id="xu-owner", project_id=pid, sheet_mode=True)
     assert _sheet_in(seen[0]["messages"])["givens"][0]["value"] == value
+
+
+@pytest.mark.parametrize("value,held", [(987654, True), (123457, False)])
+def test_a_sheet_keyed_to_the_user_is_refused_when_the_access_check_fails(monkeypatch, value, held):
+    """The key matches -- this user, project and id wrote the sheet -- but
+    the stored conversation now belongs to a project the user cannot open:
+    the access check refuses the carry."""
+    from app.core import users as users_store
+
+    conv = f"ac-c-{value}"
+    pid = _owned_conversation(conv, "ac-owner")
+    users_store.ensure_user_exists("ac-was-shared", role="user", email="ac-was-shared@local")
+    trace_store.save({"schema": "trace/1", "sheet": {"givens": [
+        {"id": "g1", "value": value, "unit": "currency", "source": "user"}], "missing": []}},
+        conv, user_id="ac-was-shared", project_id=pid)
+    assert trace_store.last_sheet(conv, "ac-was-shared", pid)["givens"][0]["value"] == value
+    if not held:
+        trace_store.forget_held()
+    seen = _scripted(monkeypatch, [{"content": "Nothing held."}])
+    _run(user_message="what do you hold", conversation_id=conv, user_id="ac-was-shared", project_id=pid,
+         sheet_mode=True)
+    assert _sheet_in(seen[0]["messages"])["givens"] == []
 
 
 def _user(uid, role="user"):
