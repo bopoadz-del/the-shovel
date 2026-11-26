@@ -90,6 +90,147 @@ def _types_outside_map(model) -> Dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+_QTO_GROUP_BY_DEFAULT: Tuple[str, ...] = ("storey", "ifc_type")
+
+
+def _qto_number(value: Any) -> Optional[float]:
+    """A quantity figure: an int or float that is not a bool and is finite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _qto_field(element: Dict, field: str) -> Any:
+    """Read ``field`` from the element itself, else from its flattened
+    ``properties`` (``"Pset.Prop"`` keys)."""
+    if field in element:
+        return element[field]
+    props = element.get("properties")
+    if isinstance(props, dict):
+        return props.get(field)
+    return None
+
+
+def _qto_default_columns(elements: List[Dict]) -> List[Dict[str, Any]]:
+    """One column per numeric top-level key the elements themselves carry,
+    each read from that key only, in first-seen order."""
+    seen: List[str] = []
+    for el in elements:
+        for key, value in el.items():
+            if key not in seen and _qto_number(value) is not None:
+                seen.append(key)
+    return [{"column": key, "fields": [key]} for key in seen]
+
+
+def _qto_columns_from_table(table: Any) -> List[Dict[str, Any]]:
+    """Validate a caller's column table: a list of
+    ``{"column": name, "fields": [field, ...], "unit": optional}``.
+
+    ``fields`` is read in order and the first numeric one an element
+    carries is that element's figure. Raises ``ValueError`` naming the
+    first bad row; a table is never half-applied.
+    """
+    if not isinstance(table, list) or not table:
+        raise ValueError("qto_columns must be a non-empty list of column rows")
+    columns: List[Dict[str, Any]] = []
+    names: set = set()
+    for i, row in enumerate(table):
+        if not isinstance(row, dict):
+            raise ValueError(f"qto_columns row {i} is not an object")
+        name = row.get("column")
+        fields = row.get("fields")
+        if isinstance(fields, str):
+            fields = [fields]
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"qto_columns row {i} has no column name")
+        if name in names:
+            raise ValueError(f"qto_columns row {i} repeats column {name!r}")
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or not all(isinstance(f, str) and f for f in fields)
+        ):
+            raise ValueError(f"qto_columns row {i} ({name}) has no fields")
+        names.add(name)
+        col: Dict[str, Any] = {"column": name, "fields": list(fields)}
+        if row.get("unit") is not None:
+            col["unit"] = str(row["unit"])
+        columns.append(col)
+    return columns
+
+
+def group_quantities(
+    elements: List[Dict],
+    columns: Optional[Any] = None,
+    group_by: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Quantity take-off grouped by element keys (storey x IFC class by
+    default), with the column mapping taken from ``columns``.
+
+    Per group and column it reports the total of the figures found, how
+    many elements gave a figure (``counted``), how many gave none
+    (``missing``) and which field each figure came from (``from``), so a
+    total mixing net and gross figures, or covering part of a group, says
+    so. A column with no figure in a group totals ``None``, never 0. An
+    element without a group key value (for example not contained in any
+    storey) is grouped under ``None``; the value is never guessed.
+    """
+    keys = list(group_by) if group_by else list(_QTO_GROUP_BY_DEFAULT)
+    if not all(isinstance(k, str) and k for k in keys):
+        raise ValueError("qto_group_by must be a list of element keys")
+    cols = (
+        _qto_columns_from_table(columns)
+        if columns is not None
+        else _qto_default_columns(elements)
+    )
+    groups: Dict[Tuple, Dict[str, Any]] = {}
+    sums: Dict[Tuple, Dict[str, List[float]]] = {}
+    for el in elements:
+        gkey = tuple(_qto_field(el, k) for k in keys)
+        group = groups.get(gkey)
+        if group is None:
+            group = {k: v for k, v in zip(keys, gkey)}
+            group["count"] = 0
+            group["columns"] = {
+                c["column"]: {"counted": 0, "missing": 0, "from": {}}
+                for c in cols
+            }
+            groups[gkey] = group
+            sums[gkey] = {c["column"]: [] for c in cols}
+        group["count"] += 1
+        for c in cols:
+            cell = group["columns"][c["column"]]
+            for field in c["fields"]:
+                figure = _qto_number(_qto_field(el, field))
+                if figure is not None:
+                    sums[gkey][c["column"]].append(figure)
+                    cell["counted"] += 1
+                    cell["from"][field] = cell["from"].get(field, 0) + 1
+                    break
+            else:
+                cell["missing"] += 1
+    rows: List[Dict[str, Any]] = []
+    for gkey, group in groups.items():
+        for c in cols:
+            figures = sums[gkey][c["column"]]
+            cell = group["columns"][c["column"]]
+            cell["total"] = math.fsum(figures) if figures else None
+            if "unit" in c:
+                cell["unit"] = c["unit"]
+        rows.append(group)
+    rows.sort(key=lambda r: tuple(
+        (r[k] is None, str(r[k]) if r[k] is not None else "") for k in keys
+    ))
+    return {
+        "group_by": keys,
+        "columns": [c["column"] for c in cols],
+        "elements_grouped": len(elements),
+        "groups": rows,
+    }
+
+
 class BIMExtractorBlock(UniversalBlock):
     auto_validate = False
     name = "bim_extractor"
@@ -213,6 +354,20 @@ class BIMExtractorBlock(UniversalBlock):
         project_info = self._extract_project_info(model)
         storeys = self._extract_storeys(model)
         spaces = self._extract_spaces(model)
+        # Take-off grouped by storey x IFC class over every extracted
+        # element (before the payload cap). The column mapping is the
+        # caller's table (``qto_columns``); without one, each quantity key
+        # the elements carry is its own column. A bad table is reported,
+        # never half-applied, and does not lose the extraction.
+        try:
+            qto_groups = group_quantities(
+                building_elements,
+                params.get("qto_columns"),
+                params.get("qto_group_by"),
+            )
+        except ValueError as exc:
+            qto_groups = {"error": str(exc)}
+
         clash_report = {}
         if run_clash:
             clash_report = self._basic_clash_report(
@@ -241,6 +396,7 @@ class BIMExtractorBlock(UniversalBlock):
             "ifc_schema": model.schema,
             "element_count": len(building_elements),
             "element_count_returned": len(building_elements_capped),
+            "qto_groups": qto_groups,
             "quantities": quantities,
             "quantities_truncated": list(quantities_truncated),
             "building_elements": building_elements_capped,
