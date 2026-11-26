@@ -4,6 +4,7 @@ Every test builds its own clashes and its own table. Strategy words are
 made up per test so no assertion can pass on a name the code knows.
 """
 import math
+import os
 
 import pytest
 
@@ -317,3 +318,33 @@ def test_hook_reads_the_table_from_params_then_config(params, expected):
     block = _block({"clash_strategy_table": [{"strategy": "cfg-q"}]})
     out = block._with_clash_register(_report(), params)
     assert out["register"]["rows"][0]["strategy"] == expected
+
+
+# --- triage and register in one detection run ---------------------------------
+
+_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample_office.ifc")
+_GOOD_MOVES = [{"ifc_type": "IfcWall", "rank": 1}, {"ifc_type": "IfcPipeSegment", "rank": 2}]
+_GOOD_STRATEGY = [{"a": {"category": "pipes"}, "strategy": "sleeve", "responsible": "MEP"}]
+
+
+@pytest.mark.parametrize("moves,strategy,triage_ok,register_ok", [
+    (_GOOD_MOVES, [{"stratgy": "x"}], True, False),
+    ({"IfcWall": 1}, _GOOD_STRATEGY, False, True),
+    (_GOOD_MOVES, _GOOD_STRATEGY, True, True),
+])
+def test_one_run_carries_both_summaries_and_one_bad_table_spares_the_other(
+        moves, strategy, triage_ok, register_ok):
+    import asyncio
+    from app.blocks.bim_extractor import BIMExtractorBlock
+    params = {"file_path": _FIXTURE, "run_clash_detection": True,
+              "clash_move_priority": moves, "clash_strategy_table": strategy}
+    out = asyncio.run(BIMExtractorBlock().process({"file_path": _FIXTURE}, params))
+    report = out["clash_report"]
+    assert report["clash_count"] == len(report["clashes"]) >= 1
+    assert ("error" not in report["triage"]) is triage_ok
+    assert ("error" not in report["register"]) is register_ok
+    if triage_ok:
+        assert report["triage"]["clashes_triaged"] == report["clash_count"]
+    if register_ok:
+        assert report["register"]["by_strategy"] == {"sleeve": report["clash_count"]}
+    assert report["triage"]["complete"] is report["register"]["complete"] is True
