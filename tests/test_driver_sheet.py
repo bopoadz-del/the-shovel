@@ -155,41 +155,47 @@ def test_done_needs_every_plan_step_done():
 
 # --- missing inputs: asked once ----------------------------------------------
 
-def test_missing_asked_once_across_turns():
+@pytest.mark.parametrize("asked,new", [("unit_rate", "duration"), ("crew_size", "area")])
+def test_missing_asked_once_across_turns(asked, new):
     s = ws.new_sheet("t1", "q")
-    s, _ = ws.apply_update(s, {"missing": [{"for": "s2", "input": "unit_rate", "label": "unit rate"}]})
-    assert [m["input"] for m in ws.unasked(s)] == ["unit_rate"]
+    s, _ = ws.apply_update(s, {"missing": [{"for": "s2", "input": asked, "label": asked}]})
+    assert [m["input"] for m in ws.unasked(s)] == [asked]
     s = ws.mark_asked(s)
     assert ws.unasked(s) == []
     nxt = ws.new_sheet("t2", "q2", previous=s)
     # restating the same missing input keeps its asked mark
-    nxt, _ = ws.apply_update(nxt, {"missing": [{"for": "s2", "input": "unit_rate"},
-                                               {"for": "s3", "input": "duration"}]})
-    assert [m["input"] for m in ws.unasked(nxt)] == ["duration"]
+    nxt, _ = ws.apply_update(nxt, {"missing": [{"for": "s2", "input": asked},
+                                               {"for": "s3", "input": new}]})
+    assert [m["input"] for m in ws.unasked(nxt)] == [new]
     # supplying it: the model leaves it off the list
     nxt, _ = ws.apply_update(nxt, {"givens": [{"id": "g1", "value": 450, "unit": "-"}], "missing": []})
     assert nxt["missing"] == []
 
 
-def test_update_without_missing_keeps_missing():
+@pytest.mark.parametrize("inputs", [["a"], ["a", "b"]])
+def test_update_without_missing_keeps_missing(inputs):
     s = ws.new_sheet("t", "q")
-    s, _ = ws.apply_update(s, {"missing": [{"for": "s1", "input": "a"}]})
+    s, _ = ws.apply_update(s, {"missing": [{"for": "s1", "input": i} for i in inputs]})
     s, _ = ws.apply_update(s, {"givens": [{"id": "g1", "value": 1, "unit": "m"}]})
-    assert [m["input"] for m in s["missing"]] == ["a"]
+    assert [m["input"] for m in s["missing"]] == inputs
 
 
-def test_previous_turn_givens_carry_over_marked():
-    s = _sheet_with([{"id": "g1", "value": 20, "unit": "nr"}])
+@pytest.mark.parametrize("value,unit", [(20, "nr"), (3.5, "m")])
+def test_previous_turn_givens_carry_over_marked(value, unit):
+    s = _sheet_with([{"id": "g1", "value": value, "unit": unit}])
     nxt = ws.new_sheet("t2", "next", previous=s)
-    assert nxt["givens"][0]["value"] == 20 and nxt["givens"][0]["source"] == "user"
+    assert nxt["givens"][0]["value"] == value and nxt["givens"][0]["unit"] == unit
+    assert nxt["givens"][0]["source"] == "user"
     assert nxt["plan"] == [] and nxt["steps"] == []
     fresh = ws.new_sheet("t3", "q", previous=None)
     assert fresh["givens"] == []
 
 
-def test_render_is_stable():
-    a = _sheet_with([{"id": "g2", "value": 1, "unit": "m"}, {"id": "g1", "value": 2, "unit": "m"}])
-    assert ws.render(a) == ws.render(a)
+@pytest.mark.parametrize("ids", [("g2", "g1"), ("g1", "g3")])
+def test_render_is_stable(ids):
+    givens = [{"id": ids[0], "value": 1, "unit": "m"}, {"id": ids[1], "value": 2, "unit": "m"}]
+    a, b = _sheet_with(givens), _sheet_with([dict(g) for g in givens])
+    assert ws.render(a) == ws.render(b)
     assert ws.render(a).startswith('{"done":false,"givens":')
 
 

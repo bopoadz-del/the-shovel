@@ -8,24 +8,25 @@ import pytest
 from app.agents.driver import trace_record as tr
 
 
-def _record(figures=None, question_set="teaching", ended="answer", rounds=None):
+def _record(figures=None, question_set="teaching", ended="answer", rounds=None, seconds=1.23456, arg=4471):
     return tr.build(
         turn="ws-p-1", question="q", final_answer="a",
         rounds=rounds if rounds is not None else [
             {"n": 1, "calls": [{"tool": "construction_calc", "entry": "formula:f1",
-                                "args": {"x": 4471}, "result": {"result": 4471}, "ms": 5}]},
+                                "args": {"x": arg}, "result": {"result": arg}, "ms": 5}]},
             {"n": 2, "calls": [{"tool": "construction_calc", "entry": "formula:f2",
                                 "args": {}, "result": {}, "ms": 3}]}],
         figures=figures if figures is not None else [{"figure": "2", "source": "calculator"}],
-        ended=ended, question_set=question_set, seconds=1.23456,
+        ended=ended, question_set=question_set, seconds=seconds,
         provider="p", model="m", temperature=0, seed=7)
 
 
-def test_record_shape_is_plain_json():
-    rec = _record()
+@pytest.mark.parametrize("seconds,kept", [(1.23456, 1.235), (0.5, 0.5)])
+def test_record_shape_is_plain_json(seconds, kept):
+    rec = _record(seconds=seconds)
     assert json.loads(json.dumps(rec)) == rec
     assert rec["schema"] == "trace/1"
-    assert rec["rounds_used"] == 2 and rec["seconds"] == 1.235
+    assert rec["rounds_used"] == 2 and rec["seconds"] == kept
     assert rec["verified"] is None and rec["path_right"] is None
 
 
@@ -90,23 +91,25 @@ def test_exportable_needs_all_four():
     assert tr.exportable(forged) is False                                       # stamp written by hand
 
 
-def test_example_only_from_teaching_and_keeps_no_figure():
-    rec = tr.stamp_verified(_record(), "tester:r1", "t", True)
+@pytest.mark.parametrize("arg", [4471, 905])
+def test_example_only_from_teaching_and_keeps_no_figure(arg):
+    rec = tr.stamp_verified(_record(arg=arg), "tester:r1", "t", True)
     ex = tr.example_from(rec)
     assert ex["entries_in_order"] == ["formula:f1", "formula:f2"]
     dumped = json.dumps(ex)
-    assert "4471" not in dumped and '"args"' not in dumped and '"result"' not in dumped
+    assert str(arg) not in dumped and '"args"' not in dumped and '"result"' not in dumped
     assert "final_answer" not in ex and "figures" not in ex
     frozen = tr.stamp_verified(_record(question_set="frozen"), "tester:r1", "t", True)
     assert tr.example_from(frozen) is None
     assert tr.example_from(_record()) is None
 
 
-def test_example_order_follows_rounds():
-    rounds = [{"n": 1, "calls": [{"tool": "t", "entry": "formula:b"}]},
-              {"n": 2, "calls": [{"tool": "t", "entry": "formula:a"}, {"tool": "lookup"}]}]
+@pytest.mark.parametrize("first,second", [("b", "a"), ("c", "d")])
+def test_example_order_follows_rounds(first, second):
+    rounds = [{"n": 1, "calls": [{"tool": "t", "entry": f"formula:{first}"}]},
+              {"n": 2, "calls": [{"tool": "t", "entry": f"formula:{second}"}, {"tool": "lookup"}]}]
     rec = tr.stamp_verified(_record(rounds=rounds), "user:9", "t", True)
-    assert tr.example_from(rec)["entries_in_order"] == ["formula:b", "formula:a", "lookup"]
+    assert tr.example_from(rec)["entries_in_order"] == [f"formula:{first}", f"formula:{second}", "lookup"]
 
 
 @pytest.mark.parametrize("n", [1, 3])
