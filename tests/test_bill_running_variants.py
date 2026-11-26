@@ -276,8 +276,12 @@ def test_each_glyph_confusion_is_a_misreading(pair, word, misread, other):
     assert not g._slipped_word(word, other) and not g._slipped_word(other, word)
 
 
-def test_every_glyph_confusion_has_its_case():
-    assert {(x, y) for x, y, *_ in EVERY_CONFUSION} == set(g.OCR_GLYPH_CONFUSIONS)
+# A pair added to the table without its case above fails here; a case whose
+# pair left the table fails in the test above.
+@pytest.mark.parametrize("pair", sorted(g.OCR_GLYPH_CONFUSIONS),
+                         ids=[f"{x}-{y}" for x, y in sorted(g.OCR_GLYPH_CONFUSIONS)])
+def test_every_glyph_confusion_has_its_case(pair):
+    assert pair in {(x, y) for x, y, *_ in EVERY_CONFUSION}
 
 
 @pytest.mark.parametrize("a, b, alike", [
