@@ -11,6 +11,12 @@ states the other eight, so their stated form is each formula's own docstring
 (for the beam solver: the boundary conditions it names). Every expected value
 below is a hand calculation from that stated form, written as a literal; none
 is obtained by running the calculator. All inputs are invented figures.
+
+One difference is reported to the owner, not decided by a test: the knowledge
+entry passes a lift only with positive margin, but the code passes a lift whose
+utilisation equals the limit, so with a 100 % limit a load equal to the net
+capacity (zero margin) is passed. That boundary is not pinned here; the crane
+cases below hold a positive margin or no margin at all.
 """
 from __future__ import annotations
 
@@ -105,6 +111,9 @@ def test_beam_reactions_refuses_what_it_cannot_solve(span, support):
     (6, "simply_supported", [{"kind": "point", "P": 60, "a": 2}], 80.0, 2.0, "sagging"),  # Pab/L
     (5, "fixed_fixed", [{"kind": "udl", "w": 12}], -25.0, None, "hogging"),       # wL^2/12 > wL^2/24
     (4, "cantilever", [{"kind": "udl", "w": 5}], -40.0, 0.0, "hogging"),          # wL^2/2 at the root
+    # propped (fixed at x=0, M(L)=0): -wL^2/8 at the fixed end > 9wL^2/128 in the span.
+    (4, "propped_cantilever", [{"kind": "udl", "w": 8}], -16.0, 0.0, "hogging"),
+    (8, "propped_cantilever", [{"kind": "udl", "w": 5}], -40.0, 0.0, "hogging"),
 ])
 def test_beam_governing_moment_is_the_largest_magnitude(span, support, loads, m, pos, sense):
     out = beam_governing_moment(span, support, loads)
@@ -192,6 +201,7 @@ def test_crane_net_capacity_and_utilisation(chart, ded, load, limit, net, util, 
 @pytest.mark.parametrize("chart,ded,load", [(100, 5, 96), (40, 10, 31)])
 def test_crane_load_above_net_capacity_has_no_positive_margin(chart, ded, load):
     # equipment.crane_rating_check: reject any configuration without positive margin.
+    # Load above net only; load equal to net under a 100 % limit is the reported difference.
     out = crane_lift_capacity(chart, ded, load, 1.0)
     assert out["passed"] is False
     assert "exceeds the net capacity" in out["reason"]
@@ -233,6 +243,9 @@ def test_owner_kb_states_strain_over_alpha(field, want):
     (0.0002, 10e-6, 20.0),
     (0.00036, 7.2e-6, 50.0),
     (0.000108, 10.8e-6, 10.0),
+    # not whole degrees: 0.0002 / 12e-6 = 16.67, 0.00035 / 12e-6 = 29.17 (one decimal).
+    (0.0002, 12e-6, 16.7),
+    (0.00035, 12e-6, 29.2),
 ])
 def test_equivalent_temperature_drop_is_strain_over_alpha(strain, alpha, dt):
     _close(thermal_shrinkage_equivalence(strain, alpha)["equivalent_temp_drop_c"], dt)
