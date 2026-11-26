@@ -495,13 +495,13 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             trace[-1]["calls"].append({
                 "tool": name, "workflow": args.get("workflow") if name == routes.RUN_WORKFLOW else None,
                 "calculation": args.get("calculation") if name == "construction_calc" else None,
+                # What the tool itself states for the trace record (e.g. a
+                # memory note's operation, name, size and turn), as given.
+                "trace": result_of_call.get("trace") if isinstance(result_of_call.get("trace"), dict) else None,
                 "ok": ok, "missing": bool(result_of_call.get("missing") or result_of_call.get("needs_input")),
                 # A calculator's own verdict: success, or needs_input and which inputs.
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
-                # What the tool itself states for the trace record (e.g. a
-                # memory note's operation, name, size and turn), as given.
-                "trace": result_of_call.get("trace") if isinstance(result_of_call.get("trace"), dict) else None,
             })
             if name != tools.SELECT_HAT:
                 if ok:
