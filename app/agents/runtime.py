@@ -9961,9 +9961,6 @@ def _derivation_figure(value: float) -> str:
         rounded = exact.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
     else:
         mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
-        if abs(mantissa) >= 10:
-            lead += 1
-            mantissa = exact.scaleb(-lead).quantize(step, rounding=ROUND_HALF_UP)
         rounded = mantissa.scaleb(lead)
     # The form follows the figure shown, not the float before rounding: a
     # value that rounds across a bound is written as the figure it rounds to,
