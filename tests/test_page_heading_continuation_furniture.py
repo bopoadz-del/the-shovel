@@ -54,6 +54,38 @@ def test_running_footer_neither_opens_nor_names_a_continuation_page(opening, foo
     "footer",
     ["9 ISSUED FOR TENDER", "12 MARINA OFFICES PACKAGE C"],
 )
+def test_furniture_named_page_leaves_the_next_bare_page_unfiled(footer):
+    pages = [
+        f"{footer}\nThe works are let as one package.",
+        "under the terms set out below",
+        f"{footer}\nThe contractor keeps the site tidy.",
+        f"{footer}\nThe gates are locked at night.",
+    ]
+    text, starts = _doc(pages)
+    headings = page_heading_lines(text, starts)
+    assert headings == {1: footer, 3: footer, 4: footer}
+
+
+@pytest.mark.parametrize(
+    "footer",
+    ["9 ISSUED FOR TENDER", "MARINA OFFICES SPECIFICATION"],
+)
+def test_section_opened_after_furniture_page_still_carries(footer):
+    pages = [
+        f"{footer}\nThe works are let as one package.",
+        f"{footer}\n4.2 Hoarding\nPanels are fixed to posts.",
+        "and painted on the outer face",
+        f"{footer}\nThe gates are locked at night.",
+    ]
+    text, starts = _doc(pages)
+    headings = page_heading_lines(text, starts)
+    assert headings[3] == "4.2 Hoarding"
+
+
+@pytest.mark.parametrize(
+    "footer",
+    ["9 ISSUED FOR TENDER", "12 MARINA OFFICES PACKAGE C"],
+)
 def test_furniture_still_names_a_page_with_no_open_section(footer):
     pages = [
         f"until the cubes reach strength\nand the engineer agrees.\n{footer}",

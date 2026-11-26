@@ -378,6 +378,8 @@ def _section_in_force(
             continue
         if sectioned and heading_line_for_page("\n".join(lines[idx:])) == head:
             return head
+    if running is not None and running(filed):
+        return ""  # a page filed under its furniture leaves no section open
     return filed
 
 

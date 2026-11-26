@@ -129,3 +129,41 @@ def test_split_piece_on_a_continuation_page_opens_on_the_open_section(first, pie
     chunks, pages = attach_page_headings([piece], [2], [0], headings)
     assert chunks[0].split("\n", 1)[0] == section
     assert pages == [2]
+
+
+@pytest.mark.parametrize(
+    "first,section",
+    [
+        (
+            "3.1 Mixing\nConcrete is mixed on site.\n2 bags of cement are used per batch.",
+            "3.1 Mixing",
+        ),
+        (
+            "7.4 Base Plates\nPlates are set on grout.\n12 bolts are fixed to each plate, as shown.",
+            "7.4 Base Plates",
+        ),
+    ],
+)
+def test_sentence_opening_on_a_figure_does_not_become_the_open_section(first, section):
+    text, starts = _doc([first, "and the work is checked by the engineer"])
+    assert page_heading_lines(text, starts)[2] == section
+
+
+@pytest.mark.parametrize(
+    "section,number,title",
+    [("4.0 Doors", "A-301", "Door Schedule"), ("6.2 Roof Drainage", "M-110", "Roof Plan")],
+)
+def test_drawing_sheet_closes_the_section_open_before_it(section, number, title):
+    def title_block(page: str) -> dict:
+        return {"drawing_number": number, "drawing_title": title} if number in page else {}
+
+    pages = [
+        f"{section}\nLeaves are hung on three hinges.",
+        f"{number}\nscale 1 to 50",
+        "notes continue here in plain words",
+    ]
+    text, starts = _doc(pages)
+    headings = page_heading_lines(text, starts, title_block)
+    assert headings[1] == section
+    assert headings[2] == f"{number} - {title}"
+    assert 3 not in headings
