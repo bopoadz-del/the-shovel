@@ -219,3 +219,198 @@ def test_the_passage_documents_are_named_from_the_documents_table(names, monkeyp
     monkeypatch.setattr(projects, "document_names", lambda ids: seen.append(list(ids)) or dict(names))
     assert answer_exit._document_names(list(names)) == names
     assert seen == [list(names)]
+
+
+# ── the streamed path, alone and under the router's wrapper ─────────────────
+
+def _stream_agent(case, monkeypatch):
+    """An agent whose turn drafts ``case['draft']`` from ``case['own_doc']``,
+    the way the runtime records a handed passage in the turn's evidence."""
+    from app.agents.runtime import Agent
+
+    monkeypatch.delenv("DRIVER_MODE", raising=False)
+    agent = Agent(name="sweep-stream-agent", description="t", system_prompt="t", allowed_blocks=[])
+
+    async def impl(**kwargs):
+        answer_exit.current_turn().evidence.append(
+            {"doc_id": "own", "doc_name": case["own_doc"], "page": 3, "page_or_section": "p. 3",
+             "chunk_index": 1, "snippet": case["own"]})
+        yield {"type": "start"}
+        yield {"type": "token", "content": case["draft"]}
+        yield {"type": "end", "content": case["draft"],
+               "sources": [{"doc_id": "own", "doc_name": case["own_doc"], "page_or_section": "p. 3"}]}
+
+    monkeypatch.setattr(agent, "_chat_stream_impl", impl)
+    return agent
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("project", ["proj-s1", "proj-s2"])
+def test_a_streamed_turn_sweeps_the_project_it_answers_from(case, project, monkeypatch):
+    import asyncio
+
+    calls: list = []
+    _wire(monkeypatch, [("other", case["other"])], calls, case["other_doc"])
+    agent = _stream_agent(case, monkeypatch)
+
+    async def run():
+        return [e async for e in agent.chat_stream(case["question"], project_id=project)]
+
+    end = [e for e in asyncio.run(run()) if e.get("type") == "end"][-1]
+    assert [c[0] for c in calls] == [project]
+    assert case["stated"] in end["content"] and case["differing"] in end["content"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_router_wrapper_does_not_search_the_same_turn_again(case, monkeypatch):
+    """The router's exit runs on the record the agent's stream already
+    checked: one search per turn, and the evidence gains only the passage
+    that differs."""
+    import asyncio
+    import json
+
+    from app.routers import exit_frames
+
+    calls: list = []
+
+    def search(project_id, query, k):
+        calls.append(query)
+        return [NS(doc_id="other", chunk_index=0, page=5, text=case["other"])]
+
+    monkeypatch.setattr(answer_exit, "_lexical_search", search)
+    monkeypatch.setattr(answer_exit, "_document_names", lambda ids: {d: case["other_doc"] for d in ids})
+    agent = _stream_agent(case, monkeypatch)
+
+    async def frames():
+        async for e in agent.chat_stream(case["question"], project_id="proj-r"):
+            yield f"data: {json.dumps(e)}\n\n"
+
+    async def run():
+        out = [f async for f in exit_frames.with_answer_exit(frames(), case["question"])]
+        return out, answer_exit.current_turn()
+
+    out, turn = asyncio.run(run())
+    end = json.loads(out[-1][len("data:"):])
+    assert len(calls) == 1 and turn.swept
+    assert sorted(r["doc_id"] for r in turn.evidence) == ["other", "own"]
+    assert case["stated"] in end["content"] and case["differing"] in end["content"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_a_turn_is_swept_once(case, monkeypatch):
+    """A second exit pass on the same turn (the router's wrapper after the
+    agent's stream) never searches again, even for text that still states
+    the identifier beside its value."""
+    calls: list = []
+    _wire(monkeypatch, [("other", case["other"])], calls, case["other_doc"])
+    turn = _turn(case)
+    answer_exit.check_result(_result(case), turn)
+    answer_exit.check_result(_result(case), turn)
+    assert len(calls) == 1
+    assert sorted(r["doc_id"] for r in turn.evidence) == ["other", "own"]
+
+
+# ── a cited document's own number is where a value is written ──────────────
+
+LABELS = [
+    pytest.param("S-101 General Notes.pdf", "The cover is 40 mm to BS 8500 [S-101 General Notes.pdf, p. 2].",
+                 "bs 8500", "s-101", "Cover at the S-101 slab edge shall be 65 mm.", id="sheet-mm"),
+    pytest.param("A-205 Grout Plan.pdf", "Grout under the plates is 45 MPa per Table 6.2 [A-205 Grout Plan.pdf].",
+                 "table 6.2", "a-205", "A-205 pocket grout is 30 MPa.", id="plan-mpa"),
+]
+
+
+@pytest.mark.parametrize(("doc", "draft", "subject", "label", "label_only"), LABELS)
+def test_a_handed_document_number_is_not_searched_or_matched(doc, draft, subject, label, label_only):
+    queries: list = []
+    found = discrepancy_sweep.sweep_rows(
+        draft, [{"doc_id": "own", "doc_name": doc, "chunk_index": 0}],
+        lambda q, k: queries.append(q) or [NS(doc_id="x", chunk_index=0, page=1, text=label_only)],
+        lambda ids: {"x": "Other.pdf"},
+    )
+    assert queries == [subject] and found == []
+
+
+@pytest.mark.parametrize(("doc", "draft", "subject", "label", "label_only"), LABELS)
+def test_the_same_number_is_searched_when_no_handed_document_bears_it(doc, draft, subject, label, label_only):
+    """Must NOT fire: the number is a subject when no handed document is named by it."""
+    queries: list = []
+    found = discrepancy_sweep.sweep_rows(
+        draft, [{"doc_id": "own", "doc_name": "Unrelated Report.pdf", "chunk_index": 0}],
+        lambda q, k: queries.append(q) or [NS(doc_id="x", chunk_index=0, page=1, text=label_only)],
+        lambda ids: {"x": "Other.pdf"},
+    )
+    assert queries == [f"{subject} {label}"]
+    assert [r["doc_id"] for r in found] == ["x"]
+
+
+@pytest.mark.parametrize("draft", [
+    "The cover is 40 mm [S-101 General Notes.pdf, p. 2].",
+    "Plates take 45 MPa grout [A-205 Grout Plan.pdf].",
+])
+def test_a_value_beside_only_a_handed_document_number_means_no_search(draft):
+    def search(query, k):
+        raise AssertionError("searched")
+
+    handed = [{"doc_id": "own", "doc_name": n} for n in ("S-101 General Notes.pdf", "A-205 Grout Plan.pdf")]
+    assert discrepancy_sweep.sweep_rows(draft, handed, search, lambda ids: {}) == []
+
+
+# ── every stated identifier and sentence, the row's name and page ───────────
+
+TWO = [
+    pytest.param("The cover is 40 mm to BS 8500. Base plate grout is 45 MPa per Table 6.2.",
+                 "bs 8500 table 6.2", id="cover-then-grout"),
+    pytest.param("Base plate grout is 45 MPa per Table 6.2. The cover is 40 mm to BS 8500.",
+                 "table 6.2 bs 8500", id="grout-then-cover"),
+]
+_PASSAGES = [NS(doc_id="c", chunk_index=0, page=4, text="Cover to BS 8500 shall be 50 mm."),
+             NS(doc_id="g", chunk_index=0, page=6, text="Table 6.2 grout strength 60 MPa.")]
+
+
+@pytest.mark.parametrize(("draft", "query"), TWO)
+def test_every_stated_identifier_is_searched_and_every_sentence_checked(draft, query):
+    queries: list = []
+    found = discrepancy_sweep.sweep_rows(draft, [], lambda q, k: queries.append(q) or list(_PASSAGES),
+                                         lambda ids: {"c": "Cover Notes.pdf", "g": "Grout Notes.pdf"})
+    assert queries == [query]
+    assert sorted(r["doc_id"] for r in found) == ["c", "g"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_search_reads_twenty_passages(case, monkeypatch):
+    calls: list = []
+    _wire(monkeypatch, [("other", case["other"])], calls, case["other_doc"])
+    answer_exit.check_result(_result(case), _turn(case))
+    assert [c[2] for c in calls] == [20]
+
+
+@pytest.mark.parametrize(("stored", "shown"), [
+    ("C:/proj/docs/Notes Rev B.pdf", "Notes Rev B.pdf"),
+    ("uploads/2026/site/Grout Schedule.xlsx", "Grout Schedule.xlsx"),
+])
+def test_a_document_stored_under_a_path_is_named_by_its_base_name(stored, shown, monkeypatch):
+    case = CASES[0].values[0]
+    _wire(monkeypatch, [("other", case["other"])], [], stored)
+    turn = _turn(case)
+    answer_exit.check_result(_result(case), turn)
+    assert [r["doc_name"] for r in turn.evidence] == [case["own_doc"], shown]
+
+
+@pytest.mark.parametrize("stored", ['""', "''"])
+def test_a_name_that_reads_as_nothing_is_not_added(stored, monkeypatch):
+    case = CASES[1].values[0]
+    _wire(monkeypatch, [("other", case["other"])], [], stored)
+    turn = _turn(case)
+    answer_exit.check_result(_result(case), turn)
+    assert [r["doc_id"] for r in turn.evidence] == ["own"]
+
+
+@pytest.mark.parametrize("page", [True, False, "7"])
+def test_a_page_that_is_not_a_number_is_not_shown(page):
+    case = CASES[0].values[0]
+    found = discrepancy_sweep.sweep_rows(
+        case["draft"], [], lambda q, k: [NS(doc_id="x", chunk_index=0, page=page, text=case["other"])],
+        lambda ids: {"x": "Other.pdf"},
+    )
+    assert [(r["page"], r["page_or_section"]) for r in found] == [(None, "")]

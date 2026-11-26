@@ -180,19 +180,27 @@ def sweep_rows(
     figure for the same identifier comes back as an evidence row of the same
     shape the turn records for handed passages. A passage whose document has
     no name is not returned: it could not be cited.
+
+    A designation that is part of the name of a handed document (a drawing or
+    sheet number the draft cites as its source) names where a value is
+    written, not what the value is for: it is neither searched for nor
+    matched on.
     """
-    stated = stated_sentences(draft)
+    handed = [r for r in handed if isinstance(r, dict)]
+    labels = {d for r in handed for d in _designations(str(r.get("doc_name") or ""))}
+    stated = [s for s in stated_sentences(draft) if set(_designations(s)) - labels]
     if not stated:
         return []
-    identifiers = list(dict.fromkeys(i for s in stated for i in _designations(s)))
-    have = {(str(r.get("doc_id") or ""), r.get("chunk_index")) for r in handed if isinstance(r, dict)}
+    identifiers = list(dict.fromkeys(i for s in stated for i in _designations(s) if i not in labels))
+    have = {(str(r.get("doc_id") or ""), r.get("chunk_index")) for r in handed}
     fresh = [c for c in search(" ".join(identifiers), SWEEP_K)
              if str(getattr(c, "text", "") or "").strip()
              and (str(c.doc_id or ""), c.chunk_index) not in have]
     candidates = [(str(i), str(c.text)) for i, c in enumerate(fresh)]
     hit: set[int] = set()
     for sentence in stated:
-        hit.update(int(h.source) for h in sweep_differences(sentence, candidates))
+        hit.update(int(h.source) for h in sweep_differences(sentence, candidates)
+                   if set(h.identifier.split(",")) - labels)
     found = [fresh[i] for i in sorted(hit)]
     _LOG.info("discrepancy_sweep: identifiers=%d searched=%d differing=%d",
               len(identifiers), len(fresh), len(found))

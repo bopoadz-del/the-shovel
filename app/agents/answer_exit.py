@@ -85,6 +85,11 @@ class Turn:
     #: The project the turn answers from: the exit's discrepancy sweep runs
     #: its one lexical search there ("" -- no project, no sweep).
     project_id: str = ""
+    #: The sweep has run for this turn. A turn's end can pass the exit twice
+    #: (the agent's stream, then the router's wrapper on the same record);
+    #: the second pass reads text the first already rewrote, so it never
+    #: searches again.
+    swept: bool = False
     #: Every tool call of the turn and its whole result, as the messages the
     #: turn's own recovery reads (an assistant call, then its tool message).
     #: Paths that never see the turn's messages -- the wall-clock deadline,
@@ -1813,10 +1818,11 @@ def _sweep_for_other_values(turn: Turn, text: str) -> None:
     the turn's project looks for a passage that gives a different value for
     the same identifier; each one found joins the turn's evidence, so the
     conflict statement states every value with its source. Runs off the
-    event loop (the exit check is offloaded); any failure leaves the evidence
-    as it was."""
-    if not turn.project_id:
+    event loop (the exit check is offloaded); at most once per turn; any
+    failure leaves the evidence as it was."""
+    if not turn.project_id or turn.swept:
         return
+    turn.swept = True
     try:
         from app.agents import discrepancy_sweep
 
