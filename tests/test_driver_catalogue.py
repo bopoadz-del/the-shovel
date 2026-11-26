@@ -547,3 +547,18 @@ def test_index_block_lists_the_index_and_the_lookup(pick):
     block = catalogue.index_block()
     assert catalogue.LOOKUP in block.split("\n", 1)[0]
     assert catalogue.index_lines()[pick] in block.split("\n")
+
+
+@pytest.mark.parametrize("note", ["This ask names a platform calculator.", ""])
+def test_stream_adds_the_named_calculator_note_only_when_there_is_one(monkeypatch, _stream_through_call, note):
+    """loop.stream: a note is a system message before the question; no note, no message."""
+    seen = []
+    monkeypatch.setattr(loop, "_named_calculator_note", lambda message: note)
+    monkeypatch.setattr(llm, "call", _scripted([{"content": "Done."}], seen))
+
+    async def go():
+        return [e async for e in loop.stream(_agent(), user_message="hi")]
+    asyncio.run(go())
+    sent = seen[0]["messages"]
+    assert [m["role"] for m in sent] == ["system"] + (["system"] if note else []) + ["user"]
+    assert [m["content"] for m in sent[1:-1]] == ([note] if note else [])

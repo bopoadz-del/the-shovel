@@ -221,10 +221,7 @@ def knowledge_dir() -> str:
 def _knowledge_summary(text: str) -> Tuple[str, str]:
     """The file's first heading, and its first line of prose."""
     title, prose = "", ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
+    for stripped in (line.strip() for line in text.splitlines() if line.strip()):
         if stripped.startswith("#"):
             if not title:
                 title = stripped.lstrip("#").strip()
