@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.agents.driver import catalogue
 from app.core.answer_report_intent import answer_export_capability_note
 
 _RULES = Path(__file__).resolve().parents[3] / "config" / "driver_standing_rules.md"
@@ -71,6 +72,9 @@ def system_message(project_id: Optional[str], user_id: Optional[str], hat: Optio
         "You are The Fork, a construction project assistant.",
         "Standing rules\n" + standing_rules(),
         "Hats you can wear (choose with select_hat)\n" + hat_lines,
+        # Every registered formula, tool, workflow, skill and knowledge file,
+        # one line each in a fixed order (app.agents.driver.catalogue).
+        catalogue.index_block(),
         # The same download section every loaded agent carries: what the user
         # can take from a finished answer. Static, so it stays in the lead.
         answer_export_capability_note().strip(),

@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
-from app.agents.driver import context, llm, render, routes, sources, tools
+from app.agents.driver import catalogue, context, llm, render, routes, sources, tools
 from app.core import turn_progress
 from app.core.offload import off_loop
 
@@ -462,6 +462,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 else:
                     result_of_call = {"ok": False,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
+            elif name == catalogue.LOOKUP:
+                # The full entries for the ids the model names from the index.
+                result_of_call = await off_loop(catalogue.lookup, args.get("ids"))
             elif name == routes.RUN_WORKFLOW:
                 used.append(f"{name}:{args.get('workflow')}")
                 result_of_call = await routes.run(args, user_message, project_id, user_id, conversation_id)
@@ -500,7 +503,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
             })
-            if name != tools.SELECT_HAT:
+            if name == catalogue.LOOKUP:
+                # The entry ids the model read, on the lookup's own call only.
+                trace[-1]["calls"][-1]["ids"] = catalogue.asked_ids(args.get("ids"))
+            if name not in (tools.SELECT_HAT, catalogue.LOOKUP):
                 if ok:
                     succeeded = True
                 elif not _asks_for_input(result_of_call):
