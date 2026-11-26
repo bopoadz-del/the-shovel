@@ -355,6 +355,268 @@ def test_spreadsheet_keeps_unmapped_cells_in_extra(tmp_path, remark):
     assert dict(row.extra) == {"Item": "A", "Remarks": remark}
 
 
+# ── the bill's own skeleton ─────────────────────────────────────────────────
+
+def _footer(label, words=("Tender", "Issue", "Page")):
+    return [*words, label]
+
+
+def _doc(bodies, labels, words=("Tender", "Issue", "Page")):
+    """Pages as lines of tokens: each body, then the running footer with the
+    page's label (None: a divider page with no footer)."""
+    return [[*body, *([_footer(lb, words)] if lb else [])] for body, lb in zip(bodies, labels)]
+
+
+def _priced_doc(prefix, words, amounts):
+    """Two parts, each with content pages, a collection page, then a summary.
+
+    ``amounts[k]`` are part k's page amounts; the collection lists them and
+    the summary carries their sum (or what ``amounts`` says in a
+    ``("printed", value)`` override at the end)."""
+    bodies, labels, summary = [], [], []
+    for k, pages in enumerate(amounts, 1):
+        printed = None
+        if pages and isinstance(pages[-1], tuple):
+            printed, pages = pages[-1][1], pages[:-1]
+        coll = []
+        for i, a in enumerate(pages, 1):
+            bodies.append([["Item", "work", str(a)]])
+            labels.append(f"{prefix}/{k}/{i}")
+            coll.append(["From", f"{prefix}/{k}/{i}", "Included" if a is None else f"{a:,.2f}"])
+        bodies.append(coll + [["Carried"]])
+        labels.append(f"{prefix}/{k}/{len(pages) + 1}")
+        total = printed if printed is not None else sum(a for a in pages if a is not None)
+        summary.append(["Part", str(k), f"{prefix}/{k}/{len(pages) + 1}", f"{total:,.0f}"])
+    bodies.append(summary + [["SUB-TOTAL", "0"]])
+    labels.append(f"{prefix.upper()}S/1")
+    return _doc(bodies, labels, words)
+
+
+@pytest.mark.parametrize("prefix,words", [("D", ("Tender", "Issue", "Page")),
+                                          ("Q", ("Contract", "Sheet"))])
+def test_page_labels_read_the_running_footer(prefix, words):
+    pages = _doc([[["Cover"]], [["Index", f"{prefix}/1/2"]], [["body"]], [["body"]]],
+                 [None, None, f"{prefix}/1/1", f"{prefix}/1/2"], words)
+    # the index names a page in its body, not on a running line: not its own label
+    assert dr.page_labels(pages) == {3: f"{prefix}/1/1", 4: f"{prefix}/1/2"}
+
+
+@pytest.mark.parametrize("labels,share,expect", [
+    # the footer words recur on 2 of 4 pages: at the share, kept; above it, dropped
+    (["A/1", "A/2", None, None], 0.5, {1: "A/1", 2: "A/2"}),
+    (["B/7", "B/8", None, None], 0.51, {}),
+    (["12/05/2023", "02/06/2023", None, None], 0.5, {}),   # dates are not labels
+])
+def test_page_label_needs_a_recurring_line_and_a_letter(labels, share, expect):
+    pages = _doc([[["x"]], [["y"]], [["z"]], [["w"]]], labels)
+    assert dr.page_labels(pages, furniture_share=share) == expect
+    assert dr.page_labels([]) == {}
+
+
+@pytest.mark.parametrize("labels,expect", [(["E/1", "E/1", "E/2"], {3: "E/2"}),
+                                           (["F/3", "F/4", "F/4"], {1: "F/3"})])
+def test_a_label_two_pages_claim_is_dropped(labels, expect):
+    pages = _doc([[["a"]], [["b"]], [["c"]]], labels)
+    assert dr.page_labels(pages) == expect
+
+
+@pytest.mark.parametrize("p", ["K", "M/2"])
+def test_page_listings_take_the_figure_after_the_label(p):
+    labels = {1: f"{p}/1", 2: f"{p}/2", 3: f"{p}/3"}
+    pages = [[["a"]], [["b"]], [["From", f"{p}/1", "1,250.50"], ["From", f"{p}/2", "Included"],
+                                 ["Both", f"{p}/1", f"{p}/2", "9"], ["Self", f"{p}/3", "4"]]]
+    assert dr.page_listings(pages, labels) == {3: [(f"{p}/1", 1250.5), (f"{p}/2", None)]}
+    one = [[["a"]], [["b"]], [["From", f"{p}/1", "7"]]]
+    assert dr.page_listings(one, labels) == {}
+
+
+@pytest.mark.parametrize("prefix,words,amounts", [
+    ("D", ("Tender", "Issue", "Page"), [[100.0, 250.0], [40.0, None, 60.0]]),
+    ("R", ("Contract", "Sheet"), [[7.0, 8.0, 9.0], [1000.0, 2000.0]]),
+])
+def test_bill_skeleton_reads_parts_and_printed_totals(prefix, words, amounts):
+    pages = _priced_doc(prefix, words, amounts)
+    root, parts = dr.bill_skeleton(pages)
+    assert root == len(pages)
+    assert [p.printed_total for p in parts] == [sum(a for a in pg if a is not None) for pg in amounts]
+    first = len(amounts[0]) + 1
+    assert parts[0].pages == tuple(range(1, first + 1))
+    assert parts[0].summary_page == first
+    assert [a for _, a in parts[1].listed] == amounts[1]
+    assert parts[1].pages[0] == first + 1
+
+
+@pytest.mark.parametrize("labels", [["P/1", "P/2"], ["H/4/1", "H/4/2"]])
+def test_bill_skeleton_without_listing_pages_is_empty(labels):
+    pages = _doc([[["a"]], [["b", labels[0], "5"]]], labels)
+    assert dr.bill_skeleton(pages) == (None, [])
+    assert dr.bill_skeleton([]) == (None, [])
+
+
+def _page_row(n, page, desc, qty="", rate="", total=""):
+    return dr.DocRow(document_id="doc-x", table_no=1, row_no=n, page=page,
+                     fields={"description": desc, "quantity": qty, "rate": rate, "total": total})
+
+
+@pytest.mark.parametrize("words", [("Carried", "To collection"), ("", "Page total")])
+def test_page_total_lines_are_the_running_sum_whatever_they_say(words):
+    rows = [_page_row(1, 5, "a", "2", "10", "20"), _page_row(2, 5, "b", "1", "30", "30"),
+            _page_row(3, 5, words[0], total="50"),
+            _page_row(4, 6, "lump sum", total="50"),          # first on its page: an item
+            _page_row(5, 6, "c", "1", "5", "5"),
+            _page_row(6, 6, "lump sum 2", total="40"),        # not the running 55: an item
+            _page_row(7, 6, words[1], total="95")]
+    assert dr.page_total_lines(rows) == {2, 6}
+    assert dr.page_total_lines([]) == set()
+
+
+
+@pytest.mark.parametrize("left, item, page_no", [(70, 15, 9), (3, 400, 22)])
+def test_page_total_lines_count_only_the_items_on_their_own_page(left, item, page_no):
+    # The page before prints items but no carried line; its amounts must not
+    # be counted into the next page's total, nor make that page's first
+    # amount-only row a total.
+    rows = [_page_row(1, page_no - 1, "a", "1", str(left), str(left)),
+            _page_row(2, page_no, "carried in", total=str(left)),     # first on its page
+            _page_row(3, page_no, "b", "1", str(item), str(item)),
+            _page_row(4, page_no, "Carried", total=str(item + left)),  # own page runs to item+left
+            _page_row(5, page_no, "Carried", total=str(item + left))]
+    assert dr.page_total_lines(rows) == {3}
+    only = [_page_row(1, page_no - 1, "a", "1", str(left), str(left)),
+            _page_row(2, page_no, "b", "1", str(item), str(item)),
+            _page_row(3, page_no, "Carried", total=str(item))]
+    assert dr.page_total_lines(only) == {2}
+
+def _rows_for(pages, amounts):
+    """Item rows on each content page of a ``_priced_doc``, one per amount,
+    plus that page's carried total line."""
+    rows, n, page = [], 0, 0
+    for part in amounts:
+        for a in part:
+            page += 1
+            if a is not None:
+                n += 1
+                rows.append(_page_row(n, page, "item", "1", str(a), str(a)))
+                n += 1
+                rows.append(_page_row(n, page, "Carried", total=str(a)))
+        page += 1  # the collection page
+    return rows
+
+
+@pytest.mark.parametrize("amounts", [[[100.0, 250.0], [40.0, None, 60.0]],
+                                     [[7.0, 8.0, 9.0], [1000.0, 2000.0]]])
+def test_reconcile_skeleton_states(amounts):
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    _, parts = dr.bill_skeleton(pages)
+    rows = _rows_for(pages, amounts)
+    checks = dr.reconcile_skeleton(parts, rows)
+    assert [c.state for c in checks] == [dr.RECONCILED, dr.RECONCILED]
+    assert [c.total_of_rows for c in checks] == [p.printed_total for p in parts]
+    assert checks[0].pages_agree == len(amounts[0]) and checks[0].pages_disagree == 0
+    assert checks[1].pages_unpriced == sum(a is None for a in amounts[1])
+    # drop one item of the first part: the part fails, the page disagrees
+    lost = dr.reconcile_skeleton(parts, rows[2:])
+    assert lost[0].state == dr.FAILED and lost[0].pages_disagree == 1
+    assert lost[1].state == dr.RECONCILED
+    # no rows on a part's pages: NOT READ, never RECONCILED
+    assert [c.state for c in dr.reconcile_skeleton(parts, [])] == [dr.NOT_READ, dr.NOT_READ]
+
+
+def test_reconcile_skeleton_part_without_printed_total_is_unchecked():
+    part = dr.SkeletonPart("Z/1/2", 2, (1, 2), None, ((1, None),))
+    rows = [_page_row(1, 1, "a", "1", "5", "5")]
+    (c,) = dr.reconcile_skeleton([part], rows)
+    assert c.state == dr.UNCHECKED and c.pages_unpriced == 1 and c.listed_sum is None
+    # "5" against 7: past half a unit of each printed figure
+    priced = dr.SkeletonPart("Z/1/2", 2, (1, 2), 7.0, ((1, 7.0),))
+    (d,) = dr.reconcile_skeleton([priced], rows)
+    assert d.state == dr.FAILED and d.pages_disagree == 1
+    # "5" against 5.4: within the rounding "5" prints
+    near = dr.SkeletonPart("Z/1/2", 2, (1, 2), 5.4, ((1, 5.4),))
+    (e,) = dr.reconcile_skeleton([near], rows)
+    assert e.state == dr.RECONCILED and e.pages_agree == 1
+
+
+@pytest.mark.parametrize("words,expect", [
+    ([{"text": "B", "left": 50, "top": 10, "height": 10}, {"text": "A", "left": 5, "top": 12, "height": 10},
+      {"text": "C", "left": 5, "top": 30, "height": 10}], [["A", "B"], ["C"]]),
+    ([{"text": "x", "left": 0, "top": 0, "height": 10}, {"text": "y", "left": 0, "top": 7, "height": 10}],
+     [["x"], ["y"]]),
+])
+def test_lines_of_words(words, expect):
+    assert dr.lines_of_words(words) == expect
+    assert dr.lines_of_words([]) == []
+
+
+@pytest.mark.parametrize("extra,amounts", [
+    (2, [[1.0, 2.0], [5.0, 6.0], [8.0, 9.0]]),
+    (3, [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0], [8.0, 9.0], [10.0, 11.0]]),
+])
+def test_bill_skeleton_summary_is_the_largest_unlisted_listing(extra, amounts):
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    summary = len(pages)
+    # a second, smaller listing nothing names (a rate-only schedule's collection)
+    side = [[["rates"]] for _ in range(extra)]
+    side.append([["From", f"X/9/{i}", "0"] for i in range(1, extra + 1)])
+    pages += _doc(side, [f"X/9/{i}" for i in range(1, extra + 2)])
+    root, parts = dr.bill_skeleton(pages)
+    assert root == summary and len(parts) == len(amounts)
+
+
+@pytest.mark.parametrize("zero", ["0", "0.00"])
+def test_a_zero_amount_first_on_its_page_is_not_a_total_line(zero):
+    rows = [_page_row(1, 3, "Provisional", total=zero), _page_row(2, 3, "a", "1", "4", "4"),
+            _page_row(3, 3, "Carried", total="4")]
+    assert dr.page_total_lines(rows) == {2}
+
+
+@pytest.mark.parametrize("amounts", [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0, 7.0], [8.0, 9.0]]])
+def test_bill_skeleton_survives_collections_that_name_each_other(amounts):
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    c1, c2 = len(amounts[0]) + 1, len(amounts[0]) + len(amounts[1]) + 2
+    pages[c1 - 1].insert(0, ["From", f"D/2/{len(amounts[1]) + 1}", "0"])
+    pages[c2 - 1].insert(0, ["From", f"D/1/{len(amounts[0]) + 1}", "0"])
+    root, parts = dr.bill_skeleton(pages)
+    assert root == len(pages) and len(parts) == 2
+    assert c2 in parts[0].pages and c1 in parts[1].pages
+
+
+@pytest.mark.parametrize("amounts,extra", [([[100.0, 250.0], [40.0, 60.0]], 45.0),
+                                           ([[7.0, 8.0], [1000.0, 2000.0, 3.0]], 302.0)])
+def test_summary_totals_read_sub_total_addition_and_grand_total(amounts, extra):
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    sub = sum(sum(p) for p in amounts)
+    pages[-1][-2:-1] = [["Sub", f"{sub:,.0f}"], ["Allowance", "18%", f"{extra:,.0f}"],
+                        ["Total", f"{sub + extra:,.0f}"], ["Wrong", f"{sub + 2 * extra:,.0f}"]]
+    assert dr.summary_totals(pages) == [sub, sub + extra]
+
+
+@pytest.mark.parametrize("amounts", [[[1.0, 2.0], [3.0, 4.0]], [[5.0], [6.0, 7.0, 8.0]]])
+def test_summary_totals_none_without_a_summary(amounts):
+    assert dr.summary_totals(_doc([[["a"]], [["b"]]], ["P/1", "P/2"])) == []
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    sub = sum(sum(p) for p in amounts)
+    # a figure before the first entry (a heading number) is not a total
+    pages[-1].insert(0, ["Section", "0"])
+    pages[-1][-2:-1] = [["Sub", f"{sub:g}"]]
+    assert dr.summary_totals(pages) == [sub]
+
+
+# additions more than one printed unit apart: whole numbers one apart are
+# within half a unit of each other, so either could be the other's total
+@pytest.mark.parametrize("amounts,adds", [([[1.0, 2.0], [3.0, 4.0]], (5.0, 9.0)),
+                                          ([[10.0], [20.0, 30.0]], (7.0, 12.0))])
+def test_summary_totals_subtotal_counts_from_the_previous_total(amounts, adds):
+    pages = _priced_doc("D", ("Tender", "Issue", "Page"), amounts)
+    sub = sum(sum(p) for p in amounts)
+    a, b = adds
+    pages[-1][-2:-1] = [["Sub", f"{sub:g}"], ["Add", f"{a:g}"], ["Add", f"{b:g}"],
+                        ["Adds", f"{a + b:g}"], ["See", "Q/7/1", f"{sub + a + b:g}"],
+                        ["Grand", f"{sub + a + b:g}"]]
+    # the line naming another reference is not a total, even when its figure matches
+    assert dr.summary_totals(pages) == [sub, a + b, sub + a + b]
+
+
 # ── printed total lines (PR-A step 3) ──────────────────────────────────────
 
 @pytest.mark.parametrize("sheets, totals, states", [

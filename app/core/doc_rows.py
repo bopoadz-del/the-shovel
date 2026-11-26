@@ -320,6 +320,290 @@ def reconcile_tables_with_lines(
     return out
 
 
+# ── the bill's own skeleton: page labels, listing pages, printed totals ─────
+#
+# A long priced document prints a label on every page (its running footer
+# names the page), and its summary and collection pages list other pages by
+# that label with the amount carried from each. Read those pages first and
+# the document says which pages make each part and what each part totals;
+# rows are then assigned by page, not by a heading guessed from their text.
+
+#: A page's own label sits on a line whose other words recur on at least this
+#: share of the pages (the running footer or header).
+FURNITURE_SHARE = 0.5
+
+
+def _is_label(token: str) -> bool:
+    """A page-label shape: segments joined by ``/``, the last a page number,
+    at least one letter (so a date or a fraction is not a label)."""
+    parts = token.split("/")
+    return (len(parts) >= 2 and parts[-1].isdigit() and all(p.isalnum() for p in parts)
+            and any(c.isalpha() for c in token))
+
+
+def _line_figure(tokens: Sequence[str]) -> tuple[float, str] | None:
+    """The last figure on a line and the text it is printed as, None when
+    the line prints none."""
+    for t in reversed(tokens):
+        if any(c.isdigit() for c in t):
+            v = parse_number(t)
+            if v is not None:
+                return v, t
+    return None
+
+
+def _line_amount(tokens: Sequence[str]) -> float | None:
+    """The last figure on a line, None when it prints none."""
+    fig = _line_figure(tokens)
+    return fig[0] if fig else None
+
+
+def page_labels(pages: Sequence[Sequence[Sequence[str]]],
+                furniture_share: float = FURNITURE_SHARE) -> dict[int, str]:
+    """``{page number (1-based): the label the page prints for itself}``.
+
+    ``pages`` is each page's lines, each line its tokens in reading order. A
+    page's own label is the one label on a line whose other words recur on at
+    least ``furniture_share`` of the pages (the running footer or header);
+    a label inside the page body (an index, a cross-reference) is not. A
+    label two pages claim is dropped from both.
+    """
+    if not pages:
+        return {}
+    seen: dict[str, int] = {}
+    for lines in pages:
+        for word in {t for line in lines for t in line}:
+            seen[word] = seen.get(word, 0) + 1
+    claims: dict[int, str] = {}
+    for no, lines in enumerate(pages, 1):
+        best: tuple[float, str] | None = None
+        for line in lines:
+            labels = [t for t in line if _is_label(t)]
+            words = [t for t in line if not _is_label(t)]
+            if len(labels) != 1 or not words:
+                continue
+            share = sum(seen[w] for w in words) / len(words) / len(pages)
+            if share >= furniture_share and (best is None or share > best[0]):
+                best = (share, labels[0])
+        if best:
+            claims[no] = best[1]
+    counts: dict[str, int] = {}
+    for label in claims.values():
+        counts[label] = counts.get(label, 0) + 1
+    return {no: label for no, label in claims.items() if counts[label] == 1}
+
+
+def page_listings(pages: Sequence[Sequence[Sequence[str]]],
+                  labels: Mapping[int, str]) -> dict[int, list[tuple[str, float | None]]]:
+    """``{page: [(label of a listed page, amount printed for it or None)]}``.
+
+    A listing line names exactly one other page by its label; the amount is
+    the last figure after that label (None when the line prints none, e.g. a
+    page carried as included). A page with fewer than two such lines lists
+    nothing.
+    """
+    page_of = {label: no for no, label in labels.items()}
+    out: dict[int, list[tuple[str, float | None]]] = {}
+    for no, lines in enumerate(pages, 1):
+        entries: list[tuple[str, float | None]] = []
+        for line in lines:
+            hits = [i for i, t in enumerate(line) if t in page_of and page_of[t] != no]
+            if len(hits) == 1:
+                entries.append((line[hits[0]], _line_amount(line[hits[0] + 1:])))
+        if len(entries) >= 2:
+            out[no] = entries
+    return out
+
+
+@dataclass(frozen=True)
+class SkeletonPart:
+    """One part of the document as its summary page lists it."""
+
+    label: str
+    summary_page: int
+    pages: tuple[int, ...]
+    printed_total: float | None
+    listed: tuple[tuple[int, float | None], ...]
+
+
+def bill_skeleton(pages: Sequence[Sequence[Sequence[str]]],
+                  furniture_share: float = FURNITURE_SHARE) -> tuple[int | None, list[SkeletonPart]]:
+    """The summary page and the parts it lists.
+
+    The summary is the listing page no other listing names, the one that
+    lists the most pages. Each part is a page it lists: when that page itself
+    lists pages (a collection page), the part is every page walked under it, and
+    ``listed`` is each page under it that lists nothing, with the amount its
+    collection carries for it.
+    """
+    labels = page_labels(pages, furniture_share)
+    listings = page_listings(pages, labels)
+    page_of = {label: no for no, label in labels.items()}
+    named = {page_of[t] for entries in listings.values() for t, _ in entries}
+    roots = [p for p in listings if p not in named]
+    if not roots:
+        return None, []
+    root = max(roots, key=lambda p: (len(listings[p]), p))
+
+    def leaves(no: int, amount: float | None, path: frozenset[int],
+               walked: set[int]) -> list[tuple[int, float | None]]:
+        walked.add(no)
+        if no not in listings or no in path:
+            return [(no, amount)]
+        out: list[tuple[int, float | None]] = []
+        for t, a in listings[no]:
+            out += leaves(page_of[t], a, path | {no}, walked)
+        return out
+
+    parts = []
+    for label, printed in listings[root]:
+        top = page_of[label]
+        under: set[int] = set()
+        listed = leaves(top, printed, frozenset({root}), under)
+        parts.append(SkeletonPart(label, top, tuple(sorted(under)), printed, tuple(listed)))
+    return root, parts
+
+
+def summary_totals(pages: Sequence[Sequence[Sequence[str]]],
+                   furniture_share: float = FURNITURE_SHARE) -> list[float]:
+    """The total lines the summary page prints after its first entry, in order.
+
+    Each part it lists adds its amount; a later line with a figure and no
+    label is a total when it equals the amounts since the previous total or
+    every amount above it (a sub-total, then a grand total), and otherwise
+    an addition of its own (a contingency) that later totals include. The
+    last one is the document's grand total.
+    """
+    root, _ = bill_skeleton(pages, furniture_share)
+    if root is None:
+        return []
+    labels = page_labels(pages, furniture_share)
+    listed = {label for label, _ in page_listings(pages, labels)[root]}
+    totals: list[float] = []
+    since: list[str] = []
+    running: list[str] = []
+    count = 0
+    for line in pages[root - 1]:
+        hits = [t for t in line if t in listed]
+        if len(hits) == 1:
+            fig = _line_figure(line[line.index(hits[0]) + 1:])
+        elif count and not any(_is_label(t) for t in line):
+            fig = _line_figure(line)
+            if fig is not None and any(_texts_agree(texts, fig[0]) for texts in (since, running)):
+                totals.append(fig[0])
+                since = []
+                continue
+        else:
+            continue
+        if fig is not None:
+            since.append(fig[1])
+            running.append(fig[1])
+        count += 1
+    return totals
+
+
+def _texts_agree(texts: Sequence[str], printed: float) -> bool:
+    """The figures printed as ``texts`` sum to ``printed`` within the
+    rounding they print (:func:`_sum_agrees`)."""
+    values = [parse_number(t) for t in texts]
+    return _sum_agrees((sum(v for v in values if v is not None), list(texts)), printed)
+
+
+def page_total_lines(rows: Sequence[DocRow]) -> set[int]:
+    """Indexes of rows that are a printed total, not an item.
+
+    Within one page, a row printing an amount with no quantity and no rate,
+    whose amount equals the items since the previous such line, is the
+    page's carried total, whatever words it prints.
+    """
+    out: set[int] = set()
+    run: list[str] = []
+    page = None
+    for i, r in enumerate(rows):
+        if i == 0 or r.page != page:
+            run, page = [], r.page
+        amount = r.figure("total")
+        if amount is None:
+            continue
+        if (run and r.figure("quantity") is None and r.figure("rate") is None
+                and _texts_agree(run, amount)):
+            out.add(i)
+            run = []
+            continue
+        run.append(r.fields.get("total", ""))
+    return out
+
+
+@dataclass(frozen=True)
+class PartCheck:
+    """One part's item rows against the totals its own summary pages print."""
+
+    part: SkeletonPart
+    state: str
+    rows: int
+    total_of_rows: float | None
+    listed_sum: float | None
+    pages_agree: int
+    pages_disagree: int
+    pages_unpriced: int
+
+
+def reconcile_skeleton(parts: Sequence[SkeletonPart], rows: Sequence[DocRow]) -> list[PartCheck]:
+    """Each part's item rows (page totals left out) against its printed total.
+
+    RECONCILED when the items sum to the printed total; FAILED when they do
+    not; UNCHECKED when the summary prints no amount for the part; NOT READ
+    when no item row with an amount lies on the part's pages.
+    ``pages_agree`` / ``pages_disagree`` count the listed pages whose items
+    match / miss the amount the collection carries for them;
+    ``pages_unpriced`` the listed pages it carries no amount for.
+    """
+    totals = page_total_lines(rows)
+    per_page: dict[int | None, list[str]] = {}
+    for i, r in enumerate(rows):
+        if i not in totals and r.figure("total") is not None:
+            per_page.setdefault(r.page, []).append(r.fields.get("total", ""))
+    out = []
+    for part in parts:
+        amounts = [a for p in part.pages for a in per_page.get(p, [])]
+        total = sum(parse_number(a) or 0.0 for a in amounts) if amounts else None
+        printed = [a for _, a in part.listed if a is not None]
+        agree = disagree = unpriced = 0
+        for p, a in part.listed:
+            if a is None:
+                unpriced += 1
+            elif per_page.get(p) and _texts_agree(per_page[p], a):
+                agree += 1
+            else:
+                disagree += 1
+        if total is None:
+            state = NOT_READ
+        elif part.printed_total is None:
+            state = UNCHECKED
+        elif _texts_agree(amounts, part.printed_total):
+            state = RECONCILED
+        else:
+            state = FAILED
+        out.append(PartCheck(part, state, len(amounts), total, sum(printed) if printed else None,
+                             agree, disagree, unpriced))
+    return out
+
+
+def lines_of_words(words: Sequence[Mapping[str, Any]]) -> list[list[str]]:
+    """A page's word boxes (``text``, ``left``, ``top``, ``height``) as lines
+    of tokens in reading order: a word starts a new line when its top is more
+    than 0.6 of its height from the line's first word."""
+    out: list[list[Mapping[str, Any]]] = []
+    top: float | None = None
+    for w in sorted(words, key=lambda w: (w["top"], w["left"])):
+        if top is None or abs(w["top"] - top) > w["height"] * 0.6:
+            out.append([w])
+            top = w["top"]
+        else:
+            out[-1].append(w)
+    return [[str(w["text"]) for w in sorted(line, key=lambda w: w["left"])] for line in out]
+
+
 # ── rows_query ──────────────────────────────────────────────────────────────
 
 OPERATIONS = ("filter", "lookup", "sum", "count", "compare")
