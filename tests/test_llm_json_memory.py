@@ -67,9 +67,10 @@ def _script(monkeypatch, replies, seen):
     monkeypatch.setattr(llm, "call", fake_call)
 
 
-def _turn(client, h, pid, message="go"):
-    body = {"message": message, "project_id": pid, "history": [],
-            "conversation_id": f"ws-{pid}-{uuid.uuid4().int % 10**13}"}
+def _turn(client, h, pid, message="go", conversation=True):
+    body = {"message": message, "project_id": pid, "history": []}
+    if conversation:
+        body["conversation_id"] = f"ws-{pid}-{uuid.uuid4().int % 10**13}"
     r = client.post("/v1/chat/stream", json=body, headers={**h, "X-Fork-Driver": "on"})
     return r
 
@@ -151,13 +152,19 @@ def test_another_users_project_cannot_be_read_through_the_route(client, monkeypa
     seen = []
     _script(monkeypatch, [{"content": "", "tool_calls": [_call("read_memory", {"name": name}, "m1")]},
                           {"content": "Done."}], seen)
-    r = _turn(client, stranger, pid)
-    # Refused at the door (no model call), or the model's read finds nothing.
-    reached = [m for s in seen for m in s["messages"] if m.get("role") == "tool"]
-    text = r.text
-    assert json.dumps(data)[:20] not in text
-    for m in reached:
-        assert json.loads(m["content"])["ok"] is False
+    # In a conversation of that project: refused at the door, no model call.
+    assert _turn(client, stranger, pid).status_code == 404
+    assert seen == []
+    # Without a conversation: the route drops a project the caller cannot
+    # access, so the turn has no project and the model's read is refused.
+    r = _turn(client, stranger, pid, conversation=False)
+    assert r.status_code == 200, r.text
+    reached = [json.loads(m["content"]) for m in seen[-1]["messages"] if m.get("role") == "tool"]
+    assert len(reached) == 1
+    assert reached[0]["ok"] is False and "needs a project" in reached[0]["result"]["error"]
+    assert "data" not in reached[0]["result"]
+    # The owner still reads it whole.
+    assert llm_memory.read(pid, name)["data"] == data
 
 
 @pytest.mark.parametrize("name", ["../etc/passwd", "a" * 65, "with space", "", "notes.txt"])
