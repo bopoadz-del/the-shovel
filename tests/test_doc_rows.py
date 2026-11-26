@@ -525,10 +525,29 @@ def test_a_marked_total_is_held_to_its_figures_own_last_digit(printed, amounts, 
 
 @pytest.mark.parametrize("printed", ["AED", "nil", "see summary", "6,000 / 7,000", "Bill 3: 6,000"])
 @pytest.mark.parametrize("amounts", [["1000", "2000", "3000"], ["3", "6000"]])
-def test_a_printed_total_with_no_one_figure_is_unread_not_failed(amounts, printed):
+def test_a_printed_total_with_no_one_figure_is_not_read_not_failed(amounts, printed):
     check = dr.reconcile_table(_amounts(amounts), printed)
-    assert (check.state, check.total_printed, check.total_unread) == (dr.UNCHECKED, None, True)
+    assert (check.state, check.total_printed, check.total_unread) == (dr.NOT_READ, None, True)
+    assert check.rows == len(amounts)
     assert dr.reconcile_table([], printed).total_unread is True
+    assert dr.reconcile_tables(_amounts(amounts), {1: printed})[1].state == dr.NOT_READ
+
+
+# The state table of the module docstring, row by row, two inputs per state.
+@pytest.mark.parametrize("amounts, printed, state", [
+    (["1000", "2000"], None, dr.UNCHECKED),               # no printed total
+    (["400.50", "99.50"], "  ", dr.UNCHECKED),
+    (["1000", "2000"], "see summary", dr.NOT_READ),       # total the checker cannot parse
+    (["400.50", "99.50"], "500 / 600", dr.NOT_READ),
+    ([], 3000.0, dr.NOT_READ),                            # no rows
+    ([], "500.00", dr.NOT_READ),
+    (["1000", "2000"], "3,000", dr.RECONCILED),           # rows add up
+    (["400.50", "99.50"], 500.0, dr.RECONCILED),
+    (["1000", "2000"], "3,001", dr.FAILED),               # rows do not add up
+    (["400.50", "99.50"], "AED 499.00", dr.FAILED),
+])
+def test_the_state_table(amounts, printed, state):
+    assert dr.reconcile_table(_amounts(amounts), printed).state == state
 
 
 @pytest.mark.parametrize("amounts, printed", [([""], 0.0), (["", ""], 0.0), ([""], 10.0)])

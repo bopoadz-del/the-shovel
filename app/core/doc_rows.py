@@ -13,7 +13,21 @@ second way:
 * PDF bills: :func:`app.core.bill_table_geometry.extract_bill_rows`.
 
 Each table gets one of four reconciliation states (:func:`reconcile_table`),
-from the total the document prints for it. :func:`rows_query` answers
+from the total the document prints for it. This table is the whole rule; the
+code and ``tests/test_doc_rows.py::test_the_state_table`` follow it:
+
+==========================================  ==========  =======================
+the table as read                           state       charged to
+==========================================  ==========  =======================
+no printed total (none, or blank text)      UNCHECKED   nothing to check
+printed total the checker cannot parse      NOT READ    the checker, never the
+(no one figure in its text), or no rows                 document
+rows' amounts add up to the printed total   RECONCILED  -
+(to the document's own rounding)
+rows' amounts do not add up to it           FAILED      the table as read
+==========================================  ==========  =======================
+
+:func:`rows_query` answers
 filter, lookup, sum, count and compare over the rows with the arithmetic in
 code, compares typed cell values, and every answer names the rows it used.
 """
@@ -35,7 +49,9 @@ RECONCILED = "RECONCILED"
 UNCHECKED = "UNCHECKED"
 #: A printed total exists and the amounts read do not add up to it.
 FAILED = "FAILED"
-#: The reader returned no row for the table.
+#: The checker could not read the table: no row came back, or the printed
+#: total's text holds no one figure it can parse. The checker's limit, never
+#: charged to the document.
 NOT_READ = "NOT READ"
 
 STATES = (RECONCILED, UNCHECKED, FAILED, NOT_READ)
@@ -143,7 +159,7 @@ class TableCheck:
     total_printed: float | None = None
     total_of_rows: float | None = None
     #: A printed total was given as text but no one number could be read from
-    #: it: the state is UNCHECKED, the reader's limit, not the document's.
+    #: it: the state is NOT READ, the checker's limit, not the document's.
     total_unread: bool = False
 
 
@@ -154,8 +170,8 @@ def reconcile_table(
 
     * no rows: NOT READ;
     * no printed total (``None`` or blank text): UNCHECKED;
-    * a printed text with no one number the reader can take from it (no
-      figure, or more than one): UNCHECKED with ``total_unread``; the reader
+    * a printed text with no one number the checker can parse from it (no
+      figure, or more than one): NOT READ with ``total_unread``; the checker
       failed, not the document, so the table is not charged FAILED;
     * RECONCILED only when the amounts of the rows add up to the printed
       total within half a unit of the last digit the document prints
@@ -174,8 +190,8 @@ def reconcile_table(
         printed_total = _printed_figure(printed_total)
         unread = printed_total == ""
         printed_total = printed_total or None
-    if not rows:
-        return TableCheck(NOT_READ, 0, 0, 0, _as_number(printed_total), total_unread=unread)
+    if not rows or unread:
+        return TableCheck(NOT_READ, len(rows), 0, 0, _as_number(printed_total), total_unread=unread)
     checked = failed = 0
     for r in rows:
         if all(r.figure(f) is not None for f in FIGURE_FIELDS):
