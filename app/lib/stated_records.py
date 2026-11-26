@@ -297,6 +297,75 @@ def _directions(text: str, crit: str, criteria: list[str]) -> set[str]:
     return found
 
 
+def _criterion_named(crit: str, text: str) -> bool:
+    return re.search(rf"\b{_crit_re(crit)}\b", text, re.IGNORECASE) is not None
+
+
+def _applies_to(sentence: str, crit: str, criteria: list[str]) -> bool:
+    """True when a sentence speaks of the criterion's scores.
+
+    A sentence that names criteria speaks of those; one that names none
+    speaks of every score only when it says "score" (or another score word).
+    """
+    named = {c for c in criteria if _criterion_named(c, sentence)}
+    if named:
+        return crit in named
+    return re.search(rf"\b{_SCORE_WORD}\b", sentence, re.IGNORECASE) is not None
+
+
+# A scale the ask states: "out of 10", "1 to 5", "0-10", "a 5-point scale".
+_SCALE_STATED_RE = re.compile(
+    rf"\bout\s+of\s+(?P<top>{_NUM})\b"
+    rf"|\b(?P<low>{_NUM})\s*(?:to|-|–)\s*(?P<top2>{_NUM})\b"
+    rf"|\b(?P<top3>{_NUM})\s*-?\s*points?\s+scale\b",
+    re.IGNORECASE,
+)
+
+
+def _scale_differs(text: str, crit: str, criteria: list[str]) -> bool:
+    """True when the ask states a scale for the criterion other than 0-100.
+
+    The scorer reads every score on 0-100; a figure "out of 10" or "rated
+    1 to 5" is a different quantity, and a 9 there is not a 9 on 100.
+    """
+    for sentence in _sentences(text):
+        if not _applies_to(sentence, crit, criteria):
+            continue
+        for m in _SCALE_STATED_RE.finditer(sentence):
+            top = m.group("top") or m.group("top2") or m.group("top3")
+            low = m.group("low")
+            if _number(top) != _SCORE_MAX or (low is not None and _number(low) != _SCORE_MIN):
+                return True
+    return False
+
+
+def _outside_records_and_weights(sentence: str, criteria: list[str]) -> str:
+    """The part of a sentence that is neither the weights nor the records."""
+    weight = _WEIGHT_WORD_RE.search(sentence)
+    if weight is not None:
+        sentence = sentence[: weight.start()]
+    head, colon, tail = sentence.rpartition(":")
+    if colon and stated_records(tail, criteria):
+        return head
+    if stated_records(sentence, criteria):
+        return ""
+    return sentence
+
+
+def _described_otherwise(text: str, crit: str, criteria: list[str]) -> bool:
+    """True when the ask says what the criterion's figures are, not as scores.
+
+    The criterion's name alone reads as the scorer's own; any other sentence
+    that names it ("<criterion> is the count of ...") without a score word
+    says its figures are something else, and that leaves them in doubt.
+    """
+    for sentence in _sentences(text):
+        part = _outside_records_and_weights(sentence, criteria)
+        if _criterion_named(crit, part) and not re.search(rf"\b{_SCORE_WORD}\b", part, re.IGNORECASE):
+            return True
+    return False
+
+
 def _scorer_criteria() -> frozenset[str]:
     """The scorer's own criteria: 0-100 scores where higher is better."""
     from app.agents.hats.procurement.formulas.construction_knowledge import TENDER_DEFAULT_WEIGHTS
@@ -319,7 +388,9 @@ def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], 
     criterion the ask calls a score and says is better higher. A score
     word alone does not say the direction (a lower score can be the better
     one), and a figure the ask never calls a score may be days, weeks or a
-    dose. The ask saying lower is better, or both ways, binds nothing.
+    dose. The ask saying lower is better, or both ways, binds nothing; so
+    does a scale it states other than 0-100, or a sentence that says what
+    the criterion's figures are without calling them scores.
     """
     own = _scorer_criteria()
     for crit in criteria:
@@ -332,6 +403,8 @@ def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], 
         if "lower" in directions:
             return False
         if crit not in own and not (_called_a_score(text, crit) and directions == {"higher"}):
+            return False
+        if _scale_differs(text, crit, criteria) or _described_otherwise(text, crit, criteria):
             return False
         if any(not (_SCORE_MIN <= v <= _SCORE_MAX) for v in values):
             return False
