@@ -143,7 +143,11 @@ def carried_sheet(conversation_id: Optional[str], user_id: Optional[str],
         return None  # an id with no stored conversation carries nothing
     try:
         _enforce_conversation_access(str(conversation_id), {"user_id": user_id})
-    except HTTPException:
+    except HTTPException as refused:
+        # Not an error: this user may not open the conversation, so no
+        # sheet is carried. Ids only, never the conversation's words.
+        _LOG.info("sheet not carried: conversation %s refused for user %s (%s)",
+                  conversation_id, user_id, refused.status_code)
         return None
     return last_sheet(conversation_id, user_id, project_id)
 
