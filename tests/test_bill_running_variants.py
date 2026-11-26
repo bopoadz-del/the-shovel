@@ -81,18 +81,21 @@ def _bill(runs, labels):
 
 STEADY_LABELS = ["Bill 1 Page 1-1", "Bill 1 Page 1-2", "Bill 1 Page 1-3",
                  "Bill 2 Page 2-4", "Bill 2 Page 2-5", "Bill 2 Page 2-6"]
-# One running line read three ways (a letter misread), two pages each and
-# scattered over the bill: no single form is on most of the six pages.
+# One running line read three ways (a letter misread), scattered over the
+# bill: read right on three pages, one misreading on two, another on one. No
+# single form is on most of the six pages; the line's own reading is on more
+# pages than each misreading of it.
 MISREAD_RUN = ["Westbrook Terminal Works", "Wcstbrook Terminal Works",
-               "Westbrook Terrninal Works", "Westbrook Terminal Works",
-               "Wcstbrook Terminal Works", "Westbrook Terrninal Works"]
+               "Westbrook Terminal Works", "Westbrook Terrninal Works",
+               "Wcstbrook Terminal Works", "Westbrook Terminal Works"]
 # Three different lines, two pages each: the same page spread, not one line.
 THREE_LINES = ["Westbrook Terminal Works", "Westbrook Terminal Works",
                "Harbour Quay Extension", "Harbour Quay Extension",
                "Northfield Rail Sidings", "Northfield Rail Sidings"]
-# The page label read two ways, each on three of six pages, every digit kept.
+# The page label read three ways, every digit kept: right on three of six
+# pages, one misreading on two, another on page 4 only.
 MISREAD_LABELS = ["Bill 1 Page 1-1", "BiIl 1 Page 1-2", "Bill 1 Page 1-3",
-                  "BiIl 2 Page 2-4", "Bill 2 Page 2-5", "BiIl 2 Page 2-6"]
+                  "BilI 2 Page 2-4", "Bill 2 Page 2-5", "BiIl 2 Page 2-6"]
 
 
 @pytest.mark.parametrize("runs, is_running", [
@@ -120,8 +123,8 @@ def test_a_misread_page_label_is_still_the_label(labels, label_on_every_page):
 
 
 @pytest.mark.parametrize("page4, read_on_page4", [
-    ("BiIl 2 Page 2-4", True),   # misread letter, every digit kept: read
-    ("BiIl 2 Page 2-A", False),  # a digit read as a letter: not read
+    ("BilI 2 Page 2-4", True),   # misread letter, every digit kept: read
+    ("BilI 2 Page 2-A", False),  # a digit read as a letter: not read
 ], ids=["digits-kept", "digit-lost"])
 def test_a_misread_label_is_read_for_its_fields_only_with_every_digit(page4, read_on_page4):
     labels = list(MISREAD_LABELS)
@@ -165,6 +168,14 @@ def test_lines_that_only_share_a_page_spread_are_not_merged(runs, stays):
 BLOCKS = [0, 0, 0, 1, 1, 1]
 SCATTERED = [0, 1, 0, 1, 1, 0]
 REPEATED = [0, 0, 1, 1, 0, 1]
+# The first reading on three pages, the second on two, and on the last page
+# (index 2) a line read so badly it counts alone. Neither reading is on most
+# of the six pages; the first outnumbers the second, so the second is the
+# exception and is taken in.
+FIRST_BLOCKS = [0, 0, 0, 1, 1, 2]
+FIRST_SCATTERED = [0, 1, 0, 1, 0, 2]
+FIRST_REPEATED = [0, 0, 1, 1, 0, 2]
+LOST_READING = "Wcstbrook Tenninal Wonks"
 
 
 @pytest.mark.parametrize("first, second, layout, one_line", [
@@ -175,18 +186,34 @@ REPEATED = [0, 0, 1, 1, 0, 1]
     ("Internal Doors", "Internal Floors", SCATTERED, False),
     ("Internal Doors", "Internal Floors", REPEATED, False),
     ("External Piling", "External Tiling", REPEATED, False),
-    ("Westbrook Terminal Works", "Westbrook Terrninal Works", BLOCKS, True),
-    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", BLOCKS, True),
-    ("Westbrook Terminal Works", "Westbrook Terrninal Works", SCATTERED, True),
-    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", SCATTERED, True),
-    ("Westbrook Terminal", "Westbrook TerminaI", REPEATED, True),
+    # Two real headings one glyph confusion apart (e/o, o/e, c/e), each on
+    # as many pages: nothing tells a line from its misreading, two lines.
+    ("Upper Deck", "Upper Dock", BLOCKS, False),
+    ("Upper Deck", "Upper Dock", REPEATED, False),
+    ("Steel Bolts", "Steel Belts", SCATTERED, False),
+    ("Pipe Bends", "Pipe Bonds", REPEATED, False),
+    ("Cast Wing", "East Wing", BLOCKS, False),
+    ("Cast Wing", "East Wing", SCATTERED, False),
+    # The same slips when the line's own reading outnumbers them: one line.
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", FIRST_BLOCKS, True),
+    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", FIRST_BLOCKS, True),
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", FIRST_SCATTERED, True),
+    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", FIRST_SCATTERED, True),
+    ("Westbrook Terminal", "Westbrook TerminaI", FIRST_REPEATED, True),
+    ("Westbrook Works", "Wostbrook Works", FIRST_REPEATED, True),
+    # The same misreading on as many pages as the line: not taken in.
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", BLOCKS, False),
+    ("Westbrook Works", "Wostbrook Works", REPEATED, False),
 ], ids=["finishes-two-headings", "walls-two-headings", "doors-floors-two-sections",
         "piling-tiling-two-sections", "doors-floors-scattered", "doors-floors-repeated",
-        "piling-tiling-repeated", "slip-in-a-run-of-its-own", "e-for-c-in-a-run-of-its-own",
-        "glyph-read-as-two", "glyph-read-as-one", "slip-at-the-end-of-a-word"])
+        "piling-tiling-repeated", "deck-dock-blocks", "deck-dock-repeated",
+        "bolts-belts-scattered", "bends-bonds-repeated", "cast-east-blocks",
+        "cast-east-scattered", "slip-in-a-run-of-its-own", "e-for-c-in-a-run-of-its-own",
+        "glyph-read-as-two", "glyph-read-as-one", "slip-at-the-end-of-a-word",
+        "o-for-e-outnumbered", "slip-on-as-many-pages", "o-for-e-on-as-many-pages"])
 def test_alike_headings_that_each_recur_are_pooled_only_when_one_is_misread(
         first, second, layout, one_line):
-    runs = [(first, second)[i] for i in layout]
+    runs = [(first, second, LOST_READING)[i] for i in layout]
     words = _bill(runs, STEADY_LABELS)
     running = g.running_lines(_printed(words), 6)
     assert bool({g._masked(first), g._masked(second)} & running.masks) is one_line
@@ -221,6 +248,38 @@ def test_a_word_is_misread_by_one_glyph_only(a, b, misread):
     assert g._slipped_word(b, a) is misread
 
 
+# One word per glyph confusion, the slip under half the word: each is read as
+# that word misread, and the same place changed by a pair the table does not
+# hold is another word.
+EVERY_CONFUSION = [
+    ("rn", "m", "terminal", "terrninal", "terxinal"),
+    ("nn", "m", "terminal", "ternninal", "terhhinal"),
+    ("vv", "w", "works", "vvorks", "kkorks"),
+    ("cl", "d", "board", "boarcl", "boarxy"),
+    ("li", "h", "hatch", "liatch", "pqatch"),
+    ("ii", "u", "duct", "diict", "dxyct"),
+    ("ri", "n", "panel", "pariel", "paxyel"),
+    ("l", "i", "bill", "biil", "bisl"),
+    ("i", "j", "joint", "ioint", "koint"),
+    ("c", "e", "westbrook", "wcstbrook", "wkstbrook"),
+    ("c", "o", "works", "wcrks", "wkrks"),
+    ("e", "o", "westbrook", "wostbrook", "wustbrook"),
+    ("u", "v", "valve", "ualve", "kalve"),
+]
+
+
+@pytest.mark.parametrize("pair, word, misread, other",
+                         [((x, y), w, m, o) for x, y, w, m, o in EVERY_CONFUSION],
+                         ids=[f"{x}-{y}" for x, y, *_ in EVERY_CONFUSION])
+def test_each_glyph_confusion_is_a_misreading(pair, word, misread, other):
+    assert g._slipped_word(word, misread) and g._slipped_word(misread, word)
+    assert not g._slipped_word(word, other) and not g._slipped_word(other, word)
+
+
+def test_every_glyph_confusion_has_its_case():
+    assert {(x, y) for x, y, *_ in EVERY_CONFUSION} == set(g.OCR_GLYPH_CONFUSIONS)
+
+
 @pytest.mark.parametrize("a, b, alike", [
     ("a" * 17 + "bcd", "a" * 17 + "xyz", True),    # 34/40 = 0.85, on the bound
     ("a" * 17 + "bcd", "a" * 16 + "wxyz", False),  # 32/40 = 0.80, under it
@@ -245,21 +304,24 @@ def test_a_misreading_is_found_whichever_form_is_longer(anchor, other):
 
 
 PARTS = ["Part 1 Works"] * 3 + ["Part 2 Works"] * 3
-CONTRACT = ["Contract 4 Westbrook Works", "Contract 4 Wcstbrook Works"] * 3
+CONTRACT = ["Contract 4 Westbrook Works", "Contract 4 Wcstbrook Works"] * 2 + [
+    "Contract 4 Westbrook Works", "Contract 4 Westbrook Wcrks"]
 
 
 @pytest.mark.parametrize("runs, labels, form, kept", [
     # A reading of the label is the label: it stays a running line.
     (MISREAD_RUN, MISREAD_LABELS, "biil # page #-#", True),
+    (MISREAD_RUN, MISREAD_LABELS, "bili # page #-#", True),
     # A line whose digits change with the section is a heading, not furniture.
     (PARTS, STEADY_LABELS, "part # works", False),
     # A misread line whose digits never change does not vary: still furniture.
     (CONTRACT, STEADY_LABELS, "contract # westbrook works", True),
-], ids=["label-reading", "section-number", "constant-number-misread"])
+], ids=["label-reading", "one-page-label-reading", "section-number",
+          "constant-number-misread"])
 def test_which_digit_lines_stay_running_lines(runs, labels, form, kept):
     running = g.running_lines(_printed(_bill(runs, labels)), 6)
     assert running.page_label == "bill # page #-#"
-    assert (form in running.masks) is kept
+    assert running.holds(form) is kept
 
 
 def _lowered_label_bill(page4):
@@ -358,11 +420,13 @@ def test_a_one_glyph_slip_still_needs_the_line_likeness(a, b, misread):
 # and page label, a building title in heavy type on its first page, and a
 # trade heading as a body heading. Two trade headings one letter apart each
 # hold the same pages in both buildings; they are sections, never one line.
-def _buildings_bill(trades):
+def _buildings_bill(trades, blocks=False):
     words: list[g.Word] = []
     for p in range(1, 9):
         building = "BUILDING A" if p <= 4 else "BUILDING B"
-        trade = trades[((p - 1) // 2) % 2]
+        # Repeated: each trade on two pages in each building. Blocks: the
+        # first trade on every page of building A, the second on building B.
+        trade = trades[(p > 4) if blocks else ((p - 1) // 2) % 2]
         above = [("Harbour Quay Extension", H), (f"Bill 1 Page 1-{p}", H)]
         if p in (1, 5):
             above.append((building, HEAVY))
@@ -373,7 +437,10 @@ def _buildings_bill(trades):
 @pytest.mark.parametrize("trades", [
     ("Internal Doors", "Internal Floors"),   # one letter apart
     ("Concrete Walls", "Concrete Slabs"),    # not alike at all
-], ids=["one-letter-apart", "unlike"])
+    ("Upper Deck", "Upper Dock"),            # one glyph confusion apart (e/o)
+    ("Steel Bolts", "Steel Belts"),          # o/e
+    ("Cast Wing", "East Wing"),              # c/e
+], ids=["one-letter-apart", "unlike", "e-o-apart", "o-e-apart", "c-e-apart"])
 def test_repeated_trade_sections_keep_their_headings(trades):
     rows = g.extract_bill_rows(_buildings_bill(trades))
     paths = {r.fields["description"]: " / ".join(r.path) for r in rows}
@@ -381,3 +448,16 @@ def test_repeated_trade_sections_keep_their_headings(trades):
     assert trades[0] in paths["Item 5"] and trades[1] in paths["Item 7"]
     running = g.running_lines(_printed(_buildings_bill(trades)), 8)
     assert not {g._masked(t) for t in trades} & running.masks
+
+
+@pytest.mark.parametrize("trades", [
+    ("Upper Deck", "Upper Dock"),
+    ("Pipe Bends", "Pipe Bonds"),
+    ("Cast Wing", "East Wing"),
+], ids=["e-o-apart", "o-e-apart", "c-e-apart"])
+def test_trade_sections_in_blocks_keep_their_headings(trades):
+    rows = g.extract_bill_rows(_buildings_bill(trades, blocks=True))
+    paths = {r.fields["description"]: " / ".join(r.path) for r in rows}
+    assert all(trades[0] in paths[f"Item {p}"] for p in (1, 2, 3, 4))
+    assert all(trades[1] in paths[f"Item {p}"] for p in (5, 6, 7, 8))
+    assert paths["Item 1"].startswith("BUILDING A")

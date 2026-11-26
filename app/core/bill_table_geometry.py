@@ -953,8 +953,15 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     # headings alike in their letters ("Internal Finishes" / "External
     # Finishes", "Internal Doors" / "Internal Floors") differ by more than
     # that, and stay two lines however a bill repeats its sections.
+    #
+    # A misreading is the exception: the line's own reading is on more pages
+    # than each misreading it takes in. Two readings on as many pages each
+    # ("Upper Deck" / "Upper Dock", a pair the glyph table also confuses) give
+    # nothing to tell the line from its misreading, so neither takes the
+    # other's pages and each counts alone.
     recurs = sorted(m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES)
-    pooled = _misread_forms(recurs, recurs)
+    pooled = {m: [o for o in forms if len(on[o]) < len(on[m]) or o == m]
+              for m, forms in _misread_forms(recurs, recurs).items()}
     pages_of = {m: set().union(*(on[o] for o in pooled.get(m, [m]))) for m in on}
     texts_of = {m: set().union(*(raw[o] for o in pooled.get(m, [m]))) for m in on}
     masks = {m for m, ps in pages_of.items() if len(ps) * 2 > pages}
