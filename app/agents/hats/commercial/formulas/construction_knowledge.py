@@ -21,10 +21,11 @@ from typing import Dict, Optional
                  'they only add to the cumulative certified, so give this period\'s '
                  'amount, not a to-date total.'),
     inputs={
-        'claimed_amount': Param('currency', 0, 1e13, label='amount claimed'),
-        'certified_amount': Param('currency', 0, 1e13, label='amount certified'),
+        'claimed_amount': Param('currency', 0, 1e13, label='amount claimed', basis='period'),
+        'certified_amount': Param('currency', 0, 1e13, label='amount certified', basis='period'),
         'retention_rate': Param('fraction', 0, 1, label='retention'),
-        'cumulative_previous_certified': Param('currency', 0, 1e13, label='previously certified amount'),
+        'cumulative_previous_certified': Param('currency', 0, 1e13, label='previously certified amount',
+                                               basis='cumulative'),
         'contract_value': Param('currency', 0, 1e13, label='contract value'),
     },
     outputs={'claimed_amount': 'currency', 'certified_amount': 'currency', 'retention_held': 'currency', 'net_payment_due': 'currency', 'cumulative_certified': 'currency', 'percent_complete': '%', 'disputed_amount': 'currency', 'retention_rate_pct': '%'},
