@@ -23,7 +23,7 @@ from app.lib.stated_records import (
 _BIDS = (
     "Four bids: P 3.20 M quality 75, Q 2.90 M quality 60, R 3.60 M quality 92, "
     "S 3.05 M quality 81. Weights cost 60 / quality 40, cost score = lowest/cost*100. "
-    "Quality scores are out of 100. Which bid wins?"
+    "Quality scores are out of 100 and higher is better. Which bid wins?"
 )
 _OFFERS = (
     "Two offers: North 1.2 M technical score 88, South 1.0 M technical score 64. "
@@ -313,9 +313,11 @@ def test_a_figure_the_ask_never_calls_a_score_binds_nothing(crit, a, b):
     ("delivery score", 30, 90, "Beta"),
     ("programme score", 40, 20, "Acme"),
 ])
-def test_the_same_figure_called_a_score_binds_and_ranks_higher_first(crit, a, b, first):
+def test_the_same_figure_called_a_score_and_said_better_higher_binds_and_ranks_higher_first(crit, a, b, first):
     word = crit.split()[0]
     text = _TWO.format(c=crit, a=a, b=b, w=word)
+    assert records_completed_by_user_text(text) is None   # a score word alone: direction unknown
+    text += " Higher scores are better."
     name, bound = records_completed_by_user_text(text)
     from app.lib.formula_registry import get
 
@@ -325,11 +327,11 @@ def test_the_same_figure_called_a_score_binds_and_ranks_higher_first(crit, a, b,
 
 @pytest.mark.parametrize("text, binds", [
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Quality marks are from the panel.", True),
+     "Weights price 50 / quality 50. Quality marks are from the panel. Higher marks are better.", True),
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Ratings for quality are from the panel.", True),
+     "Weights price 50 / quality 50. Ratings for quality are from the panel. Higher marks are better.", True),
     ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
-     "Weights price 50 / quality 50. Delivery marks are from the panel.", False),
+     "Weights price 50 / quality 50. Delivery marks are from the panel. Higher marks are better.", False),
 ])
 def test_a_score_word_must_name_the_criterion_it_scores(text, binds):
     assert (records_completed_by_user_text(text) is not None) is binds
@@ -429,3 +431,127 @@ def test_a_rule_that_rescales_a_weighted_score_criterion_binds_nothing(rule):
     assert records_completed_by_user_text(text) is not None
     ruled = text.replace(". Who wins?", f", {rule}. Who wins?")
     assert records_completed_by_user_text(ruled) is None
+
+
+# -- which way a score is better ---------------------------------------------
+
+_RANKED = "Two bids: North 1.2 M {c} {a}, South 1.2 M {c} {b}. Weights price 50 / {w} 50.{tail}"
+
+
+@pytest.mark.parametrize("crit, w", [
+    ("risk score", "risk"),       # a higher risk score can be the worse bid
+    ("defect points", "defect"),
+    ("hazard rating", "hazard"),
+])
+def test_a_score_of_unknown_direction_binds_nothing(crit, w):
+    text = _RANKED.format(c=crit, w=w, a=20, b=80, tail="")
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("crit, w, tail, binds", [
+    ("risk score", "risk", " Higher scores are better.", True),
+    ("risk score", "risk", " Lower risk scores are better.", False),
+    ("defect points", "defect", " The highest defect points win.", True),
+    ("defect points", "defect", " Lowest defect points are preferred.", False),
+    ("risk score", "risk", " Higher scores are better. Lower risk is better.", False),   # both ways
+])
+def test_the_ask_says_which_way_its_score_is_better(crit, w, tail, binds):
+    text = _RANKED.format(c=crit, w=w, a=20, b=80, tail=tail)
+    out = records_completed_by_user_text(text)
+    assert (out is not None) is binds
+    if binds:
+        from app.lib.formula_registry import get
+
+        assert get(out[0]).fn(**out[1])["recommended"]["name"] == "South"
+
+
+@pytest.mark.parametrize("crit, a, b, first", [
+    ("technical", 80, 60, "North"),     # the scorer's own criteria are scores, higher better
+    ("commercial", 55, 75, "South"),
+])
+def test_the_scorers_own_criterion_binds_without_a_score_word(crit, a, b, first):
+    text = _RANKED.format(c=crit, w=crit, a=a, b=b, tail=" Who wins?")
+    name, bound = records_completed_by_user_text(text)
+    from app.lib.formula_registry import get
+
+    assert get(name).fn(**bound)["recommended"]["name"] == first
+    lower = text.replace(" Who wins?", f" Lower {crit} marks are better.")  # no 'score is' rule form
+    assert records_completed_by_user_text(lower) is None
+
+
+@pytest.mark.parametrize("crit", ["quality", "delivery"])
+def test_a_criterion_not_the_scorers_needs_a_score_word_even_with_a_direction(crit):
+    text = _RANKED.format(c=crit, w=crit, a=60, b=80, tail=" Higher is better.")
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("sentence", ["A lower price wins.", "The lowest cost is preferred."])
+def test_a_direction_said_of_another_criterion_does_not_apply(sentence):
+    amount = "cost" if "cost" in sentence else "price"
+    base = (f"Two bids: North 1.2 M quality score 70, South 1.0 M quality score 60. "
+            f"Weights {amount} 50 / quality 50.")
+    assert records_completed_by_user_text(f"{base} {sentence}") is None   # quality's way still unknown
+    assert records_completed_by_user_text(f"{base} Higher quality scores are better. {sentence}") is not None
+
+
+@pytest.mark.parametrize("sentence", ["The lowest bid wins.", "The lowest tender is preferred."])
+def test_a_direction_sentence_naming_no_criterion_and_no_score_does_not_apply(sentence):
+    text = ("Two bids: North 1.2 M quality score 70, South 1.0 M quality score 60. "
+            f"Weights price 50 / quality 50. Higher quality scores are better. {sentence}")
+    assert records_completed_by_user_text(text) is not None
+
+
+@pytest.mark.parametrize("crit", ["quality", "delivery"])
+def test_a_criterion_is_scored_counts_as_calling_it_a_score(crit):
+    text = _RANKED.format(c=crit, w=crit, a=60, b=80,
+                          tail=f" {crit.capitalize()} is scored out of 100, higher is better.")
+    assert records_completed_by_user_text(text) is not None
+
+
+# -- an amount the ask has already scored is not an amount -------------------
+
+@pytest.mark.parametrize("word", ["marks", "rating", "points"])
+def test_an_amount_criterion_the_ask_scores_with_any_score_word_binds_nothing(word):
+    text = (f"Two bids: North price {word} 90 technical 80, South price {word} 70 technical 85. "
+            "Weights price 50 / technical 50.")
+    assert records_completed_by_user_text(text) is None
+    control = text.replace(f"price {word} 90", "1.2 M").replace(f"price {word} 70", "1.0 M")
+    assert records_completed_by_user_text(control) is not None
+
+
+@pytest.mark.parametrize("sentence, crit", [
+    ("Prices are scored by rank.", "price"),
+    ("Costs are scored by rank.", "cost"),
+    ("Scoring on price is by rank.", "price"),
+    ("Scoring on the cost is by rank.", "cost"),
+])
+def test_a_plural_or_scoring_on_amount_rule_binds_nothing(sentence, crit):
+    text = (f"Two offers: North 2.0 M technical 80, South 2.2 M technical 90. "
+            f"Weights {crit} 50 / technical 50. {sentence}")
+    assert records_completed_by_user_text(text.replace(" " + sentence, "")) is not None
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("rule", ["price score = lowest/price", "cost score = lowest cost / cost"])
+def test_the_scorers_rule_written_without_x100_binds(rule):
+    crit = rule.split()[0]
+    text = (f"Two offers: North 2.0 M technical 80, South 2.2 M technical 90. "
+            f"Weights {crit} 50 / technical 50, {rule}. Who wins?")
+    assert records_completed_by_user_text(text) is not None
+
+
+@pytest.mark.parametrize("weights, binds", [
+    ("price 0.5 / technical 0.504", True),    # inside the fraction tolerance
+    ("price 0.5 / technical 0.53", False),    # outside it
+    ("price 0.5 / technical 0.47", False),
+])
+def test_fraction_weights_hold_the_scorers_tolerance(weights, binds):
+    text = _OFFERS.replace("price 50 / technical 50", weights)
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("second", ["price score = rank order", "price score = 100 - rank"])
+def test_two_rules_for_one_amount_one_not_the_scorers_binds_nothing(second):
+    text = ("Two offers: North 2.0 M technical 80, South 2.2 M technical 90. Weights price 50 / technical 50. "
+            f"Price is scored with price score = lowest/price x 100, {second}.")
+    assert records_completed_by_user_text(text) is None

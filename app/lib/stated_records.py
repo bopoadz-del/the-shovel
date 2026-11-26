@@ -14,8 +14,10 @@ record labels. Anything in doubt binds nothing.
 
 The bound inputs must also be inputs the scorer can take as written: the
 weights are fractions or percentages, an amount is a positive sum, every
-other criterion is a 0-100 figure the ask calls a score, and no rule the
-ask states for a criterion differs from the scorer's own.
+other criterion is a 0-100 score where higher is better, and no rule the
+ask states for a criterion differs from the scorer's own. A criterion's
+direction is known only from the scorer's own criteria or from the ask's
+words; a score of unknown direction binds nothing.
 """
 from __future__ import annotations
 
@@ -61,6 +63,15 @@ _WORD_RE = re.compile(r"[a-z]+")
 _SCORE_WORD = r"(?:scores?|scored|points?|marks?|ratings?)"
 _SCORE_SUFFIX_RE = re.compile(rf"(?<=[A-Za-z])\s+{_SCORE_WORD}$", re.IGNORECASE)
 _SCORE_MIN, _SCORE_MAX = 0.0, 100.0
+# Any word that says a figure was scored, for the amount-rule guard.
+_SCORED_RE = rf"(?:{_SCORE_WORD}|scoring)"
+# A sentence that says which way a criterion is better: "higher is better",
+# "lower scores are better", "the highest rating wins".
+_BETTER_RE = re.compile(
+    r"\b(?P<dir>higher|highest|lower|lowest)\b(?:\s+[A-Za-z]+){0,3}?\s+"
+    r"(?:(?:is|are)\s+)?(?:better|best|preferred|wins?)\b",
+    re.IGNORECASE,
+)
 # Weights the scorer can apply: fractions of one or percentages of 100,
 # with the tolerances the scorer itself reads percentages with.
 _WEIGHT_TOTALS = ((1.0, 0.005), (100.0, 0.5))
@@ -236,7 +247,7 @@ def _rule_disagrees(text: str, criteria: list[str], amounts: set[str]) -> bool:
     for crit in amounts:
         c = _crit_re(crit)
         said = re.compile(
-            rf"\b{c}\b[^0-9,;]*?\bscor(?:e|es|ed|ing)\b|\bscor(?:e|es|ed|ing)\s+(?:of|for|on)\s+(?:the\s+)?{c}\b",
+            rf"\b{c}\b[^0-9,;]*?\b{_SCORED_RE}\b|\b{_SCORED_RE}\s+(?:of|for|on)\s+(?:the\s+)?{c}\b",
             re.IGNORECASE,
         )
         for sentence in _sentences(text):
@@ -265,6 +276,34 @@ def _called_a_score(text: str, crit: str) -> bool:
     ) is not None
 
 
+def _directions(text: str, crit: str, criteria: list[str]) -> set[str]:
+    """Which way the ask says the criterion is better: "higher", "lower".
+
+    A sentence with a better-word applies to the criteria it names, or,
+    when it names none, to every score ("higher scores are better").
+    """
+    found: set[str] = set()
+    for sentence in _sentences(text):
+        named = {
+            c for c in criteria
+            if re.search(rf"\b{_crit_re(c)}\b", sentence, re.IGNORECASE)
+        }
+        if named and crit not in named:
+            continue
+        if not named and not re.search(rf"\b{_SCORE_WORD}\b", sentence, re.IGNORECASE):
+            continue
+        for m in _BETTER_RE.finditer(sentence):
+            found.add("higher" if m.group("dir").lower().startswith("high") else "lower")
+    return found
+
+
+def _scorer_criteria() -> frozenset[str]:
+    """The scorer's own criteria: 0-100 scores where higher is better."""
+    from app.agents.hats.procurement.formulas.construction_knowledge import TENDER_DEFAULT_WEIGHTS
+
+    return frozenset(TENDER_DEFAULT_WEIGHTS)
+
+
 def _weights_apply(weights: dict[str, float]) -> bool:
     """True when the weights are fractions of one or percentages of 100."""
     total = sum(weights.values())
@@ -275,18 +314,24 @@ def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], 
     """True when every figure is one the scorer can take as written.
 
     An amount is a positive sum (the scorer divides by it). Any other
-    criterion is a 0-100 score, and only when the ask calls it a score: a
-    figure under a label the ask never calls a score may be days, weeks or
-    a dose, where lower can be better, and the scorer would rank it the
-    wrong way round.
+    criterion is a 0-100 score the scorer ranks higher-first, so it binds
+    only when that is its direction: one of the scorer's own criteria, or a
+    criterion the ask calls a score and says is better higher. A score
+    word alone does not say the direction (a lower score can be the better
+    one), and a figure the ask never calls a score may be days, weeks or a
+    dose. The ask saying lower is better, or both ways, binds nothing.
     """
+    own = _scorer_criteria()
     for crit in criteria:
         values = [r[crit] for r in records]
         if crit in amounts:
             if any(v <= 0 for v in values):
                 return False
             continue
-        if not _called_a_score(text, crit):
+        directions = _directions(text, crit, criteria)
+        if "lower" in directions:
+            return False
+        if crit not in own and not (_called_a_score(text, crit) and directions == {"higher"}):
             return False
         if any(not (_SCORE_MIN <= v <= _SCORE_MAX) for v in values):
             return False

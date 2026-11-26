@@ -40,6 +40,10 @@ _AMOUNT_WORDS = frozenset({"price", "cost", "sum", "amount"})
 
 _PRICE_SCORE_RULE = "lowest amount / tenderer's amount x 100"
 
+# The scorer's own criteria and their default weights. Each is a 0-100
+# score where a higher score is the better tender.
+TENDER_DEFAULT_WEIGHTS = {"technical": 0.45, "commercial": 0.45, "hse": 0.07, "local_content": 0.03}
+
 
 def _names_an_amount(criterion: str) -> bool:
     """True when the criterion's own name says its value is a tender sum."""
@@ -144,7 +148,7 @@ def evaluate_tender(
     if not tenderers:
         return {"error": "evaluate_tender requires at least one tenderer."}
     if weights is None:
-        weights = {"technical": 0.45, "commercial": 0.45, "hse": 0.07, "local_content": 0.03}
+        weights = dict(TENDER_DEFAULT_WEIGHTS)
     weights, read_as_percent = _fraction_weights(weights)
 
     criteria = [name for name in weights if isinstance(name, str)]
