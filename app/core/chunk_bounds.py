@@ -303,6 +303,7 @@ def heading_line_for_page(
             not line.lstrip().startswith("#")
             and _reads_as_prose(line)
             and _continues_sentence(lines[idx + 1:])
+            and _wrapped_at_margin(line, lines[idx + 1:], _wrap_width(lines, idx))
         ):
             continue  # a wrapped line of prose, not a heading
         if running is None or not running(line):
@@ -356,6 +357,42 @@ def _continues_sentence(following: list[str]) -> bool:
         text = line.strip()
         if text:
             return text[0].islower() and not _LOWER_ENUMERATOR.match(text)
+    return False
+
+
+#: A wrapped line reaches at least this share of the page's wrap width once
+#: the next line's first word is added back. Proportional type sets the same
+#: margin at different character counts ("mmm" against "iii"), so a wrap is
+#: read at 85 % of the widest measured line, not at its exact count.
+WRAP_FILL = 0.85
+
+
+def _wrap_width(lines: list[str], idx: int) -> int:
+    """The page's wrap width (characters): its widest line other than line
+    ``idx`` and the page's last non-empty line. A last line ends its
+    paragraph wherever the words ran out, so it says nothing of the margin;
+    0 when no other line is left to measure."""
+    filled = [i for i, ln in enumerate(lines) if ln.strip()]
+    measured = [len(lines[i].strip()) for i in filled[:-1] if i != idx]
+    return max(measured, default=0)
+
+
+def _wrapped_at_margin(line: str, following: list[str], width: int) -> bool:
+    """True when the line ends where the page wrapped it.
+
+    The page breaks a sentence only when its next word does not fit: the
+    line, a space and the first word of the next non-empty line reach
+    :data:`WRAP_FILL` of ``width`` (:func:`_wrap_width`). A heading over a lowercase line
+    ("6.1 Quality of water" over "pH of ...") had room for that word on a
+    page whose lines run wider, so it was not wrapped there; with no line
+    to measure the margin by, nothing shows a wrap.
+    """
+    if width <= 0:
+        return False
+    for nxt in following:
+        words = nxt.split()
+        if words:
+            return len(line.strip()) + 1 + len(words[0]) >= WRAP_FILL * width
     return False
 
 

@@ -9,9 +9,11 @@ skipped. Every input below is invented; two inputs per decision.
 """
 from __future__ import annotations
 
+import math
+
 import pytest
 
-from app.core.chunk_bounds import heading_line_for_page, page_heading_lines
+from app.core.chunk_bounds import WRAP_FILL, heading_line_for_page, page_heading_lines
 
 
 def _page(opener: str, carry: str, heading: str) -> str:
@@ -182,3 +184,100 @@ def test_two_letter_word_that_ends_a_sentence_is_not_a_list_marker(opener, carry
 )
 def test_figures_in_a_wrapped_line_are_not_counted_as_capitalised_words(opener, carry, heading):
     assert heading_line_for_page(_page(opener, carry, heading)) == heading
+
+
+# --- grader fault on 2335d3c (REPORT_OPUSGRADE_S616): a short sentence-case
+# heading over a lowercase line had room for that line's first word, so the
+# page did not wrap there; it is a heading. Two inputs per decision. ---
+
+
+@pytest.mark.parametrize(
+    "heading,body",
+    [
+        ("6.1 Quality of water", "pH of mixing water shall be 6 to 8."),
+        ("3.2 Cover to reinforcement", "mm values below are nominal."),
+        ("7.1 Pointing of joints", "e.g. flush, struck or weathered as shown."),
+        ("5.4 Loads on the frame", "kN values are unfactored."),
+    ],
+)
+def test_sentence_case_heading_over_a_lowercase_line_still_names_the_page(heading, body):
+    assert heading_line_for_page(f"{heading}\n{body}\n") == heading
+
+
+@pytest.mark.parametrize(
+    "first_head,body",
+    [("6.1 Quality of water", "pH of mixing water shall be 6 to 8."),
+     ("4.3 Laps in the bars", "mm laps are measured from the bend.")],
+)
+def test_sentence_case_heading_names_its_page_through_the_document_path(first_head, body):
+    page_one = f"{first_head}\n{body}\n"
+    page_two = _page("A mist coat is applied to new plaster before the", "two finishing coats.", "7 Glazing")
+    headings = page_heading_lines(page_one + page_two, [(1, 0), (2, len(page_one))])
+    assert headings == {1: first_head, 2: "7 Glazing"}
+
+
+@pytest.mark.parametrize(
+    "line,word",
+    [("3 The joints are left open", "until"), ("A blinding is laid under the slab", "to")],
+)
+def test_wrap_is_read_at_the_measured_margin(line, word):
+    carry = f"{word} the works are done."
+    reach = len(line) + 1 + len(word)
+    # The page's lines run wider than the line, a space and the next word fill
+    # at WRAP_FILL: the word had room, so the line was not wrapped and names the page.
+    roomy = "x" * (math.floor(reach / WRAP_FILL) + 1)
+    page = f"{line}\n{carry}\n{roomy}\n9 SECTION HEAD\n"
+    assert heading_line_for_page(page) == line
+    # The widest the lines can run with the word still reaching WRAP_FILL of them:
+    # the line wrapped.
+    tight = "x" * math.floor(reach / WRAP_FILL)
+    page = f"{line}\n{carry}\n{tight}\n9 SECTION HEAD\n"
+    assert heading_line_for_page(page) == "9 SECTION HEAD"
+
+
+@pytest.mark.parametrize(
+    "heading,body",
+    [("6.1 Quality of water", "pH of mixing water shall be 6 to 8 and is to"),
+     ("5.4 Loads on the frame", "kN values given in the schedule are not yet")],
+)
+def test_a_wider_paragraph_below_a_heading_does_not_make_it_a_wrap(heading, body):
+    page = f"{heading}\n{body}\nchecked by the engineer.\n"
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize(
+    "line,carry",
+    [("A blinding of lean mix is laid under the whole", "slab before the steel is fixed."),
+     ("300 mm of hardcore is rolled in layers below the", "ground floor slab as shown.")],
+)
+def test_a_wrapped_line_is_measured_against_the_rest_of_the_page(line, carry):
+    # The last line is the shortest; the margin is read from the lines above it.
+    page = f"{line}\n{carry}\n2 HARDCORE\nRates include for all the labours and the plant needed.\nend.\n"
+    assert heading_line_for_page(page) == "2 HARDCORE"
+
+
+@pytest.mark.parametrize(
+    "line,word",
+    [("3 The joints are left open", "against"), ("A blinding is laid under the", "whole")],
+)
+def test_a_line_that_fills_exactly_the_wrap_share_is_wrapped(line, word):
+    # line + space + word is 34 characters, exactly 0.85 of a 40-character
+    # page: it reaches the share, so the line wrapped there.
+    assert len(line) + 1 + len(word) == 34
+    page = f"{line}\n{word} the works are done.\n{'x' * 40}\n9 SECTION HEAD\n"
+    assert heading_line_for_page(page) == "9 SECTION HEAD"
+
+
+@pytest.mark.parametrize(
+    "heading,body",
+    [("4.2 Fixing of the panels", "mm joints are left between them as"),
+     ("8.1 Testing of the drains", "pH of the outfall is checked by the")],
+)
+def test_a_heading_three_quarters_as_wide_as_the_page_is_not_a_wrap(heading, body):
+    # The heading and the next word fill between 70 % and 85 % of the page's
+    # measured width: room was left on the line, so it is a heading.
+    reach = len(heading) + 1 + len(body.split()[0])
+    width = len(body)
+    assert 0.70 * width <= reach < WRAP_FILL * width
+    page = f"{heading}\n{body}\nframe as shown.\n"
+    assert heading_line_for_page(page) == heading
