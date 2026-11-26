@@ -34,7 +34,7 @@ def test_every_checkable_row_agrees_reconciles(rows, printed):
     ([_row(1, 1, "Formwork", "3", "100", "200"), _row(1, 2, "Rebar", "2", "7", "15")], 2,
      214.0, dr.FAILED),
 ])
-def test_one_disagreeing_row_fails_the_table(rows, failed, printed, state):
+def test_disagreeing_rows_are_counted_and_the_state_is_the_printed_totals(rows, failed, printed, state):
     # Row arithmetic is counted and reported; the state is the printed total's.
     check = dr.reconcile_table(rows, printed)
     assert check.state == state
@@ -382,6 +382,8 @@ def test_a_table_short_by_one_row_fails_and_the_whole_table_reconciles(amounts, 
     (["1000.00"] * 100, 100_000.0, dr.RECONCILED),
     (["1000", "2000", "3000"], 6000.5, dr.FAILED),      # the total prints tenths
     (["1000", "2000", "3000"], 6000.0, dr.RECONCILED),
+    (["1000.00", "999.70"], 2000.0, dr.FAILED),          # amounts print cents: a 0.30 gap is not rounding
+    (["1000.00", "1000.00"], 2000.0, dr.RECONCILED),
 ])
 def test_a_numeric_total_is_held_to_the_finest_digit_the_table_prints(amounts, printed, state):
     assert dr.reconcile_table(_amounts(amounts), printed).state == state
@@ -487,3 +489,111 @@ def test_a_figure_column_takes_a_number_value_and_refuses_a_boolean(where, rows)
 @pytest.mark.parametrize("printed, state", [(True, dr.FAILED), (1, dr.RECONCILED), ("1", dr.RECONCILED)])
 def test_a_boolean_printed_total_is_not_the_number_1(printed, state):
     assert dr.reconcile_table(_amounts(["1"]), printed).state == state
+
+
+# ── third verdict: a total the reader cannot take is not FAILED; columns ──
+
+@pytest.mark.parametrize("printed", [None, "", "  ", "	"])
+@pytest.mark.parametrize("amounts", [["1000", "2000", "3000"], ["400.50", "99.50"]])
+def test_a_blank_printed_total_is_no_total(amounts, printed):
+    check = dr.reconcile_table(_amounts(amounts), printed)
+    assert (check.state, check.total_printed, check.total_unread) == (dr.UNCHECKED, None, False)
+    assert dr.reconcile_tables(_amounts(amounts), {1: printed})[1].state == dr.UNCHECKED
+
+
+@pytest.mark.parametrize("printed, number", [
+    ("AED 6,000", 6000.0), ("6,000 AED", 6000.0), ("$6,000", 6000.0), ("6,000/-", 6000.0),
+    ("Rs. 6,000", 6000.0), ("6000.", 6000.0), ("1 200.00", 1200.0), ("AED 6,000.00", 6000.0),
+])
+def test_the_one_figure_of_a_printed_total_is_read_beside_its_marks(printed, number):
+    amounts = ["1000", "2000", "3000"] if number == 6000.0 else ["1000", "200"]
+    check = dr.reconcile_table(_amounts(amounts), printed)
+    assert (check.state, check.total_printed, check.total_unread) == (dr.RECONCILED, number, False)
+    short = dr.reconcile_table(_amounts(amounts[:-1]), printed)
+    assert (short.state, short.total_printed) == (dr.FAILED, number)
+
+
+@pytest.mark.parametrize("printed, amounts, state", [
+    ("AED 6,000", ["1000", "2000", "3000.50"], dr.RECONCILED),   # held to the figure's own half unit
+    ("AED 6,000", ["1000", "2000", "3000.51"], dr.FAILED),
+    ("AED 6,000.00", ["1000", "2000", "3000.50"], dr.FAILED),
+    ("AED 6,000.00", ["1000", "2000", "3000.004"], dr.RECONCILED),
+])
+def test_a_marked_total_is_held_to_its_figures_own_last_digit(printed, amounts, state):
+    assert dr.reconcile_table(_amounts(amounts), printed).state == state
+
+
+@pytest.mark.parametrize("printed", ["AED", "nil", "see summary", "6,000 / 7,000", "Bill 3: 6,000"])
+@pytest.mark.parametrize("amounts", [["1000", "2000", "3000"], ["3", "6000"]])
+def test_a_printed_total_with_no_one_figure_is_unread_not_failed(amounts, printed):
+    check = dr.reconcile_table(_amounts(amounts), printed)
+    assert (check.state, check.total_printed, check.total_unread) == (dr.UNCHECKED, None, True)
+    assert dr.reconcile_table([], printed).total_unread is True
+
+
+@pytest.mark.parametrize("amounts, printed", [([""], 0.0), (["", ""], 0.0), ([""], 10.0)])
+def test_a_table_with_no_amount_read_fails_and_sums_to_nothing(amounts, printed):
+    check = dr.reconcile_table(_amounts(amounts), printed)
+    assert (check.state, check.total_of_rows) == (dr.FAILED, None)
+
+
+def _sheet_rows(tmp_path, body):
+    from app.core import doc_index
+
+    path = _xlsx(tmp_path, "cols.xlsx", {"Bill 1": [["BILL No. 1"], HEADER, *body]})
+    return dr.rows_from_spreadsheet("doc-c", doc_index.spreadsheet_rows(path, "cols.xlsx", ".xlsx"))
+
+
+BODY = [["A", "Excavate", "m3", 120, 15, 1800], ["B", "Valve", "nr", 4, 2.5, 11],
+        ["C", "Blockwork", "m2", 50, 40, 2000]]
+
+
+@pytest.mark.parametrize("where, n, column", [
+    ({"Amount": 1800}, 1, {"Amount": "total"}),
+    ({"Qty": 4}, 1, {"Qty": "quantity"}),
+    ({"Description": "Excavate"}, 1, {"Description": "description"}),
+    ({"Amount (AED)": 2000}, 1, {"Amount (AED)": "total"}),
+    ({"Unit Rate": 40}, 1, {"Unit Rate": "rate"}),     # a whole alias wins over a part
+    ({"Item": "B"}, 1, None),                          # the sheet's own unmapped header
+    ({"total": 9999}, 0, None),
+])
+def test_a_where_on_the_sheets_printed_header_reads_its_column(tmp_path, where, n, column):
+    out = dr.rows_query(_sheet_rows(tmp_path, BODY), "count", where)
+    assert out["value"] == n
+    assert out.get("columns") == column
+
+
+@pytest.mark.parametrize("where, column", [
+    ({"descriptoin": "Valve"}, "total"), ({"Remarks": "x"}, "total"),
+    ({"Amount": 1800}, "Amont"), ({}, "Profit"),
+])
+def test_an_unknown_column_is_refused_by_name_not_counted_as_zero(tmp_path, where, column):
+    rows = _sheet_rows(tmp_path, BODY)
+    for op in ("count", "sum", "filter"):
+        out = dr.rows_query(rows, op, where, column=column)
+        bad = next(k for k in [*where, column] if k not in ("Amount", "total"))
+        assert out["error"] == f"unknown column {bad!r}"
+        assert {"total", "Item", "path"} <= set(out["columns"])
+        assert out["rows"] == []
+
+
+@pytest.mark.parametrize("where", [{"Amount": 1800, "total": 1800}, {"Qty": 4, "quantity": 4}])
+def test_two_names_for_one_column_are_refused(where):
+    rows = [_row(1, 1, "Excavate", "4", "450", "1800"), _row(1, 2, "Fill", "4", "5", "20")]
+    out = dr.rows_query(rows, "count", where)
+    assert "name the same column" in out["error"] and out["rows"] == []
+    assert dr.rows_query(rows, "count", dict([next(iter(where.items()))]))["value"] >= 1
+
+
+@pytest.mark.parametrize("column, value", [("Amount", 1800 + 11 + 2000), ("Qty", 120 + 4 + 50)])
+def test_sum_reads_the_column_its_printed_header_names(tmp_path, column, value):
+    out = dr.rows_query(_sheet_rows(tmp_path, BODY), "sum", column=column)
+    assert out["value"] == value
+
+
+@pytest.mark.parametrize("body, checks", [
+    (BODY, ["", "qty x rate != amount", ""]),
+    ([["A", "Formwork", "m2", 10, 5, 50], ["B", "Rebar", "t", 2, 7, 15]], ["", "qty x rate != amount"]),
+])
+def test_a_spreadsheet_row_carries_its_own_arithmetic_check(tmp_path, body, checks):
+    assert [r.check for r in _sheet_rows(tmp_path, body)] == checks

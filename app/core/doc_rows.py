@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.bill_table_geometry import BillRow, check_row, parse_number
+from app.core.bill_table_geometry import BillRow, _resolver, check_row, parse_number
 
 #: The amounts of the rows read add up to the total the document prints, to
 #: the document's own rounding. Nothing else is RECONCILED.
@@ -142,6 +142,9 @@ class TableCheck:
     failed: int
     total_printed: float | None = None
     total_of_rows: float | None = None
+    #: A printed total was given as text but no one number could be read from
+    #: it: the state is UNCHECKED, the reader's limit, not the document's.
+    total_unread: bool = False
 
 
 def reconcile_table(
@@ -150,19 +153,29 @@ def reconcile_table(
     """The state of one table against the total the document prints for it.
 
     * no rows: NOT READ;
-    * no printed total: UNCHECKED;
+    * no printed total (``None`` or blank text): UNCHECKED;
+    * a printed text with no one number the reader can take from it (no
+      figure, or more than one): UNCHECKED with ``total_unread``; the reader
+      failed, not the document, so the table is not charged FAILED;
     * RECONCILED only when the amounts of the rows add up to the printed
       total within half a unit of the last digit the document prints
       (:func:`_rounding_allowance`); otherwise FAILED. One row's amount
       missing from the read is therefore FAILED, whatever the row count.
 
-    ``printed_total`` given as the printed text is held to its own last
-    digit (``"6,000"`` to 0.5, ``"6,000.00"`` to 0.005); given as a number,
+    ``printed_total`` given as the printed text is read for its one number,
+    whatever currency or mark prints beside it (``"AED 6,000"``,
+    ``"6,000/-"``), and held to that number's own last digit (``"6,000"`` to
+    0.5, ``"6,000.00"`` to 0.005); given as a number,
     to the finest digit the table prints, in its amounts or in the number.
     A printed total that is not a finite number is never agreed with.
     """
+    unread = False
+    if isinstance(printed_total, str):
+        printed_total = _printed_figure(printed_total)
+        unread = printed_total == ""
+        printed_total = printed_total or None
     if not rows:
-        return TableCheck(NOT_READ, 0, 0, 0, _as_number(printed_total))
+        return TableCheck(NOT_READ, 0, 0, 0, _as_number(printed_total), total_unread=unread)
     checked = failed = 0
     for r in rows:
         if all(r.figure(f) is not None for f in FIGURE_FIELDS):
@@ -179,7 +192,27 @@ def reconcile_table(
         state = RECONCILED
     else:
         state = FAILED
-    return TableCheck(state, len(rows), checked, failed, total, total_of_rows)
+    return TableCheck(state, len(rows), checked, failed, total, total_of_rows, unread)
+
+
+#: One printed figure: digits with comma grouping and an optional decimal part.
+_FIGURE_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def _printed_figure(text: str) -> str | None:
+    """The one figure a printed total's text holds, as printed.
+
+    ``None`` when the text is blank (no total); the text itself when the
+    number reader takes it whole (``"1 200.00"``); else the single figure
+    among currency or other marks (``"AED 6,000"`` -> ``"6,000"``,
+    ``"6000."`` -> ``"6000"``); ``""`` when the text holds no figure or more
+    than one, so which is the total cannot be told."""
+    if not text.strip():
+        return None
+    if parse_number(text) is not None:
+        return text
+    found = _FIGURE_RE.findall(text)
+    return found[0] if len(found) == 1 and parse_number(found[0]) is not None else ""
 
 
 def _as_number(value: float | str | None) -> float | None:
@@ -319,10 +352,70 @@ def rows_query(
         return {"error": f"unknown operation {operation!r}", "operations": list(OPERATIONS)}
     if match not in MATCHES:
         return {"error": f"unknown match {match!r}", "matches": list(MATCHES), "rows": []}
-    out = _rows_query(rows, operation, where, column, other, match)
+    named = [*(where or {}), *(other or {}), column]
+    columns: dict[str, str] = {}
+    for name in named:
+        resolved = _resolve_column(rows, name)
+        if isinstance(resolved, list):
+            return {"error": f"column {name!r} names more than one column",
+                    "candidates": resolved, "rows": []}
+        if resolved is None:
+            return {"error": f"unknown column {name!r}",
+                    "columns": sorted(_known_columns(rows)), "rows": []}
+        columns[name] = resolved
+    for side in (where, other):
+        targets = [columns[k] for k in side or {}]
+        if len(set(targets)) < len(targets):
+            twice = sorted(k for k in side or {} if targets.count(columns[k]) > 1)
+            return {"error": f"{', '.join(map(repr, twice))} name the same column",
+                    "rows": []}
+    out = _rows_query(rows, operation, _renamed(where, columns), columns[column],
+                      _renamed(other, columns), match)
     if "error" not in out:
         out["match"] = match
+        changed = {k: v for k, v in columns.items() if k != v}
+        if changed:
+            out["columns"] = changed
     return out
+
+
+#: The fields the row readers resolve a column to (``DocRow.fields`` keys).
+READ_FIELDS = ("description", "unit", *FIGURE_FIELDS)
+
+
+def _known_columns(rows: Sequence[DocRow]) -> set[str]:
+    """Every column a query may name over ``rows``: the path, the fields the
+    readers resolve, and each column the rows carry under its own header."""
+    known = {"path", *READ_FIELDS}
+    for r in rows:
+        known.update(r.fields)
+        known.update(r.extra)
+    return known
+
+
+def _resolve_column(rows: Sequence[DocRow], name: str) -> str | list[str] | None:
+    """The column ``name`` means: itself when the rows know it; else the
+    field its header text resolves to through the readers' own alias table
+    (``"Amount"`` -> ``total``, ``"Qty"`` -> ``quantity``); a list of the
+    candidates when the text resolves to more than one field and no alias
+    matches it whole; ``None`` when it names no column the rows know."""
+    known = _known_columns(rows)
+    if name in known:
+        return name
+    block = _resolver()
+    hits = [f for f in block._resolve_columns([name]) if f in known]
+    if len(hits) > 1:
+        whole = block._normalize_col(name)
+        hits = [f for f in hits if whole in block._COL_MAP.get(f, ())] or hits
+    if len(hits) > 1:
+        return sorted(hits)
+    return hits[0] if hits else None
+
+
+def _renamed(where: Mapping[str, Any] | None, columns: Mapping[str, str]) -> dict[str, Any] | None:
+    if where is None:
+        return None
+    return {columns[k]: v for k, v in where.items()}
 
 
 def _rows_query(rows: Sequence[DocRow], operation: str, where: Mapping[str, str] | None,
