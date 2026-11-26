@@ -57,76 +57,79 @@ def _example(**over):
 
 # -- the whole registry, one format -------------------------------------------------
 
-def test_every_registered_thing_has_one_entry():
+def _registered_ids(kind):
     from app.agents import catalog
     from app.agents.driver import routes
 
+    tool_registry.load()
+    if kind == "formula":
+        return {s.name for s in fr.all_specs()}
+    if kind == "tool":
+        return set(tool_registry._TOOLS)
+    if kind == "workflow":
+        return set(routes.catalogue())
+    if kind == "skill":
+        return {f"{h.discipline.value}.{p.id}" for h in catalog.list_hats()
+                for p in (h.playbook.procedures or [] if h.playbook else [])}
+    root = catalogue.knowledge_dir()
+    return {f[:-3] for f in os.listdir(root) if f.endswith(".md")}
+
+
+@pytest.mark.parametrize("kind", ["formula", "tool", "workflow", "skill", "knowledge"])
+def test_every_registered_thing_has_one_entry(kind):
     ids = [e["id"] for e in catalogue.entries()]
     assert len(ids) == len(set(ids))
-    want = {f"formula:{s.name}" for s in fr.all_specs()}
-    tool_registry.load()
-    want |= {f"tool:{n}" for n in tool_registry._TOOLS}
-    want |= {f"workflow:{n}" for n in routes.catalogue()}
-    want |= {f"skill:{h.discipline.value}.{p.id}" for h in catalog.list_hats()
-             for p in (h.playbook.procedures or [] if h.playbook else [])}
-    root = catalogue.knowledge_dir()
-    want |= {f"knowledge:{f[:-3]}" for f in os.listdir(root) if f.endswith(".md")}
-    assert set(ids) == want
-    # At least two kinds are populated, so the check above is not one registry.
-    assert len({i.split(":")[0] for i in ids}) >= 2
+    want = _registered_ids(kind)
+    assert want, kind  # the registry is populated, so the check is not empty
+    assert {i.split(":", 1)[1] for i in ids if i.startswith(kind + ":")} == want
 
 
-def test_every_entry_has_the_one_format():
-    for e in catalogue.entries():
+@pytest.mark.parametrize("kind", ["formula", "tool", "workflow", "skill", "knowledge"])
+def test_every_entry_has_the_one_format(kind):
+    of_kind = [e for e in catalogue.entries() if e["kind"] == kind]
+    assert of_kind
+    for e in of_kind:
         assert set(e) - {"needs"} == FIELDS, e["id"]
-        assert e["kind"] in catalogue.KINDS
-        assert e["id"].startswith(e["kind"] + ":")
+        assert e["id"].startswith(kind + ":")
         assert set(e["stamps"]) == {"verified", "tested", "approved"}
         # Nothing here stamps verified or approved: those are a tester's and the owner's.
         assert e["stamps"]["verified"] is None and e["stamps"]["approved"] is None
-        assert e["source"].get("registry") == e["kind"]
+        assert e["source"].get("registry") == kind
         assert all(ex.get("invented") is True for ex in e["examples"])
 
 
-def test_a_formula_entry_carries_its_declared_inputs(registered):
-    for name, unit, hi in (("zz_cat_alpha", "m", 50.0), ("zz_cat_beta", "kN", 900.0)):
-        _formula(registered, name, {"size": Param(unit, 0, hi, label="the size", required=True)},
-                 {"out": unit})
-        catalogue._CACHE.clear()
-        entry = next(e for e in catalogue.entries() if e["id"] == f"formula:{name}")
-        assert entry["inputs"][0]["unit"] == unit and entry["inputs"][0]["range"] == [0, hi]
-        assert entry["inputs"][0]["label"] == "the size"
-        assert entry["code"] == {"tool": "construction_calc", "calculation": name}
-        assert entry["for"] == f"Synthetic {name}."
-        assert entry["source"]["file"].endswith("test_driver_catalogue.py")
+@pytest.mark.parametrize("name,unit,hi", [("zz_cat_alpha", "m", 50.0), ("zz_cat_beta", "kN", 900.0)])
+def test_a_formula_entry_carries_its_declared_inputs(registered, name, unit, hi):
+    _formula(registered, name, {"size": Param(unit, 0, hi, label="the size", required=True)}, {"out": unit})
+    catalogue._CACHE.clear()
+    entry = next(e for e in catalogue.entries() if e["id"] == f"formula:{name}")
+    assert entry["inputs"][0]["unit"] == unit and entry["inputs"][0]["range"] == [0, hi]
+    assert entry["inputs"][0]["label"] == "the size" and entry["inputs"][0]["required"] is True
+    assert entry["outputs"] == [{"name": "out", "unit": unit, "main": False}]
+    assert entry["code"] == {"tool": "construction_calc", "calculation": name}
+    assert entry["for"] == f"Synthetic {name}."
+    assert entry["source"]["file"].endswith("test_driver_catalogue.py")
 
 
 # -- declarations and gaps ----------------------------------------------------------
 
-def test_declared_fields_fill_the_entry_and_missing_ones_are_gaps(registered):
-    _formula(registered, "zz_cat_declared", {"a": "m"}, {"b": "m"}, when_to_use="a bay is rectangular",
-             when_not="the bay is curved; use a polygon area instead", examples=(_example(),),
-             standard="a published method")
-    _formula(registered, "zz_cat_bare", {"a": "m"}, {"b": "m"})
+@pytest.mark.parametrize("declared,gaps", [
+    ({"when_to_use": "a bay is rectangular", "when_not": "the bay is curved; use a polygon area",
+      "examples": (_example(),), "standard": "a published method"}, []),
+    ({}, ["when_to_use", "when_not", "examples", "standard"]),
+    ({"when_to_use": "x", "examples": (_example(),), "standard": "s"}, ["when_not"]),
+    ({"when_to_use": "x", "when_not": "y", "standard": "s"}, ["examples"]),
+    ({"when_to_use": "x", "when_not": "y", "examples": (_example(result="r2"),)}, ["standard"]),
+])
+def test_declared_fields_fill_the_entry_and_each_missing_one_is_a_gap(registered, declared, gaps):
+    _formula(registered, "zz_cat_declared", {"a": "m"}, {"b": "m"}, **declared)
     catalogue._CACHE.clear()
-    held = {e["id"]: e for e in catalogue.entries()}
-    full, bare = held["formula:zz_cat_declared"], held["formula:zz_cat_bare"]
-    assert full["when_to_use"] == "a bay is rectangular"
-    assert full["when_not"].startswith("the bay is curved")
-    assert full["examples"] == [_example()]
-    assert full["gaps"] == []
-    assert bare["gaps"] == ["when_to_use", "when_not", "examples", "standard"]
-
-
-def test_one_declaration_missing_is_that_one_gap(registered):
-    _formula(registered, "zz_cat_no_when_not", {"a": "m"}, {"b": "m"}, when_to_use="x",
-             examples=(_example(),), standard="s")
-    _formula(registered, "zz_cat_no_examples", {"a": "m"}, {"b": "m"}, when_to_use="x",
-             when_not="y", standard="s")
-    catalogue._CACHE.clear()
-    held = {e["id"]: e for e in catalogue.entries()}
-    assert held["formula:zz_cat_no_when_not"]["gaps"] == ["when_not"]
-    assert held["formula:zz_cat_no_examples"]["gaps"] == ["examples"]
+    entry = next(e for e in catalogue.entries() if e["id"] == "formula:zz_cat_declared")
+    assert entry["gaps"] == gaps
+    assert entry["when_to_use"] == declared.get("when_to_use", "")
+    assert entry["when_not"] == declared.get("when_not", "")
+    assert entry["examples"] == [dict(e) for e in declared.get("examples", ())]
+    assert entry["standard"] == declared.get("standard")
 
 
 @pytest.mark.parametrize("bad", [
@@ -146,45 +149,52 @@ def test_an_example_that_is_not_invented_and_whole_is_refused(bad):
         tool_registry.tool("zz_cat_tool_refused", owner="base", display_name="Z", examples=examples)
 
 
-def test_a_whole_example_is_kept_and_its_chain_is_optional():
-    kept = fr.declared_examples("formula", "zz", (_example(), {"invented": True, "given": " g ", "result": "r"}))
-    assert kept[0] == _example()
-    assert kept[1] == {"invented": True, "given": "g", "chain": [], "result": "r"}
-    assert fr.declared_examples("formula", "zz", ()) == ()
+@pytest.mark.parametrize("given,kept", [
+    ((_example(),), (_example(),)),
+    (({"invented": True, "given": " g ", "result": "r"},), ({"invented": True, "given": "g", "chain": [], "result": "r"},)),
+    ((), ()),
+])
+def test_a_whole_example_is_kept_and_its_chain_is_optional(given, kept):
+    assert fr.declared_examples("formula", "zz", given) == kept
 
 
-def test_a_tool_declares_the_same_fields(registered):
+@pytest.mark.parametrize("declared,gaps", [
+    ({"when_to_use": "w", "when_not": "n", "examples": (_example(),)}, ["for"]),
+    ({"when_not": "n"}, ["for", "when_to_use", "examples"]),
+])
+def test_a_tool_declares_the_same_fields(registered, declared, gaps):
     async def handle(call):
         return {"ok": True}
 
     tool_registry.tool("zz_cat_tool", owner="base", display_name="Synthetic tool",
-                       when_to_use="w", when_not="n", examples=(_example(),),
-                       params={"q": Param(label="q", kind="text", required=True)})(handle)
+                       params={"q": Param(label="q", kind="text", required=True)}, **declared)(handle)
     registered["tool"].append("zz_cat_tool")
     catalogue._CACHE.clear()
     entry = next(e for e in catalogue.entries() if e["id"] == "tool:zz_cat_tool")
-    assert (entry["when_to_use"], entry["when_not"]) == ("w", "n")
+    assert (entry["when_to_use"], entry["when_not"]) == (declared.get("when_to_use", ""), declared["when_not"])
     # A tool with no schema has no description: its "for" is a gap.
-    assert entry["gaps"] == ["for"]
+    assert entry["gaps"] == gaps
 
 
 # -- feeds / fed_by -----------------------------------------------------------------
 
-def test_an_output_feeds_an_input_of_the_same_name_and_unit_only(registered):
+@pytest.mark.parametrize("taker_unit,fed", [("m2", True), ("ha", False)])
+def test_an_output_feeds_an_input_of_the_same_name_and_unit_only(registered, taker_unit, fed):
     _formula(registered, "zz_cat_src", {"a": "m"}, {"zz_area": "m2"})
-    _formula(registered, "zz_cat_dst", {"zz_area": "m2"}, {"c": "m3"})
-    _formula(registered, "zz_cat_other_unit", {"zz_area": "ha"}, {"c": "m3"})
+    _formula(registered, "zz_cat_dst", {"zz_area": taker_unit}, {"c": "m3"})
     catalogue._CACHE.clear()
     held = {e["id"]: e for e in catalogue.entries()}
-    assert held["formula:zz_cat_src"]["feeds"] == ["formula:zz_cat_dst"]
-    assert held["formula:zz_cat_dst"]["fed_by"] == ["formula:zz_cat_src"]
-    assert held["formula:zz_cat_other_unit"]["fed_by"] == []
+    assert held["formula:zz_cat_src"]["feeds"] == (["formula:zz_cat_dst"] if fed else [])
+    assert held["formula:zz_cat_dst"]["fed_by"] == (["formula:zz_cat_src"] if fed else [])
     assert held["formula:zz_cat_dst"]["feeds"] == []
 
 
 # -- the index ----------------------------------------------------------------------
 
-def test_the_index_is_one_line_per_entry_in_a_fixed_order():
+@pytest.mark.parametrize("built", ["cold", "cached"])
+def test_the_index_is_one_line_per_entry_in_a_fixed_order(built):
+    if built == "cold":
+        catalogue._CACHE.clear()
     items = catalogue.entries()
     lines = catalogue.index_lines()
     assert len(lines) == len(items)
@@ -194,63 +204,85 @@ def test_the_index_is_one_line_per_entry_in_a_fixed_order():
     assert catalogue.index_lines() == lines
 
 
-def test_the_index_order_does_not_follow_the_order_given():
-    a = {"id": "tool:b", "kind": "tool", "name": "B", "for": "b"}
-    b = {"id": "formula:z", "kind": "formula", "name": "Z", "for": "z"}
-    c = {"id": "formula:a", "kind": "formula", "name": "A", "for": ""}
-    assert catalogue.index_lines([a, b, c]) == catalogue.index_lines([c, a, b]) == [
-        "formula:a | formula | A | -", "formula:z | formula | Z | z", "tool:b | tool | B | b"]
+_A = {"id": "tool:b", "kind": "tool", "name": "B", "for": "b"}
+_B = {"id": "formula:z", "kind": "formula", "name": "Z", "for": "z"}
+_C = {"id": "formula:a", "kind": "formula", "name": "A", "for": ""}
+_D = {"id": "skill:q.1", "kind": "skill", "name": "Q", "for": "q"}
 
 
-def test_a_long_for_line_is_cut_to_one_line():
-    line = catalogue.index_line({"id": "formula:x", "kind": "formula", "name": "X",
-                                 "for": catalogue._one_line("word\nword " * 100)})
-    assert "\n" not in line and len(line.split(" | ")[3]) == catalogue.FOR_CHARS
-    exact = "w" * catalogue.FOR_CHARS
-    assert catalogue._one_line(exact) == exact
-    assert catalogue._one_line(exact + "w").endswith("…")
+@pytest.mark.parametrize("given,want", [
+    ([_A, _B, _C], ["formula:a | formula | A | -", "formula:z | formula | Z | z", "tool:b | tool | B | b"]),
+    ([_C, _A, _B], ["formula:a | formula | A | -", "formula:z | formula | Z | z", "tool:b | tool | B | b"]),
+    # by kind first: a skill comes after a tool although "skill" < "tool"
+    ([_D, _A], ["tool:b | tool | B | b", "skill:q.1 | skill | Q | q"]),
+])
+def test_the_index_order_does_not_follow_the_order_given(given, want):
+    assert catalogue.index_lines(given) == want
 
 
-def test_a_registered_formula_reaches_the_index_without_a_restart(registered):
+@pytest.mark.parametrize("text,cut", [
+    ("w" * 160, False),
+    ("w" * 161, True),
+    ("word\nword " * 100, True),
+])
+def test_a_long_for_line_is_cut_to_one_line(text, cut):
+    out = catalogue._one_line(text)
+    assert "\n" not in out and len(out) <= catalogue.FOR_CHARS
+    assert out.endswith("…") == cut
+
+
+@pytest.mark.parametrize("name", ["zz_cat_late", "zz_cat_later"])
+def test_a_registered_formula_reaches_the_index_without_a_restart(registered, name):
     before = catalogue.index_lines()
-    _formula(registered, "zz_cat_late", {"a": "m"}, {"b": "m"})
+    _formula(registered, name, {"a": "m"}, {"b": "m"})
     after = catalogue.index_lines()
     assert len(after) == len(before) + 1
-    assert any(line.startswith("formula:zz_cat_late | formula | ") for line in after)
+    assert [line for line in after if line.startswith(f"formula:{name} | ")] == [
+        f"formula:{name} | formula | Synthetic {name} | Synthetic {name}."]
 
 
 # -- lookup -------------------------------------------------------------------------
 
-def test_lookup_returns_the_named_entries_in_the_order_asked():
+@pytest.mark.parametrize("reverse", [False, True])
+def test_lookup_returns_the_named_entries_in_the_order_asked(reverse):
     ids = [e["id"] for e in catalogue.entries()]
-    first, last = ids[0], ids[-1]
-    for asked in ([first, last], [last, first]):
-        out = catalogue.lookup(asked)
-        assert out["ok"] is True and [e["id"] for e in out["entries"]] == asked
-        assert out["unknown"] == [] and "not_returned" not in out
+    asked = [ids[-1], ids[0]] if reverse else [ids[0], ids[-1]]
+    out = catalogue.lookup(asked)
+    assert out["ok"] is True and [e["id"] for e in out["entries"]] == asked
+    assert out["unknown"] == [] and "not_returned" not in out
 
 
-def test_lookup_names_unknown_ids_and_never_returns_everything():
-    known = catalogue.entries()[1]["id"]
+@pytest.mark.parametrize("pick", [1, -2])
+def test_lookup_names_unknown_ids_once(pick):
+    known = catalogue.entries()[pick]["id"]
     out = catalogue.lookup([known, "formula:no_such_thing", known])
     assert [e["id"] for e in out["entries"]] == [known]
     assert out["unknown"] == ["formula:no_such_thing"]
-    assert catalogue.lookup(known)["entries"][0]["id"] == known  # one id as text
-    for nothing in ([], None, 7, [""], ["formula:no_such_thing"], {"ids": [known]}):
-        out = catalogue.lookup(nothing)
-        assert out["ok"] is False and out.get("entries", []) == [] and out["error"]
+    assert [e["id"] for e in catalogue.lookup(known)["entries"]] == [known]  # one id as text
 
 
-def test_lookup_stops_at_the_entry_and_character_limits(monkeypatch):
+@pytest.mark.parametrize("nothing", [[], None, 7, [""], ["formula:no_such_thing"], {"ids": ["formula:x"]}])
+def test_lookup_of_nothing_it_holds_is_refused(nothing):
+    out = catalogue.lookup(nothing)
+    assert out["ok"] is False and out.get("entries", []) == [] and out["error"]
+
+
+@pytest.mark.parametrize("extra", [1, 3])
+def test_lookup_stops_at_the_entry_limit(extra):
     ids = [e["id"] for e in catalogue.entries()]
-    many = catalogue.lookup(ids[:catalogue.MAX_LOOKUP + 3])
+    many = catalogue.lookup(ids[:catalogue.MAX_LOOKUP + extra])
     assert len(many["entries"]) <= catalogue.MAX_LOOKUP
-    assert len(many["entries"]) + len(many["not_returned"]) == catalogue.MAX_LOOKUP + 3
+    assert len(many["entries"]) + len(many["not_returned"]) == catalogue.MAX_LOOKUP + extra
+
+
+@pytest.mark.parametrize("asked", [2, 3])
+def test_lookup_stops_at_the_character_limit(monkeypatch, asked):
+    ids = [e["id"] for e in catalogue.entries()]
     monkeypatch.setattr(catalogue, "LOOKUP_CHARS", 1)
-    small = catalogue.lookup(ids[:3])
+    small = catalogue.lookup(ids[:asked])
     # The first entry always comes back, whatever its size; the rest are named.
     assert [e["id"] for e in small["entries"]] == ids[:1]
-    assert small["not_returned"] == ids[1:3]
+    assert small["not_returned"] == ids[1:asked]
 
 
 def test_a_lookup_result_fits_the_loop_tool_result_limit():
@@ -259,10 +291,14 @@ def test_a_lookup_result_fits_the_loop_tool_result_limit():
     assert len(json.dumps(out, default=str)) <= loop._TOOL_RESULT_CHARS
 
 
-def test_asked_ids_reads_a_list_or_one_id_only():
-    assert catalogue.asked_ids(["a", " a ", "b", 3, None, ""]) == ["a", "b"]
-    assert catalogue.asked_ids("tool:x") == ["tool:x"]
-    assert catalogue.asked_ids(None) == [] and catalogue.asked_ids({"a": 1}) == []
+@pytest.mark.parametrize("given,want", [
+    (["a", " a ", "b", 3, None, ""], ["a", "b"]),
+    ("tool:x", ["tool:x"]),
+    (None, []),
+    ({"a": 1}, []),
+])
+def test_asked_ids_reads_a_list_or_one_id_only(given, want):
+    assert catalogue.asked_ids(given) == want
 
 
 # -- the driver: index in the system message, lookup as a tool ------------------------

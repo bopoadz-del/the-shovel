@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -49,6 +50,8 @@ LOOKUP_CHARS = 16000
 #: An index line's ``for`` text is cut to this many characters.
 FOR_CHARS = 160
 
+_LOG = logging.getLogger(__name__)
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
@@ -61,6 +64,8 @@ def _source_file(obj: Any) -> str:
     try:
         path = inspect.getsourcefile(obj) or ""
     except TypeError:
+        # A built-in or a C callable has no source file: the entry says so.
+        _LOG.debug("catalogue: no source file for %r", obj, exc_info=True)
         return ""
     return os.path.relpath(path, _ROOT).replace(os.sep, "/") if path else ""
 
