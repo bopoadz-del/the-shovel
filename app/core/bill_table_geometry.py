@@ -289,6 +289,56 @@ def header_test(
     ], None
 
 
+#: A header line that resolves no description column still names this page's
+#: figure columns when it resolves at least this many of them.
+MIN_OWN_FIGURE_LABELS = 2
+
+
+def own_figure_columns(line: Sequence[Word], block=None) -> list[_Column]:
+    """The figure columns ``line`` names when it fails the header test only
+    for want of a description label (``[]`` otherwise): one column per
+    resolved figure field, at the cell its label is printed in, and only when
+    at least :data:`MIN_OWN_FIGURE_LABELS` distinct cells carry them."""
+    block = block or _resolver()
+    if header_test(line, block)[1] != HEADER_NO_DESCRIPTION:
+        return []
+    cells = _cells_by_gap(line)
+    labels = [" ".join(w.text for w in c) for c in cells]
+    resolved = block._resolve_columns(labels)
+    taken: dict[int, str] = {}
+    for fld in _FIGURE_FIELDS:
+        if fld in resolved:
+            taken.setdefault(labels.index(resolved[fld]), fld)
+    if len(taken) < MIN_OWN_FIGURE_LABELS:
+        return []
+    return [
+        _Column(
+            label=labels[i],
+            field=fld,
+            left=min(w.left for w in cells[i]),
+            right=max(w.right for w in cells[i]),
+        )
+        for i, fld in taken.items()
+    ]
+
+
+def complete_header(carried: Sequence[_Column], own: Sequence[_Column]) -> list[_Column]:
+    """The carried header with the page's own figure columns put in place.
+
+    A carried column that overlaps an own column horizontally, or that
+    resolves the same field as one, gives way to it; every other carried
+    column keeps its place. Columns come back left to right."""
+    def overlaps(a: _Column, b: _Column) -> bool:
+        return a.left <= b.right and b.left <= a.right
+
+    own_fields = {c.field for c in own}
+    kept = [
+        c for c in carried
+        if c.field not in own_fields and not any(overlaps(c, o) for o in own)
+    ]
+    return sorted([*kept, *own], key=lambda c: c.left)
+
+
 def _assign(word: Word, columns: Sequence[_Column]) -> int:
     """Index of the column a word belongs to.
 
@@ -752,19 +802,37 @@ def extract_bill_rows(
         max_gap = statistics.median(heights) if heights else 1.0
         indent = max_gap
         page_lines = group_lines(by_page[page])
-        headers = [detect_header(line, block) for line in page_lines]
+        # A line that names figure columns but no description column is this
+        # page's own header for those columns: it completes the header in
+        # effect (:func:`complete_header`) instead of being read under it.
+        headers: list[list[_Column] | None] = []
+        completed: list[bool] = []
+        running = columns
+        for line in page_lines:
+            header = detect_header(line, block)
+            own = own_figure_columns(line, block) if header is None and running is not None else []
+            if own:
+                header = complete_header(running, own)
+            running = header or running
+            headers.append(header)
+            completed.append(bool(own))
         inferred, witness_lines = infer_page_columns(page_lines)
         stats.witness_lines += witness_lines
         # The header in effect on this page: its own first header line, else
         # the one carried from an earlier page.
-        page_header = next((h for h in headers if h is not None), columns)
+        first_own = next((i for i, h in enumerate(headers) if h is not None), None)
+        page_header = headers[first_own] if first_own is not None else columns
+        # A header completed from a partial line is weaker evidence than the
+        # page's own proof by reconciliation: on a tie the inferred columns win.
+        weaker = first_own is not None and completed[first_own]
         use_inferred = False
         if inferred is not None:
             header_witnesses = 0
             if page_header is not None:
                 stats.header_conflicts += _header_conflicts(page_lines, page_header, inferred)
                 header_witnesses = _header_reconciling(page_lines, page_header)
-            use_inferred = inferred.witnesses > header_witnesses
+            use_inferred = (inferred.witnesses >= header_witnesses if weaker
+                            else inferred.witnesses > header_witnesses)
         source = (SOURCE_INFERRED if use_inferred
                   else SOURCE_HEADER if page_header is not None else SOURCE_NONE)
         stats.pages[source] += 1
