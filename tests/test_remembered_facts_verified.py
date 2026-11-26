@@ -82,45 +82,50 @@ def test_blank_verifier_is_not_a_verification(tmp_path, monkeypatch, blank):
     assert am.list_agent_facts("a", pid, verified_only=True) == []
 
 
-def test_app_rewrite_of_a_verified_fact_clears_the_mark(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old,new", [("4,200,000", "5,000,000"), ("Plot 7", "Plot 9")])
+def test_app_rewrite_of_a_verified_fact_clears_the_mark(tmp_path, monkeypatch, old, new):
     """A new value nobody confirmed is not verified, even over a verified row."""
     store, _pm, am = _isolate(tmp_path, monkeypatch)
     pid = store.create_project("P")["id"]
-    store.set_fact(pid, "contract_value", "4,200,000", verified_by="u1")
-    rewritten = store.set_fact(pid, "contract_value", "5,000,000")
-    assert (rewritten["value"], rewritten["verified"], rewritten["verified_at"]) == ("5,000,000", False, None)
+    store.set_fact(pid, "contract_value", old, verified_by="u1")
+    rewritten = store.set_fact(pid, "contract_value", new)
+    assert (rewritten["value"], rewritten["verified"], rewritten["verified_at"]) == (new, False, None)
     assert store.list_facts(pid, verified_only=True) == []
 
-    am.set_agent_fact("a", "site", "Plot 7", project_id=pid, verified_by="u1")
-    again = am.set_agent_fact("a", "site", "Plot 9", project_id=pid)
-    assert (again["value"], again["verified"]) == ("Plot 9", False)
+    am.set_agent_fact("a", "site", old, project_id=pid, verified_by="u1")
+    again = am.set_agent_fact("a", "site", new, project_id=pid)
+    assert (again["value"], again["verified"]) == (new, False)
     assert am.list_agent_facts("a", pid, verified_only=True) == []
 
 
-def test_search_facts_honours_verified_only(tmp_path, monkeypatch):
+@pytest.mark.parametrize("term,confirmed,unconfirmed", [
+    ("door", "door_width", "door_height"), ("slab", "slab_depth", "slab_grade"),
+])
+def test_search_facts_honours_verified_only(tmp_path, monkeypatch, term, confirmed, unconfirmed):
     store, _pm, _am = _isolate(tmp_path, monkeypatch)
     pid = store.create_project("P")["id"]
-    store.set_fact(pid, "door_width", "0.90 m", verified_by="u1")
-    store.set_fact(pid, "door_height", "2.40 m")
-    assert {f["key"] for f in store.search_facts(pid, "door")} == {"door_width", "door_height"}
-    assert [f["key"] for f in store.search_facts(pid, "door", verified_only=True)] == ["door_width"]
+    store.set_fact(pid, confirmed, "0.90 m", verified_by="u1")
+    store.set_fact(pid, unconfirmed, "2.40 m")
+    assert {f["key"] for f in store.search_facts(pid, term)} == {confirmed, unconfirmed}
+    assert [f["key"] for f in store.search_facts(pid, term, verified_only=True)] == [confirmed]
 
 
 # ── the prompt readers ──────────────────────────────────────────────────────
 
 
-def test_memory_context_carries_only_verified_facts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("unconfirmed,confirmed", [("4,200,000", "2027-03-01"), ("7,300,000", "2028-06-30")])
+def test_memory_context_carries_only_verified_facts(tmp_path, monkeypatch, unconfirmed, confirmed):
     store, pm, _am = _isolate(tmp_path, monkeypatch)
     pid = store.create_project("P")["id"]
-    store.set_fact(pid, "contract_value", "4,200,000")
-    store.set_fact(pid, "completion_date", "2027-03-01")
+    store.set_fact(pid, "contract_value", unconfirmed)
+    store.set_fact(pid, "completion_date", confirmed)
     assert pm.build_memory_context(pid, "contract value") == ""
     assert pm.build_memory_context(pid) == ""
 
-    store.set_fact(pid, "completion_date", "2027-03-01", verified_by="u1")
+    store.set_fact(pid, "completion_date", confirmed, verified_by="u1")
     ctx = pm.build_memory_context(pid, "contract value")
-    assert "2027-03-01" in ctx
-    assert "4,200,000" not in ctx
+    assert confirmed in ctx
+    assert unconfirmed not in ctx
 
 
 @pytest.mark.asyncio

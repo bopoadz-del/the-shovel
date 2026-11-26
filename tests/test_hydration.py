@@ -631,7 +631,13 @@ def test_gdrive_load_service_account_info_handles_inline_and_file(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_hydration_brief_never_enters_the_fact_tables(isolated_data_dir, monkeypatch):
+@pytest.mark.parametrize("asks,expect_friction", [
+    (("why is BOQ empty?", "rebar quantities for level 3?"), True),
+    (("concrete pour schedule for foundation?", "lift shaft size?"), False),
+])
+async def test_hydration_brief_never_enters_the_fact_tables(
+    isolated_data_dir, monkeypatch, asks, expect_friction,
+):
     """The day's brief (topics, friction, asks) is kept in the run row for the
     operator report. It is never written to project_facts / agent_facts,
     which feed the chat prompt: a summary of past asks is not a fact."""
@@ -642,31 +648,25 @@ async def test_hydration_brief_never_enters_the_fact_tables(isolated_data_dir, m
         return ("## ok", "offline_template")
     monkeypatch.setattr(hydration_module, "_call_chat", fake_chat)
 
-    # Two projects with different asks, so a constant brief cannot pass.
-    cases = {
-        _make_project("WB-P"): ("why is BOQ empty?", "rebar quantities for level 3?"),
-        _make_project("WB-A"): ("concrete pour schedule for foundation?", "lift shaft size?"),
-    }
-    for pid, asks in cases.items():
-        for ask in asks:
-            _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", ask, "ok")
+    pid = _make_project("WB-P")
+    for ask in asks:
+        _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", ask, "ok")
 
     await hydration_module.run(target_date="2026-05-26")
 
-    for pid, asks in cases.items():
-        assert projects_store.list_facts(pid) == []
-        assert agent_memory.list_agent_facts("chat", pid) == []
-        row = hydration_store.get_latest("project", pid)
-        brief = row["facts"]["writeback"]["brief"]
-        assert brief["run_date"] == "2026-05-26"
-        assert sorted(brief["asks"]) == sorted(asks)
-        assert brief["topics"], "at least one keyword survives the stopword filter"
-    friction = hydration_store.get_latest("project", next(iter(cases)))["facts"]["writeback"]["brief"]["friction"]
-    assert friction, "'why' / 'empty' fires the friction regex"
+    assert projects_store.list_facts(pid) == []
+    assert agent_memory.list_agent_facts("chat", pid) == []
+    brief = hydration_store.get_latest("project", pid)["facts"]["writeback"]["brief"]
+    assert brief["run_date"] == "2026-05-26"
+    assert sorted(brief["asks"]) == sorted(asks)
+    assert brief["topics"], "at least one keyword survives the stopword filter"
+    # 'why' / 'empty' fire the friction regex; plain asks do not.
+    assert bool(brief["friction"]) is expect_friction
 
 
 @pytest.mark.asyncio
-async def test_hydration_leaves_existing_facts_untouched(isolated_data_dir, monkeypatch):
+@pytest.mark.parametrize("value,site", [("4,200,000", "Plot 7"), ("9,750,000", "Plot 12")])
+async def test_hydration_leaves_existing_facts_untouched(isolated_data_dir, monkeypatch, value, site):
     """A fact already in the tables is neither overwritten nor un-verified by
     a hydration pass, and no new row joins it."""
     from app.core import agent_memory, projects as projects_store
@@ -677,18 +677,18 @@ async def test_hydration_leaves_existing_facts_untouched(isolated_data_dir, monk
     monkeypatch.setattr(hydration_module, "_call_chat", fake_chat)
 
     pid = _make_project("WB-K")
-    projects_store.set_fact(pid, "contract_value", "4,200,000", verified_by="u1")
-    agent_memory.set_agent_fact("chat", "site", "Plot 7", project_id=pid, verified_by="u1")
+    projects_store.set_fact(pid, "contract_value", value, verified_by="u1")
+    agent_memory.set_agent_fact("chat", "site", site, project_id=pid, verified_by="u1")
     _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", "what is the contract value?", "x")
 
     await hydration_module.run(target_date="2026-05-26")
 
     facts = projects_store.list_facts(pid)
     assert [(f["key"], f["value"], f["verified_by"]) for f in facts] == [
-        ("contract_value", "4,200,000", "u1")
+        ("contract_value", value, "u1")
     ]
     agent = agent_memory.list_agent_facts("chat", pid)
-    assert [(f["key"], f["value"], f["verified_by"]) for f in agent] == [("site", "Plot 7", "u1")]
+    assert [(f["key"], f["value"], f["verified_by"]) for f in agent] == [("site", site, "u1")]
 
 
 @requires_construction_kit
