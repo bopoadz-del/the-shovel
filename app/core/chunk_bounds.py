@@ -38,6 +38,7 @@ import calendar
 import itertools
 import os
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -272,36 +273,76 @@ def _separator_count(line: str) -> int:
     return line.count(_TABLE_CELL_SEPARATOR)
 
 
+# How many lines ahead of a run's first line its width is looked for.
+_TABLE_WIDTH_LOOKAHEAD = 8
+
+
+def _table_units(counts: list[int], start: int, width: int) -> list[list[int]]:
+    """The rows of a table of ``width`` separators read from ``start`` on.
+
+    A row is one line holding ``width`` separators, or a row whose cell
+    wrapped: the writer joins the cells with the separator, so a cell's line
+    break splits the row over consecutive lines that each hold fewer, and
+    whose separators add up to ``width``. Such a row opens on a line holding
+    a separator (a line holding none is no piece of a row that starts there).
+    Reading stops at the first line that fits neither.
+    """
+    units: list[list[int]] = []
+    pos = start
+    while pos < len(counts):
+        if counts[pos] == width:
+            units.append([pos])
+            pos += 1
+            continue
+        if not 0 < counts[pos] < width:
+            break
+        total, end = 0, pos
+        while end < len(counts) and counts[end] < width and total < width:
+            total += counts[end]
+            end += 1
+        if total != width:
+            break
+        units.append(list(range(pos, end)))
+        pos = end
+    return units
+
+
 def _table_row_indexes(lines: list[str]) -> set[int]:
     """Indexes of the lines of ``lines`` that are rows of a table.
 
     The extractors write every row of one table with one separator per
     column gap, blank cells kept, so a one-cell section row carries as many
-    separators as its header. A table is therefore a run of consecutive
-    non-blank lines with the same separator count, of at least
-    ``_TABLE_MIN_COLUMNS`` columns or ``_TABLE_MIN_ROWS`` rows. A line that
-    opens on the separator and holds two or more is a markdown table row on
-    its own. A title holding the separator, alone or above a table of a
-    different width, is no row, and a markdown ``#`` heading never is.
+    separators as its header, and a row whose cell wrapped is split over
+    lines whose separators add up to that count (``_table_units``). A table
+    is a run of such rows, at least one of them on a line of its own, of at
+    least ``_TABLE_MIN_COLUMNS`` columns or ``_TABLE_MIN_ROWS`` rows. A line
+    that opens on the separator and holds two or more is a markdown table
+    row on its own. A title holding the separator, alone or above a table it
+    does not fit, is no row, and a markdown ``#`` heading never is.
     """
     filled = [i for i, line in enumerate(lines) if line.strip()]
-    counts = {i: _separator_count(lines[i]) for i in filled}
+    counts = [_separator_count(lines[i]) for i in filled]
     rows = {
-        i for i in filled
-        if counts[i] >= 2 and lines[i].lstrip().startswith(_TABLE_CELL_SEPARATOR)
+        i for i, n in zip(filled, counts)
+        if n >= 2 and lines[i].lstrip().startswith(_TABLE_CELL_SEPARATOR)
     }
     start = 0
     while start < len(filled):
-        width = counts[filled[start]]
-        end = start + 1
-        while end < len(filled) and counts[filled[end]] == width:
-            end += 1
-        run = filled[start:end]
-        if width and len(run) >= 2 and (
-            width + 1 >= _TABLE_MIN_COLUMNS or len(run) >= _TABLE_MIN_ROWS
-        ):
-            rows.update(run)
-        start = end
+        best: list[list[int]] = []
+        for width in sorted(set(counts[start:start + _TABLE_WIDTH_LOOKAHEAD])):
+            if not width:
+                continue
+            units = _table_units(counts, start, width)
+            whole = any(len(unit) == 1 for unit in units)
+            if whole and len(units) >= 2 and (
+                width + 1 >= _TABLE_MIN_COLUMNS or len(units) >= _TABLE_MIN_ROWS
+            ) and sum(map(len, units)) > sum(map(len, best)):
+                best = units
+        if not best:
+            start += 1
+            continue
+        rows.update(filled[k] for unit in best for k in unit)
+        start = best[-1][-1] + 1
     return rows
 
 
@@ -319,6 +360,34 @@ def _is_heading_line(line: str) -> bool:
     if line.lstrip().startswith("#") or _NUMBERED_HEADING.match(text):
         return True
     return sum(ch.isupper() for ch in letters) / len(letters) >= 0.6
+
+
+def _table_cell_copies(lines: list[str], rows: set[int]) -> set[int]:
+    """Indexes of the lines that repeat a cell of the page's own table rows.
+
+    A PDF page carries its text layer and, after it, its tables as rows; the
+    text layer holds the same cells, one or a few to a line. A line is such
+    a copy when its text is a cell of a row on this page, and the page holds
+    that text off the rows no more often than in them: one more occurrence
+    is a line of its own (a heading the table repeats), and keeps its place.
+    """
+    cells = Counter(
+        cell.strip()
+        for idx in rows
+        for cell in lines[idx].split(_TABLE_CELL_SEPARATOR)
+        if cell.strip()
+    )
+    if not cells:
+        return set()
+    loose = Counter(
+        line.strip() for idx, line in enumerate(lines)
+        if idx not in rows and line.strip() in cells
+    )
+    return {
+        idx for idx, line in enumerate(lines)
+        if idx not in rows and line.strip() in cells
+        and loose[line.strip()] <= cells[line.strip()]
+    }
 
 
 def heading_line_for_page(
@@ -348,8 +417,9 @@ def heading_line_for_page(
     lines = page_text.splitlines()
     # A table row (a header or a numbered item row) names cells, not a section.
     rows = _table_row_indexes(lines)
+    copies = _table_cell_copies(lines, rows)
     for idx, line in enumerate(lines):
-        if idx in rows or not _is_heading_line(line):
+        if idx in rows or idx in copies or not _is_heading_line(line):
             continue
         if running is None or not running(line):
             return line.strip()

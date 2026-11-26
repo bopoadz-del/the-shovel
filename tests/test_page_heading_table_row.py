@@ -211,3 +211,181 @@ def test_one_line_of_three_or_more_cells_alone_is_a_title(title):
     # One line is no run: however many cells it holds, alone between prose
     # it is read as it always was.
     assert heading_line_for_page(f"{PROSE}\n{title}\n{PROSE}") == title
+
+
+# --- A row whose cell wrapped is split over lines that add up to its width.
+@pytest.mark.parametrize("table", [
+    "ITEM | DESCRIPTION | UNIT | QTY\n1 | Excavation in rock\n"
+    "not exceeding 2 m deep | m3 | 450\n2 | Backfill with selected\n"
+    "material in layers | m3 | 120",
+    "1.1 | Supply and install reinforced\nconcrete grade C40 | m3 | 20\n"
+    "1.2 | Formwork to soffits | m2 | 90",
+])
+def test_rows_with_a_wrapped_cell_are_not_a_heading(table):
+    assert heading_line_for_page(table) == ""
+    assert heading_line_for_page(f"{PROSE}\n{table}") == ""
+
+
+@pytest.mark.parametrize("heading", ["4.1 Earthworks", "SECTION 2 DRAINAGE"])
+def test_heading_above_a_wrapped_first_row_is_kept(heading):
+    table = (
+        "1 | Excavation in rock\nnot exceeding 2 m deep | m3 | 450\n"
+        "2 | Backfill | m3 | 120"
+    )
+    assert heading_line_for_page(f"{PROSE}\n{heading}\n{table}") == heading
+
+
+@pytest.mark.parametrize("pieces", [
+    # Pieces adding up to more or less than the width are not one row.
+    "1 | Excavation in rock\nnot | exceeding | 2 m | deep",
+    "1 | Excavation in rock\nNOT EXCEEDING 2 M DEEP",
+])
+def test_pieces_that_do_not_add_up_to_the_width_are_not_a_row(pieces):
+    table = "ITEM | DESCRIPTION | UNIT | QTY\n7 | Formwork | m2 | 90"
+    text = f"{PROSE}\n{table}\n{pieces}"
+    # The first piece is no row of the table: it keeps its own reading (a
+    # numbered line), where pieces adding up to the width are a row (above).
+    assert heading_line_for_page(text) == pieces.splitlines()[0]
+
+
+# --- A markdown row of exactly two separators, indented or not.
+@pytest.mark.parametrize("row", [" | SUBSTRUCTURE | ", "|SUBSTRUCTURE|", "   |ITEM|DESCRIPTION|"])
+def test_lone_markdown_row_is_not_a_heading(row):
+    assert heading_line_for_page(f"{PROSE}\n{row}\n{PROSE}") == ""
+
+
+@pytest.mark.parametrize("line", ["SUBSTRUCTURE | WORKS", "PART 2 | SCOPE"])
+def test_lone_line_holding_the_separator_not_at_its_start_is_kept(line):
+    assert heading_line_for_page(f"{PROSE}\n{line}\n{PROSE}") == line
+
+
+@pytest.mark.parametrize("heading", ["  # PART 2 | SCOPE | REV A", "    # VOLUME 3 | SECTION | 04"])
+def test_indented_markdown_heading_above_a_table_of_its_width_is_kept(heading):
+    table = "A | B | C | D\n1 | Earthworks | m3 | 10\n2 | Drainage | m | 40"
+    assert heading_line_for_page(f"{PROSE}\n{heading}\n{table}") == heading.strip()
+    # As wide as the table below it: only the indented "#" keeps it out.
+    narrow = "A | B | C\n1 | Earthworks | m3\n2 | Drainage | m"
+    assert heading_line_for_page(f"{PROSE}\n{heading}\n{narrow}") == heading.strip()
+
+
+# --- The text layer repeats the table's cells before the rows.
+@pytest.mark.parametrize("cells,rows", [
+    ("ITEM\nDESCRIPTION\nUNIT\nQTY\n1\nExcavation\nm3\n450",
+     "ITEM | DESCRIPTION | UNIT | QTY\n1 | Excavation | m3 | 450"),
+    ("NO.\nACTIVITY\nSTART\nFINISH\n1\nSetting out\nMAY\nJUNE",
+     "NO. | ACTIVITY | START | FINISH\n1 | Setting out | MAY | JUNE"),
+])
+def test_text_layer_copy_of_a_cell_is_not_a_heading(cells, rows):
+    assert heading_line_for_page(f"{PROSE}\n{cells}\n{rows}") == ""
+
+
+@pytest.mark.parametrize("heading", ["EARTHWORKS", "BILL NO. 2 DRAINAGE"])
+def test_heading_the_table_repeats_as_a_cell_is_kept(heading):
+    cells = f"ITEM\nDESCRIPTION\nUNIT\nQTY\n{heading}\n1\nExcavation\nm3\n450"
+    rows = (
+        f"ITEM | DESCRIPTION | UNIT | QTY\n | {heading} |  | \n"
+        "1 | Excavation | m3 | 450"
+    )
+    page = f"{PROSE}\n{heading}\n{cells}\n{rows}"
+    assert heading_line_for_page(page) == heading
+    # Without its own line the cell is no heading.
+    assert heading_line_for_page(f"{PROSE}\n{cells}\n{rows}") == ""
+
+
+# --- The page as the PDF extractor composes it: a pipe title in the text
+# layer is followed by the table's cells, then by the rows.
+@pytest.mark.parametrize("title,cells,rows", [
+    ("SECTION 03300 | CAST-IN-PLACE CONCRETE",
+     "Property\nValue\nSlump\n75 mm\nStrength\n40 MPa",
+     "Property | Value\nSlump | 75 mm\nStrength | 40 MPa"),
+    ("PART 2 | PRODUCTS",
+     "Item\nGrade\nCement\nCEM I\nSand\nZone 2",
+     "Item | Grade\nCement | CEM I\nSand | Zone 2"),
+])
+def test_pipe_title_in_the_text_layer_is_kept(title, cells, rows):
+    assert heading_line_for_page(f"{PROSE}\n{title}\n{cells}\n{rows}") == title
+
+
+# --- One real PDF per shape through the PDF extractor and the page headings.
+def _ruled_table_pdf(path, title, widths, rows):
+    fitz = pytest.importorskip("fitz")
+    pytest.importorskip("pdfplumber")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 60), PROSE[:70], fontsize=9)
+    y = 80
+    if title:
+        page.insert_text((50, y + 10), title, fontsize=11)
+        y += 30
+    xs = [50]
+    for w in widths:
+        xs.append(xs[-1] + w)
+    ys = [y]
+    for row in rows:
+        height = 16 * max(len(c.split("\n")) for c in row)
+        for j, cell in enumerate(row):
+            for k, piece in enumerate(cell.split("\n")):
+                page.insert_text((xs[j] + 3, y + 12 + 16 * k), piece, fontsize=9)
+        y += height
+        ys.append(y)
+    for yy in ys:
+        page.draw_line((xs[0], yy), (xs[-1], yy))
+    for xx in xs:
+        page.draw_line((xx, ys[0]), (xx, ys[-1]))
+    doc.save(str(path))
+
+
+@pytest.mark.parametrize("title,widths,rows,expected", [
+    (None, [40, 220, 50, 50],
+     [["ITEM", "DESCRIPTION", "UNIT", "QTY"],
+      ["1", "Excavation in rock\nnot exceeding 2 m deep", "m3", "450"],
+      ["2", "Backfill with selected\nmaterial in layers", "m3", "120"]], None),
+    (None, [40, 220, 50, 50],
+     [["1.1", "Supply and install reinforced\nconcrete grade C40", "m3", "20"],
+      ["1.2", "Formwork to soffits", "m2", "90"],
+      ["1.3", "Rebar to slabs", "t", "4"]], None),
+    ("SECTION 03300 | CAST-IN-PLACE CONCRETE", [120, 120],
+     [["Property", "Value"], ["Slump", "75 mm"], ["Strength", "40 MPa"]],
+     "SECTION 03300 | CAST-IN-PLACE CONCRETE"),
+    ("PART 2 | PRODUCTS", [120, 120],
+     [["Item", "Grade"], ["Cement", "CEM I"], ["Sand", "Zone 2"]],
+     "PART 2 | PRODUCTS"),
+])
+def test_real_pdf_page_heading(tmp_path, title, widths, rows, expected):
+    from app.core.doc_index import _extract_pdf
+
+    path = tmp_path / "page.pdf"
+    _ruled_table_pdf(path, title, widths, rows)
+    text, meta = _extract_pdf(str(path), "page.pdf")
+    assert " | " in text  # the rows were written after the text layer
+    headings = page_heading_lines(text, meta.get("page_starts"))
+    assert headings.get(1) == expected
+
+
+# --- A run of pieces only: no line holds the width, so it is no table.
+@pytest.mark.parametrize("first,last", [
+    ("SECTION 4 | DRAINAGE", "SECTION 5 | ROADS"),
+    ("PART 2 | PIPES", "PART 3 | CHAMBERS"),
+])
+def test_lines_that_only_add_up_to_a_later_width_are_not_a_table(first, last):
+    # 1 + 2 and 2 + 1 separators add up to the 3 of the table after the
+    # prose, but none of the four lines holds 3: the first is a title.
+    page = (
+        f"{PROSE}\n{first}\nPipes | 150 mm | uPVC\nManholes | precast | 1200\n"
+        f"{last}\n{PROSE}\nA | B | C | D\n1 | Kerb | m | 40\n2 | Gully | nr | 6"
+    )
+    assert heading_line_for_page(page) == first
+
+
+# --- Two wrapped cells in one row: three short pieces and a full row.
+@pytest.mark.parametrize("table", [
+    [["1.1", "Excavation in\nrock", "Disposal off\nsite", "450"],
+     ["1.2", "Backfill", "Stockpile", "120"]],
+    [["A1", "Blockwork to\nwalls", "Render both\nfaces", "90"],
+     ["A2", "Lintels", "Precast", "14"]],
+])
+def test_the_widest_table_the_lines_make_is_taken(table):
+    # The three pieces alone look like a 2-column table of three rows; read
+    # that way the full row after them would stand alone, a numbered title.
+    page = f"{PROSE}\n{_written(table)}\n{PROSE}"
+    assert heading_line_for_page(page) == ""
