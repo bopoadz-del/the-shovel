@@ -126,6 +126,9 @@ def _agent_fact_as_dict(fact: AgentFact) -> Dict[str, Any]:
         "key": fact.key,
         "value": fact.value,
         "updated_at": fact.updated_at,
+        "verified": bool(fact.verified_by),
+        "verified_by": fact.verified_by,
+        "verified_at": fact.verified_at,
     }
 
 
@@ -171,6 +174,11 @@ def _patch_conversation_columns(url: str) -> None:
         if cols and "citations" not in cols:
             conn.execute(sqla_text("ALTER TABLE messages ADD COLUMN citations TEXT"))
             conn.commit()
+        cols = {row[1] for row in conn.execute(sqla_text("PRAGMA table_info(agent_facts)"))}
+        for column in ("verified_by", "verified_at"):  # Alembic 0040
+            if cols and column not in cols:
+                conn.execute(sqla_text(f"ALTER TABLE agent_facts ADD COLUMN {column} TEXT"))
+                conn.commit()
 
 
 def _ensure_db() -> None:
@@ -559,16 +567,23 @@ def set_agent_fact(
     value: str,
     conversation_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    verified_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Upsert a durable fact for an agent, scoped to a project.
 
     Facts are keyed by (agent_name, project_id, key) so a fact remembered in
     one project is not visible to the same agent in another project. A
     project-less conversation uses the '' scope.
+
+    ``verified_by`` names who confirmed the value. Every write sets the mark
+    afresh: a value written without it is not verified, even when the row it
+    replaces was, because nobody has confirmed the new value.
     """
     _ensure_db()
     db_project_id = _fact_project_id_to_db(project_id)
     now = _now()
+    verified_by = (verified_by or "").strip() or None
+    verified_at = now if verified_by else None
     with _lock:
         with SessionLocal() as session:
             stmt = select(AgentFact).where(
@@ -581,6 +596,8 @@ def set_agent_fact(
                 existing.value = value
                 existing.conversation_id = conversation_id
                 existing.updated_at = now
+                existing.verified_by = verified_by
+                existing.verified_at = verified_at
             else:
                 session.add(
                     AgentFact(
@@ -591,6 +608,8 @@ def set_agent_fact(
                         key=key,
                         value=value,
                         updated_at=now,
+                        verified_by=verified_by,
+                        verified_at=verified_at,
                     )
                 )
             session.commit()
@@ -606,9 +625,13 @@ def set_agent_fact(
 
 
 def list_agent_facts(
-    agent_name: str, project_id: Optional[str] = None
+    agent_name: str, project_id: Optional[str] = None, verified_only: bool = False,
 ) -> List[Dict[str, Any]]:
-    """List an agent's facts for one project scope ('' = project-less)."""
+    """List an agent's facts for one project scope ('' = project-less).
+
+    ``verified_only`` keeps the rows someone confirmed; a prompt reader passes
+    it so nothing the app saved by itself is handed to the model as a fact.
+    """
     _ensure_db()
     db_project_id = _fact_project_id_to_db(project_id)
     with SessionLocal() as session:
@@ -620,5 +643,7 @@ def list_agent_facts(
             )
             .order_by(AgentFact.key)
         )
+        if verified_only:
+            stmt = stmt.where(AgentFact.verified_by.is_not(None), AgentFact.verified_by != "")
         rows = session.scalars(stmt).all()
     return [_agent_fact_as_dict(f) for f in rows]
