@@ -10,17 +10,18 @@ permissions:
   contents: read
 
 # A new push to the same PR supersedes that PR's old run (cancel-in-progress
-# is true for pull_request). A push to the default branch COALESCES instead:
-# every main run shares one group, so GitHub keeps one running and one
-# pending, and when a newer commit lands it drops the previously pending run
-# -- the pending run is always the newest commit. That newest commit is a
-# linear descendant of the dropped commits, so its green run covers them all;
-# deploy-aws then ships that newest commit (workflow_run.head_sha) after its
-# own run passes. No commit is deployed without a green run of itself or of a
-# later commit that contains it. Every job keeps its timeout-minutes, so a
-# stuck main run still ends.
+# is true for pull_request). Every other run (a push to main) gets a group of
+# its own, keyed by run_id: GitHub replaces a PENDING run when a newer run
+# joins its group whatever cancel-in-progress says, so only a group of its own
+# keeps a quick second merge from dropping the earlier commit's run. Every
+# main commit therefore gets its own test run and, when green, its own
+# deploy-aws trigger. Main runs may now finish out of commit order:
+# deploy_guard.py refuses a commit older than live, so live never rolls back,
+# but deploy-aws keeps one pending run, so a newer commit's pending deploy can
+# be replaced by an older commit's and wait for the next merge. Every job
+# keeps its timeout-minutes, so a stuck main run still ends.
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:

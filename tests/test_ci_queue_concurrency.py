@@ -94,14 +94,9 @@ def _wf(name: str) -> str:
     return (WF / name).read_text(encoding="utf-8")
 
 
-# test.yml is not changed by this PR: its main runs share one group, so a
-# newer push to main replaces a pending main test run (and its deploy).
-_KNOWN = {"test.yml": ["a pending push run can be replaced"]}
-
-
 @pytest.mark.parametrize("name", PR_WORKFLOWS)
 def test_every_pr_workflow_keeps_the_concurrency_policy(name):
-    assert concurrency_violations(_wf(name)) == _KNOWN.get(name, [])
+    assert concurrency_violations(_wf(name)) == []
 
 
 def _group(text: str) -> str:
@@ -159,6 +154,14 @@ _GOOD = (
                 "on:\n  pull_request:\n  push:\n    branches: [main]\n"
                 "concurrency:\n  group: x-${{ github.ref }}\n"
                 "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\njobs: {}\n"
+            ),
+            ["a pending push run can be replaced"],
+        ),
+        (
+            (
+                "on:\n  push:\n    branches: [main]\n  pull_request:\n"
+                "concurrency:\n  group: tests-${{ github.ref }}\n"
+                "  cancel-in-progress: ${{ github.event_name != 'push' }}\njobs: {}\n"
             ),
             ["a pending push run can be replaced"],
         ),
