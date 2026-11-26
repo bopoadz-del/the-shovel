@@ -141,15 +141,31 @@ def test_nothing_read_writes_nothing(doc, src_kw, reason):
     assert (e["skip_reason"], e["rows_to_write"]) == (reason, 0)
 
 
-def test_plan_hash_follows_the_rows_and_needs_a_project():
-    a = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(2)}, chunks={"s1": 2})
-    b = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(3)}, chunks={"s1": 3})
+@pytest.mark.parametrize("n_a, n_b", [(2, 3), (4, 1)])
+def test_plan_hash_follows_the_rows_and_needs_a_project(n_a, n_b):
+    a = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(n_a)}, chunks={"s1": n_a})
+    b = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(n_b)}, chunks={"s1": n_b})
     ha, hb = (bf.plan_rows_backfill("p", s)["plan_hash"] for s in (a, b))
     assert ha != hb
     assert ha == bf.plan_rows_backfill("p", a)["plan_hash"]
     assert ha != bf.plan_rows_backfill("q", a)["plan_hash"]
     with pytest.raises(ValueError):
         bf.plan_rows_backfill("", a)
+
+
+@pytest.mark.parametrize("n", [1, 3])
+def test_rows_digest_follows_row_content_at_the_same_count(n):
+    rows = dr.rows_from_spreadsheet("s1", _sheet(n))
+    other = dr.rows_from_spreadsheet("s1", _sheet(n, sheet="Bill 2"))
+    d = bf._rows_digest(rows)
+    assert isinstance(d, str) and len(d) == 64
+    assert d == bf._rows_digest(dr.rows_from_spreadsheet("s1", _sheet(n)))
+    assert d != bf._rows_digest(other)
+    # Same row count, different rows: the plan hash still moves.
+    a = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(n)}, chunks={"s1": n})
+    b = _Fake([bf.BackfillDoc("s1", bf.SHEET)], sheets={"s1": _sheet(n, sheet="Bill 2")},
+              chunks={"s1": n})
+    assert bf.plan_rows_backfill("p", a)["plan_hash"] != bf.plan_rows_backfill("p", b)["plan_hash"]
 
 
 # ── execute ────────────────────────────────────────────────────────────────
@@ -170,10 +186,11 @@ def test_execute_refuses_a_hash_that_is_not_the_live_plan(bad):
     assert src.stored == {"s2": ["already"]}
 
 
-def test_execute_writes_planned_rows_keeps_stored_and_ends_with_nothing_left():
+@pytest.mark.parametrize("project", ["p", "other-project"])
+def test_execute_writes_planned_rows_keeps_stored_and_ends_with_nothing_left(project):
     src = _mixed()
-    h = bf.plan_rows_backfill("p", src)["plan_hash"]
-    res = bf.execute_rows_backfill("p", h, src, store=src.store)
+    h = bf.plan_rows_backfill(project, src)["plan_hash"]
+    res = bf.execute_rows_backfill(project, h, src, store=src.store)
     assert res["executed"] and res["refused"] is None and res["complete"]
     assert res["written"] == {"b1": 3, "s1": 2}
     assert src.stored["s2"] == ["already"]
@@ -181,8 +198,17 @@ def test_execute_writes_planned_rows_keeps_stored_and_ends_with_nothing_left():
     assert [r.chunk_ordinal for r in src.stored["s1"]] == [0, 1]
     assert res["after"]["rows_to_write"] == 0
     # A second run plans nothing and writes nothing.
-    again = bf.execute_rows_backfill("p", res["after"]["plan_hash"], src, store=src.store)
+    again = bf.execute_rows_backfill(project, res["after"]["plan_hash"], src, store=src.store)
     assert again["written"] == {} and again["complete"]
+
+
+@pytest.mark.parametrize("project", ["", None])
+def test_execute_needs_a_project_and_writes_nothing_without_one(project):
+    src = _mixed()
+    h = bf.plan_rows_backfill("p", src)["plan_hash"]
+    with pytest.raises(ValueError):
+        bf.execute_rows_backfill(project, h, src, store=src.store)
+    assert src.stored == {"s2": ["already"]}
 
 
 def test_execute_reports_a_document_the_store_kept_and_an_incomplete_run():
