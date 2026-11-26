@@ -57,15 +57,33 @@ async function handleResponse<T>(res: Response): Promise<T> {
   throw new ApiError(message, res.status)
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-    },
-  })
-  return handleResponse<T>(res)
+/**
+ * GET a JSON body. With `timeoutMs`, a read the server has not answered by
+ * then is aborted and rejects with an ApiError of status 0, so a page that
+ * waits on it can say so instead of waiting without end.
+ */
+export async function apiGet<T>(path: string, opts: { timeoutMs?: number } = {}): Promise<T> {
+  const { timeoutMs } = opts
+  const controller = timeoutMs !== undefined ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+      },
+      signal: controller?.signal,
+    })
+    return await handleResponse<T>(res)
+  } catch (err) {
+    if (controller?.signal.aborted) {
+      throw new ApiError(`The server did not answer within ${Math.round((timeoutMs ?? 0) / 1000)} s.`, 0)
+    }
+    throw err
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {

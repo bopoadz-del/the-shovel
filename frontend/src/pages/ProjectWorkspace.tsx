@@ -943,10 +943,18 @@ export default function ProjectWorkspace() {
   return <ProjectWorkspaceInner key={id ?? 'none'} id={id} />
 }
 
-/** The browser's local storage, or null where it is unavailable. */
+/** How long the workspace waits for the project read before it says so. */
+const PROJECT_READ_DEADLINE_MS = 60_000
+
+/**
+ * This tab's session storage, or null where it is unavailable. The open
+ * thread is remembered per tab: a reload or a return to the workspace in
+ * the same tab reopens it, and a tab opened fresh starts its own thread
+ * instead of the one another tab left open.
+ */
 function browserStorage(): Storage | null {
   try {
-    return typeof window !== 'undefined' ? window.localStorage : null
+    return typeof window !== 'undefined' ? window.sessionStorage : null
   } catch {
     return null
   }
@@ -1003,7 +1011,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     return () => { cancelled = true }
   }, [])
 
-  // The open session is remembered per project in this browser: a reload,
+  // The open session is remembered per project in this tab: a reload,
   // or leaving the workspace and coming back, reopens the same thread with
   // its stored history. With nothing remembered, opening a project and
   // "New chat" each mint a new id; the legacy stable id is never the
@@ -1105,13 +1113,22 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   // ── Load project ──────────────────────────────────────────────────────────
 
+  // A project read that never answers would hold the page on "Loading
+  // project…" with no composer; past this deadline it ends in the error
+  // state, whose retry reads the project again.
+  const [projectReadAttempt, setProjectReadAttempt] = useState(0)
+  const retryProjectRead = useCallback(() => {
+    setWsState({ tag: 'loading' })
+    setProjectReadAttempt((n) => n + 1)
+  }, [])
+
   useEffect(() => {
     if (!id) return
     refreshConversations()
     let cancelled = false
     void (async () => {
       try {
-        const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`)
+        const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`, { timeoutMs: PROJECT_READ_DEADLINE_MS })
         if (cancelled) return
         setWsState({ tag: 'ready', project })
         setDocuments((project.documents ?? []).filter(belongsToProjectList))
@@ -1132,7 +1149,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       }
     })()
     return () => { cancelled = true }
-  }, [id, refreshConversations])
+  }, [id, refreshConversations, projectReadAttempt])
 
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
@@ -1675,6 +1692,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           <span className="workspace-notfound__code">Error</span>
           <h2>Could not load project</h2>
           <p className="workspace-notfound__message">{wsState.message}</p>
+          <button type="button" className="btn btn--primary" onClick={retryProjectRead}>
+            Try again
+          </button>
           <Link to="/" className="btn btn--ghost" style={{ textDecoration: 'none' }}>
             ← Back to projects
           </Link>

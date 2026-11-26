@@ -60,6 +60,7 @@ const SESSIONS = [
 const server_ = {
   sent: [],
   failSessionReads: new Set(), // session ids whose documents read answers 500
+  projectFailures: [], // statuses the next project reads answer, in order
 }
 
 function json(obj, status = 200) {
@@ -69,7 +70,7 @@ function json(obj, status = 200) {
 globalThis.fetch = async (url, init = {}) => {
   const u = new URL(String(url), 'http://localhost')
   const method = (init.method ?? 'GET').toUpperCase()
-  server_.sent.push({ path: u.pathname, method, body: init.body })
+  server_.sent.push({ path: u.pathname, method, body: init.body, signal: init.signal })
   const p = u.pathname
   if (method === 'POST' && p === `/v1/projects/${PROJECT}/documents`) {
     return json({ document: { id: `doc-${server_.sent.length}`, original_name: 'spec.md', status: 'ready' } })
@@ -82,6 +83,8 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (p === `/v1/projects/${PROJECT}/conversations`) return json({ conversations: SESSIONS })
   if (p === `/v1/projects/${PROJECT}`) {
+    const failWith = server_.projectFailures.shift()
+    if (failWith) return json({ detail: `project store unavailable (${failWith})` }, failWith)
     return json({ id: PROJECT, name: 'Invented tower', documents: [], held_document_count: 0, searchable_document_count: 0 })
   }
   if (p.startsWith('/v1/agents/conversations/')) return json({ messages: [] })
@@ -94,8 +97,12 @@ async function settle() {
   for (let i = 0; i < 8; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 }
 
-async function mountWorkspace() {
-  dom.window.localStorage.clear()
+// A fresh tab has empty storage of its own; a reload in the same tab keeps it.
+async function mountWorkspace({ sameTab = false } = {}) {
+  if (!sameTab) {
+    dom.window.localStorage.clear()
+    dom.window.sessionStorage.clear()
+  }
   const container = dom.window.document.createElement('div')
   dom.window.document.body.appendChild(container)
   const root = createRoot(container)
@@ -183,4 +190,72 @@ test('a failed read of the opened session shows an error and a retry that reads 
   assert.ok(!/Could not load this session's files/.test(ws.text()), 'error cleared after a good read')
   assert.ok(ws.text().includes('pour-plan.md'), 'the session file is listed')
   ws.unmount()
+})
+
+for (const [chosen, title] of [[OPENED, 'Pour sequence level 3'], [OTHER, 'Façade mock-up review']]) {
+  test(`a reload in the same tab reopens the thread it left open (${chosen})`, async () => {
+    server_.sent = []
+    server_.failSessionReads = new Set()
+    const first = await mountWorkspace()
+    await first.openSession(title)
+    first.unmount()
+    const before = sessionReads(chosen)
+    const again = await mountWorkspace({ sameTab: true })
+    assert.ok(sessionReads(chosen) > before, `reload read ${chosen}: ${server_.sent.map((r) => r.path).join(', ')}`)
+    again.unmount()
+  })
+
+  test(`a fresh tab starts its own thread, not the one another tab left open (${chosen})`, async () => {
+    server_.sent = []
+    server_.failSessionReads = new Set()
+    const first = await mountWorkspace()
+    await first.openSession(title)
+    first.unmount()
+    // Another tab: its own empty session storage. What the browser holds
+    // across tabs (local storage) still names the old thread, as an older
+    // build left it; the fresh tab must not read it.
+    const shared = Object.fromEntries(Object.keys(dom.window.sessionStorage).map((k) => [k, dom.window.sessionStorage.getItem(k)]))
+    assert.ok(Object.values(shared).includes(chosen), `the first tab remembered ${chosen}: ${JSON.stringify(shared)}`)
+    dom.window.sessionStorage.clear()
+    for (const [k, v] of Object.entries(shared)) dom.window.localStorage.setItem(k, v)
+    const before = sessionReads(chosen)
+    const fresh = await mountWorkspace({ sameTab: true })
+    assert.equal(sessionReads(chosen), before, `fresh tab did not read ${chosen}: ${server_.sent.map((r) => r.path).join(', ')}`)
+    const minted = server_.sent.filter((r) => r.path.includes('/conversations/ws-') && !r.path.includes(encodeURIComponent(OPENED)) && !r.path.includes(encodeURIComponent(OTHER)))
+    assert.ok(minted.length > 0, `fresh tab read a thread of its own: ${server_.sent.map((r) => r.path).join(', ')}`)
+    fresh.unmount()
+  })
+}
+
+for (const status of [500, 503]) {
+  test(`a failed project read (${status}) offers a retry that opens the workspace`, async () => {
+    server_.sent = []
+    server_.failSessionReads = new Set()
+    server_.projectFailures = [status]
+    const view = await mountWorkspace()
+    assert.match(view.text(), /Could not load project/)
+    assert.match(view.text(), new RegExp(`\(${status}\)`))
+    assert.equal(view.container.querySelector('textarea'), null, 'no composer before the project is read')
+    const retry = view.buttonNamed('Try again')
+    assert.ok(retry, `a retry control: ${view.text().slice(0, 300)}`)
+    await view.click(retry)
+    assert.doesNotMatch(view.text(), /Could not load project/)
+    assert.match(view.text(), /Invented tower/)
+    assert.ok(view.container.querySelector('textarea'), 'the composer is shown after the retry')
+    const reads = server_.sent.filter((r) => r.method === 'GET' && r.path === `/v1/projects/${PROJECT}`)
+    assert.equal(reads.length, 2, 'the retry read the project again')
+    view.unmount()
+  })
+}
+
+test('the project read carries a deadline; the session list read is not changed', async () => {
+  server_.sent = []
+  server_.failSessionReads = new Set()
+  server_.projectFailures = []
+  const view = await mountWorkspace()
+  const read = server_.sent.find((r) => r.method === 'GET' && r.path === `/v1/projects/${PROJECT}`)
+  assert.ok(read?.signal, 'the project read can be aborted at its deadline')
+  const list = server_.sent.find((r) => r.method === 'GET' && r.path === `/v1/projects/${PROJECT}/conversations`)
+  assert.equal(list?.signal, undefined)
+  view.unmount()
 })
