@@ -1114,13 +1114,51 @@ def _declared_units(fn: Any) -> Dict[str, str]:
     return {k: v for k, v in (spec.inputs or {}).items() if v and v != "-"}
 
 
+def _knowledge_defaults(fn: Any) -> Dict[str, Any]:
+    """Inputs whose unstated value a knowledge entry gives (name -> the
+    declared knowledge-read constant), when the calculator is registered."""
+    spec = _formula_spec(fn)
+    if spec is None:
+        return {}
+    return {
+        k: p.default_from for k, p in (spec.params or {}).items()
+        if getattr(p, "default_from", None) is not None
+    }
+
+
+class _StatedDefault:
+    """A signature default as a reader should see it (its repr is the words)."""
+
+    def __init__(self, words: str) -> None:
+        self._words = words
+
+    def __repr__(self) -> str:
+        return f"<{self._words}>"
+
+
+def _signature_text(name: Any, fn: Any) -> str:
+    """``name(params)`` with every knowledge-given default shown as where it
+    comes from and its value, never as the placeholder the function carries."""
+    sig = _inspect.signature(fn)
+    stated = _knowledge_defaults(fn)
+    if stated:
+        sig = sig.replace(parameters=[
+            p.replace(default=_StatedDefault(stated[k].describe())) if k in stated else p
+            for k, p in sig.parameters.items()
+        ])
+    return f"{name}{sig}"
+
+
 def describe_calculation_params(
     fn: Any,
     name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Signature-derived expected params with units (name suffix / override)."""
+    """Signature-derived expected params with units (name suffix / override).
+    An input a knowledge entry gives when unstated carries ``default_from``
+    (``from knowledge entry X (value)``) in place of the signature default."""
     sig = _inspect.signature(fn)
     declared = _declared_units(fn)  # for parameters whose name carries no unit
+    stated = _knowledge_defaults(fn)
     required_names: set[str] = set()
     if name:
         for group in _required_groups_for(name):
@@ -1147,7 +1185,9 @@ def describe_calculation_params(
             "unit": unit,
             "annotation": _ann_label(param.annotation),
         }
-        if param.default is not param.empty:
+        if key in stated:
+            row["default_from"] = stated[key].describe()
+        elif param.default is not param.empty:
             row["default"] = param.default
         rows.append(row)
     return rows
@@ -2662,6 +2702,8 @@ def _format_param_label(row: Dict[str, Any]) -> str:
         name = f"{name} ({unit})"
     if row.get("required"):
         return name
+    if row.get("default_from"):
+        return f"{name} (default {row['default_from']})"
     default = row.get("default")
     return f"{name} (default {default!r})"
 
@@ -2692,7 +2734,7 @@ def _bind_error_envelope(
     env: Dict[str, Any] = {
         "status": "needs_input" if missing else "error",
         "error": msg,
-        "signature": f"{name}{_inspect.signature(fn)}",
+        "signature": _signature_text(name, fn),
         "expected_params": expected,
         "missing": missing,
     }
@@ -2769,7 +2811,7 @@ def _unknown_arg_envelope(
             f"These were not applied. Expected: {labels}."
         ),
         "unknown": list(unknown),
-        "signature": f"{name}{_inspect.signature(fn)}",
+        "signature": _signature_text(name, fn),
         "expected_params": expected,
     }
 
@@ -3525,7 +3567,7 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
                 "status": "error",
                 "calculation": name,
                 "error": conflict,
-                "signature": f"{name}{_inspect.signature(fn)}",
+                "signature": _signature_text(name, fn),
                 "expected_params": describe_calculation_params(fn, name=str(name)),
             }
     from app.lib import formula_registry

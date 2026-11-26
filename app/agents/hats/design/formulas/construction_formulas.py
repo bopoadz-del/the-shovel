@@ -15,12 +15,12 @@ from app.agents.base.formulas.construction_formulas_shared import (  # noqa: F40
 
 #: Declared constants of dewatering_uplift_check: the acceptance factor is the
 #: one the course knowledge entry states, read from that entry, not a literal.
-_UPLIFT_K = Constants(
-    required_fos=Constant.from_knowledge(
-        "foundation.uplift_fos", "thresholds.min_fos", "ratio",
-        "least factor of safety of counterweight over uplift before dewatering may stop",
-    ),
+_UPLIFT_FOS = Constant.from_knowledge(
+    "foundation.uplift_fos", "thresholds.min_fos",
+    "least factor of safety of counterweight over uplift before dewatering may stop",
+    within=Param('ratio', 1, 5, label='required factor of safety'),
 )
+_UPLIFT_K = Constants(required_fos=_UPLIFT_FOS)
 
 
 @dataclass
@@ -44,7 +44,7 @@ class DewateringResult:
         'floor_thickness': Param('m', 0, 5, label='floor thickness'),
         'concrete_unit_weight': Param('t/m3', 1, 5, label='concrete unit weight'),
         'water_unit_weight': Param('t/m3', 0.9, 1.1, label='water unit weight'),
-        'required_fos': Param('ratio', 1, 5, label='required factor of safety'),
+        'required_fos': _UPLIFT_FOS.as_input(),
     },
     outputs={'uplift_force_t_m2': 't/m2', 'counter_weight_t_m2': 't/m2', 'fos': '-', 'can_stop': '-', 'needs_tension_piles': '-', 'min_floors_for_stop': '-'},
 )

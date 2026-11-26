@@ -11,7 +11,7 @@ import json
 import pytest
 
 from app.blocks import _knowledge
-from app.lib.formula_registry import Constant, Constants, recording_constants
+from app.lib.formula_registry import Constant, Constants, Param, recording_constants
 
 
 def _write_kb(path, entries):
@@ -20,6 +20,12 @@ def _write_kb(path, entries):
         encoding="utf-8",
     )
     return str(path)
+
+
+def _k(entry_id, field_path, meaning, unit="ratio", lo=None, hi=None):
+    """An invented knowledge-read constant standing in for an input of
+    ``unit`` and range ``lo``..``hi`` (None: unbounded on that side)."""
+    return Constant.from_knowledge(entry_id, field_path, meaning, within=Param(unit, lo, hi, label="invented input"))
 
 
 def _entry(eid, thresholds, provenance=None):
@@ -63,7 +69,7 @@ def shipped(tmp_path, monkeypatch):
 )
 def test_value_and_source_come_from_the_entry(shipped, entries, entry_id, field_path, value, source):
     shipped(entries)
-    c = Constant.from_knowledge(entry_id, field_path, "ratio", "an invented limit").resolve()
+    c = _k(entry_id, field_path, "an invented limit").resolve()
     assert c.value == pytest.approx(value)
     assert c.source == source
     assert (c.unit, c.meaning) == ("ratio", "an invented limit")
@@ -84,7 +90,7 @@ def test_no_number_in_the_entry_raises_never_falls_back(shipped, entries, entry_
     # The error names what is missing: the entry, the field, or a number.
     shipped(entries)
     with pytest.raises(LookupError, match=says):
-        Constant.from_knowledge(entry_id, field_path, "ratio", "an invented limit").resolve()
+        _k(entry_id, field_path, "an invented limit").resolve()
 
 
 @pytest.mark.parametrize(
@@ -115,7 +121,7 @@ def test_unreadable_shipped_file_raises(tmp_path, monkeypatch):
     bad.write_text("{ not json", encoding="utf-8")
     monkeypatch.setattr(_knowledge, "_KB_PATH", str(bad))
     with pytest.raises(LookupError, match="unreadable"):
-        Constant.from_knowledge("a.one", "thresholds.x", "ratio", "an invented limit").resolve()
+        _k("a.one", "thresholds.x", "an invented limit").resolve()
 
 
 @pytest.mark.parametrize("shipped_x, served_x", [(1.5, 9.0), (3.0, 0.5)])
@@ -131,7 +137,7 @@ def test_served_override_does_not_change_the_constant(shipped, tmp_path, monkeyp
     # its own fix, not this test's subject).
     monkeypatch.setattr(_knowledge, "_KB_CACHE", None)
     assert _knowledge.get_rule("a.one")["thresholds"]["x"] == served_x  # served copy
-    assert Constant.from_knowledge("a.one", "thresholds.x", "ratio", "m").resolve().value == shipped_x
+    assert _k("a.one", "thresholds.x", "m").resolve().value == shipped_x
 
 
 @pytest.mark.parametrize("stated, expected", [(1.2, 12), (1.5, 15)])
@@ -139,7 +145,7 @@ def test_calculator_default_follows_whatever_the_entry_states(shipped, stated, e
     # Two knowledge bases that state different factors give two different
     # answers from the same calculator source; nothing in it holds the figure.
     shipped([_entry("x.fos", {"min_fos": stated})])
-    k = Constants(required=Constant.from_knowledge("x.fos", "thresholds.min_fos", "ratio", "least factor"))
+    k = Constants(required=_k("x.fos", "thresholds.min_fos", "least factor"))
 
     def needed(load: float, required=None) -> int:
         return round(load * (k.required if required is None else required))
@@ -156,18 +162,18 @@ def test_a_value_that_is_not_finite_is_refused(tmp_path, monkeypatch, raw):
     kb.write_text('{"entries": [{"id": "a.one", "thresholds": {"x": ' + raw + '}}]}', encoding="utf-8")
     monkeypatch.setattr(_knowledge, "_KB_PATH", str(kb))
     with pytest.raises(LookupError, match="not a finite number"):
-        Constant.from_knowledge("a.one", "thresholds.x", "ratio", "an invented limit").resolve()
+        _k("a.one", "thresholds.x", "an invented limit").resolve()
 
 
 @pytest.mark.parametrize("raw, value", [("0", 0.0), ("1e300", 1e300), ("-2.5", -2.5)])
 def test_finite_edges_are_read(tmp_path, monkeypatch, raw, value):
-    # Only what is not finite is refused: zero, a very large finite figure
-    # and a negative one are read as written (whether a calculator accepts
-    # them is that calculator's own check).
+    # With no declared range only what is not finite is refused: zero, a
+    # very large finite figure and a negative one are read as written (a
+    # declared range is the next test's subject).
     kb = tmp_path / "shipped.json"
     kb.write_text('{"entries": [{"id": "a.one", "thresholds": {"x": ' + raw + '}}]}', encoding="utf-8")
     monkeypatch.setattr(_knowledge, "_KB_PATH", str(kb))
-    assert Constant.from_knowledge("a.one", "thresholds.x", "ratio", "m").resolve().value == value
+    assert _k("a.one", "thresholds.x", "m").resolve().value == value
 
 
 @pytest.mark.parametrize("first, later", [(1.2, 1.5), (2.0, 0.8)])
@@ -175,7 +181,7 @@ def test_the_value_is_read_when_applied_not_at_declaration(shipped, first, later
     # A declaration made while the entry said ``first`` applies ``later``
     # once the entry says so: nothing was copied at load.
     shipped([_entry("x.fos", {"min_fos": first})])
-    k = Constants(required=Constant.from_knowledge("x.fos", "thresholds.min_fos", "ratio", "least factor"))
+    k = Constants(required=_k("x.fos", "thresholds.min_fos", "least factor"))
     assert k.required == first
     shipped([_entry("x.fos", {"min_fos": later})])
     assert k.required == later
@@ -184,7 +190,7 @@ def test_the_value_is_read_when_applied_not_at_declaration(shipped, first, later
 @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
 def test_an_entry_turned_non_finite_after_load_is_refused_when_applied(shipped, bad):
     shipped([_entry("x.fos", {"min_fos": 1.2})])
-    k = Constants(required=Constant.from_knowledge("x.fos", "thresholds.min_fos", "ratio", "least factor"))
+    k = Constants(required=_k("x.fos", "thresholds.min_fos", "least factor"))
     shipped([_entry("x.fos", {"min_fos": bad})])
     with pytest.raises(LookupError, match="not a finite number"):
         k.required
@@ -201,7 +207,7 @@ def test_the_constants_record_names_the_figure_and_its_entry(shipped, stated, pr
     # Applied inside the door's record, the constant writes one row with the
     # value read on this call and the entry it came from.
     shipped([_entry("x.fos", {"min_fos": stated}, provenance)])
-    k = Constants(required=Constant.from_knowledge("x.fos", "thresholds.min_fos", "ratio", "least factor"))
+    k = Constants(required=_k("x.fos", "thresholds.min_fos", "least factor"))
     with recording_constants() as rec:
         k.required
         k.required  # read twice, recorded once
@@ -222,6 +228,96 @@ def test_a_missing_entry_fails_the_calculator_that_applies_it_not_the_declaratio
     # loads (its other calculators keep working); the one read that needs
     # the entry fails and names it.
     shipped(entries)
-    k = Constants(required=Constant.from_knowledge("x.fos", "thresholds.min_fos", "ratio", "least factor"))
+    k = Constants(required=_k("x.fos", "thresholds.min_fos", "least factor"))
     with pytest.raises(LookupError, match="'x.fos' is not in the shipped"):
         k.required
+
+
+@pytest.mark.parametrize(
+    "stated, lo, hi, unit",
+    [
+        (0.9, 1.0, 5.0, "ratio"),  # under the floor
+        (0.0, 1.0, 5.0, "ratio"),  # zero
+        (-2.5, 1.0, 5.0, "ratio"),  # negative
+        (5.5, 1.0, 5.0, "ratio"),  # over the ceiling
+        (-1.0, 0.0, None, "kN"),  # only a floor declared
+        (12.0, None, 10.0, "t/m2"),  # only a ceiling declared
+    ],
+)
+def test_a_stated_figure_outside_the_inputs_range_is_refused_naming_the_entry(shipped, stated, lo, hi, unit):
+    # The knowledge base is an input like any other: its figure passes the
+    # same declared range a caller's value would, and the refusal names the
+    # entry and field, never the user's input.
+    shipped([_entry("x.lim", {"v": stated})])
+    with pytest.raises(LookupError) as err:
+        _k("x.lim", "thresholds.v", "m", unit=unit, lo=lo, hi=hi).resolve()
+    msg = str(err.value)
+    assert "knowledge entry 'x.lim' field 'thresholds.v'" in msg
+    assert f"states {stated:g}, outside" in msg and unit in msg
+
+
+@pytest.mark.parametrize(
+    "stated, lo, hi, words",
+    [
+        (0.5, 1.0, 5.0, "(1 to 5 ratio)"),
+        (-3.0, 0.0, None, "(at least 0 ratio)"),
+        (9.0, None, 2.0, "(at most 2 ratio)"),
+    ],
+)
+def test_the_refusal_states_the_declared_range(shipped, stated, lo, hi, words):
+    shipped([_entry("x.lim", {"v": stated})])
+    with pytest.raises(LookupError, match=words.replace("(", r"\(").replace(")", r"\)")):
+        _k("x.lim", "thresholds.v", "m", lo=lo, hi=hi).resolve()
+
+
+@pytest.mark.parametrize("stated, lo, hi", [(1.0, 1.0, 5.0), (5.0, 1.0, 5.0), (0.0, 0.0, None), (2.0, None, 2.0)])
+def test_the_exact_bounds_are_inside_the_range(shipped, stated, lo, hi):
+    shipped([_entry("x.lim", {"v": stated})])
+    assert _k("x.lim", "thresholds.v", "m", lo=lo, hi=hi).resolve().value == stated
+
+
+@pytest.mark.parametrize("unit", ["kN", "t/m2"])
+def test_the_unit_is_the_inputs_unit(shipped, unit):
+    shipped([_entry("x.lim", {"v": 3.0})])
+    c = _k("x.lim", "thresholds.v", "m", unit=unit).resolve()
+    assert c.unit == unit
+    with recording_constants() as rec:
+        Constants(q=_k("x.lim", "thresholds.v", "m", unit=unit)).q
+    assert rec.rows[0]["unit"] == unit
+
+
+@pytest.mark.parametrize("within", [None, "ratio", ("ratio", 1, 5)])
+def test_a_knowledge_constant_must_name_the_input_it_stands_in_for(within):
+    with pytest.raises(TypeError, match="must name the input"):
+        Constant.from_knowledge("x.lim", "thresholds.v", "m", within=within)
+
+
+@pytest.mark.parametrize("wanted", ["a.one_extra", "a.on", "A.ONE"])
+def test_shipped_entry_matches_the_whole_id_only(shipped, wanted):
+    # An id the shipped id is a prefix of, a prefix of it, or another case
+    # is a different entry.
+    shipped([_entry("a.one", {"x": 1})])
+    assert _knowledge.shipped_entry(wanted) is None
+
+
+@pytest.mark.parametrize("stated, words", [(1.2, "from knowledge entry x.lim (1.2)"), (1.75, "from knowledge entry x.lim (1.75)")])
+def test_describe_names_the_entry_and_the_value_it_states_now(shipped, stated, words):
+    shipped([_entry("x.lim", {"v": stated})])
+    assert _k("x.lim", "thresholds.v", "m", lo=1.0, hi=5.0).describe() == words
+
+
+@pytest.mark.parametrize("entries, says", [([], "is not in the shipped"), ([_entry("x.lim", {"v": 9.0})], "outside")])
+def test_describe_gives_the_reason_when_the_entry_cannot_be_applied(shipped, entries, says):
+    shipped(entries)
+    words = _k("x.lim", "thresholds.v", "m", lo=1.0, hi=5.0).describe()
+    assert words.startswith("from knowledge entry x.lim, which cannot be applied: ")
+    assert says in words and "None" not in words
+
+
+@pytest.mark.parametrize("unit, lo, hi", [("ratio", 1.0, 5.0), ("kN", 0.0, None)])
+def test_as_input_is_the_declared_input_with_this_constant_as_its_default(unit, lo, hi):
+    k = _k("x.lim", "thresholds.v", "m", unit=unit, lo=lo, hi=hi)
+    p = k.as_input()
+    assert (p.unit, p.lo, p.hi, p.label) == (unit, lo, hi, "invented input")
+    assert p.default_from is k
+    assert Param(unit, lo, hi).default_from is None

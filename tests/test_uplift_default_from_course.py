@@ -142,3 +142,82 @@ def test_fos_exactly_at_the_stated_factor_can_stop(head, raft, floors_built, flo
     assert r.fos == 1.2
     assert r.can_stop is True and r.needs_tension_piles is False
     assert r.min_floors_for_stop == floors_built
+
+
+def _kb_stating(tmp_path, monkeypatch, stated):
+    """The shipped knowledge base with the uplift entry's factor set to ``stated``."""
+    import json
+
+    with open(_knowledge._KB_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    for e in data["entries"]:
+        if e.get("id") == _entry_id():
+            e["thresholds"]["min_fos"] = stated
+    kb = tmp_path / "kb.json"
+    kb.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(_knowledge, "_KB_PATH", str(kb))
+
+
+@pytest.mark.parametrize("stated", [0.9, 0.0, -2.5, 6.0])
+def test_an_entry_outside_the_declared_range_is_refused_through_the_door(tmp_path, monkeypatch, stated):
+    # The calculator accepts a required factor of 1 to 5 from a caller; the
+    # entry's figure passes the same range. Outside it the run is refused,
+    # naming the knowledge entry, never "OK - dewatering CAN stop" and
+    # never an error that blames an input the user did not give.
+    from app.lib.construction_formulas import run_calculation
+
+    _kb_stating(tmp_path, monkeypatch, stated)
+    env = run_calculation(
+        "dewatering_uplift_check",
+        {"water_depth": 10.0, "raft_thickness": 1.0, "floor_count": 10, "floor_thickness": 0.28},
+    )
+    assert env["status"] == "error" and env.get("raised") is True, env
+    assert f"knowledge entry '{_entry_id()}' field 'thresholds.min_fos' states {stated:g}, outside" in env["error"]
+    assert "(1 to 5 ratio)" in env["error"]
+    assert "must be > 0" not in env["error"]
+
+
+@pytest.mark.parametrize("stated, can_stop", [(1.0, True), (5.0, False)])
+def test_an_entry_at_the_declared_bounds_runs(tmp_path, monkeypatch, stated, can_stop):
+    # hand: uplift 10; counter 1.0 x 2.5 + 10 x 0.28 x 2.5 = 2.5 + 7.0 = 9.5; FOS 0.95.
+    # 0.95 < 1.0 and < 5.0, so neither can stop; head 5 gives FOS 1.9: >= 1.0, < 5.0.
+    from app.lib.construction_formulas import run_calculation
+
+    _kb_stating(tmp_path, monkeypatch, stated)
+    env = run_calculation(
+        "dewatering_uplift_check",
+        {"water_depth": 5.0, "raft_thickness": 1.0, "floor_count": 10, "floor_thickness": 0.28},
+    )
+    assert env["status"] == "success", env
+    assert env["result"]["fos"] == pytest.approx(1.9, abs=1e-3)
+    assert env["result"]["can_stop"] is can_stop
+    assert env["result"]["constants_used"][0]["value"] == stated
+
+
+@pytest.mark.parametrize("stated", [1.2, 1.4])
+def test_the_description_before_the_run_names_the_entry_and_its_value(tmp_path, monkeypatch, stated):
+    # A needs-input reply describes the factor as the entry's figure, in the
+    # words, the expected-params row and the signature; never "None".
+    from app.lib.construction_formulas import run_calculation
+
+    _kb_stating(tmp_path, monkeypatch, stated)
+    env = run_calculation("dewatering_uplift_check", {"water_depth": 10.0, "raft_thickness": 1.8})
+    assert env["status"] == "needs_input", env
+    words = f"from knowledge entry {_entry_id()} ({stated:g})"
+    assert f"required_fos (ratio) (default {words})" in env["error"]
+    row = next(r for r in env["expected_params"] if r["name"] == "required_fos")
+    assert row["default_from"] == words and "default" not in row
+    assert f"required_fos: 'Optional[float]' = <{words}>" in env["signature"]
+    assert "None" not in env["error"] and "= None" not in env["signature"]
+    # the other optional inputs keep their signature defaults
+    assert "floor_thickness (m) (default 0.3)" in env["error"]
+
+
+def test_the_description_says_why_when_the_entry_cannot_be_applied(tmp_path, monkeypatch):
+    from app.lib.construction_formulas import run_calculation
+
+    _kb_stating(tmp_path, monkeypatch, 7.0)
+    env = run_calculation("dewatering_uplift_check", {"water_depth": 10.0, "raft_thickness": 1.8})
+    row = next(r for r in env["expected_params"] if r["name"] == "required_fos")
+    assert row["default_from"].startswith(f"from knowledge entry {_entry_id()}, which cannot be applied: ")
+    assert "states 7, outside" in row["default_from"]
