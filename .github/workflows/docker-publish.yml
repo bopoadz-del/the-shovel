@@ -16,17 +16,17 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 # Newer push to the same PR supersedes the running build (the newest
-# image is the one that matters for a PR). A run on main or a tag is never
-# cancelled: cancel-in-progress is true only for pull_request events.
+# image is the one that matters for a PR). A run on main or a tag gets a
+# group of its own (its run id), so it is never cancelled, pending or running.
 concurrency:
-  group: docker-${{ github.ref }}
+  group: docker-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # A pull request whose every changed file is a test or a document cannot
-  # change what the image serves, so it skips the image build (a skipped
-  # required check counts as passed). scripts/ci_image_inputs.py decides;
-  # pushes to main and tags always build.
+  # A pull request whose every changed file is a test or is kept out of the
+  # build context by .dockerignore cannot change what the image serves, so it
+  # skips the image build. scripts/ci_image_inputs.py decides; --no-renames
+  # lists both paths of a move. Pushes to main and tags always build.
   changes:
     if: github.event_name == 'pull_request' && ! github.event.pull_request.draft
     runs-on: ubuntu-latest
@@ -43,7 +43,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -o pipefail
-          git diff --name-only "$BASE" "$HEAD" | python3 scripts/ci_image_inputs.py | tee -a "$GITHUB_OUTPUT"
+          git diff --name-only --no-renames "$BASE" "$HEAD" | python3 scripts/ci_image_inputs.py | tee -a "$GITHUB_OUTPUT"
 
   build:
     # A draft PR does not build the image (it runs only the fast checks). The

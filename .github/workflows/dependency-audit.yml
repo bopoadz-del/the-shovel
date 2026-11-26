@@ -23,7 +23,6 @@ name: dependency-audit
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   schedule:
@@ -33,17 +32,14 @@ permissions:
   contents: read
 
 # A newer push to the same PR cancels that PR's superseded run. A run on
-# main (push or schedule) is never cancelled: cancel-in-progress is true
-# only for pull_request events.
+# main (push, schedule, tag) gets a group of its own (its run id): nothing
+# else queues in it, so it is never cancelled, pending or running.
 concurrency:
-  group: dependency-audit-${{ github.ref }}
+  group: dependency-audit-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pip-audit:
-    # A draft PR runs only lint and fast; this audit runs when the PR is
-    # marked ready (ready_for_review) and on every push after that.
-    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

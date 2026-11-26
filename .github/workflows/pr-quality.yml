@@ -17,7 +17,7 @@ name: pr-quality
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened, ready_for_review]
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
@@ -31,9 +31,6 @@ concurrency:
 
 jobs:
   check-body-and-size:
-    # A draft PR runs only lint and fast; this job runs when the PR is marked
-    # ready (ready_for_review) and on every push or edit after that.
-    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo (need the template for untouched-template comparison)
@@ -115,8 +112,6 @@ jobs:
     # drops tests added to the base since is therefore caught too (#354
     # removed three test files that way and every check stayed green).
     # Not exempted by the 'trivial' label: removing a test is never trivial.
-    # Skipped while the PR is a draft, like check-body-and-size above.
-    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

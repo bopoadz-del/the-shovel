@@ -1,4 +1,4 @@
-"""CI queue policy: superseded PR runs cancel, main runs never do, drafts run light.
+"""CI queue policy: superseded PR runs cancel, main runs never do, drafts skip only heavy jobs.
 
 Each workflow file is read as YAML and checked against the policy, and the
 same checker runs on small synthetic workflows: one that keeps the policy and
@@ -20,7 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 WF = ROOT / ".github" / "workflows"
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from ci_image_inputs import image_needed, is_non_image_file
+from ci_image_inputs import (
+    excluded_from_context,
+    image_needed,
+    is_non_image_file,
+    parse_dockerignore,
+)
 
 PR_WORKFLOWS = [
     "test.yml",
@@ -73,9 +78,14 @@ def concurrency_violations(text: str) -> list[str]:
     triggers = _triggers(doc)
     if "pull_request" in triggers and not _cancels(cancel, "pull_request"):
         out.append("a superseded PR run is not cancelled")
+    group = str(conc.get("group", ""))
     for ev in ("push", "schedule", "workflow_dispatch"):
         if ev in triggers and _cancels(cancel, ev):
             out.append(f"a {ev} run can be cancelled")
+        elif ev in triggers and "github.run_id" not in group:
+            # GitHub replaces a PENDING run when a newer one joins its group,
+            # whatever cancel-in-progress says; only a group of its own avoids it.
+            out.append(f"a pending {ev} run can be replaced")
     return out
 
 
@@ -83,9 +93,14 @@ def _wf(name: str) -> str:
     return (WF / name).read_text(encoding="utf-8")
 
 
+# test.yml is not changed by this PR: its main runs share one group, so a
+# newer push to main replaces a pending main test run (and its deploy).
+_KNOWN = {"test.yml": ["a pending push run can be replaced"]}
+
+
 @pytest.mark.parametrize("name", PR_WORKFLOWS)
 def test_every_pr_workflow_keeps_the_concurrency_policy(name):
-    assert concurrency_violations(_wf(name)) == []
+    assert concurrency_violations(_wf(name)) == _KNOWN.get(name, [])
 
 
 def _group(text: str) -> str:
@@ -118,9 +133,10 @@ def test_groups_are_one_per_workflow(texts, expected):
     assert shared_group_prefixes(texts) == expected
 
 
+_RUN_GROUP = "x-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}"
 _GOOD = (
     "on:\n  pull_request:\n  push:\n    branches: [main]\n"
-    "concurrency:\n  group: x-${{ github.ref }}\n"
+    f"concurrency:\n  group: {_RUN_GROUP}\n"
     "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\njobs: {}\n"
 )
 
@@ -139,8 +155,16 @@ _GOOD = (
         ),
         (
             (
-                "on:\n  pull_request:\n  schedule:\n    - cron: '0 6 * * 1'\n"
+                "on:\n  pull_request:\n  push:\n    branches: [main]\n"
                 "concurrency:\n  group: x-${{ github.ref }}\n"
+                "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\njobs: {}\n"
+            ),
+            ["a pending push run can be replaced"],
+        ),
+        (
+            (
+                "on:\n  pull_request:\n  schedule:\n    - cron: '0 6 * * 1'\n"
+                f"concurrency:\n  group: {_RUN_GROUP}\n"
                 "  cancel-in-progress: ${{ github.event_name != 'push' }}\njobs: {}\n"
             ),
             ["a schedule run can be cancelled"],
@@ -191,30 +215,29 @@ def test_cancel_expression_reading(value, event, expected):
     assert _cancels(value, event) is expected
 
 
-# Draft PRs run only lint and fast; the heavy and gate jobs skip on draft and
-# their workflow runs again on ready_for_review.
-DRAFT_GATED = [
+# A draft PR skips only the image build (and its classifier); it reruns on
+# ready_for_review. The gates run on every PR push, draft included.
+DRAFT_SKIPPED = [("docker-publish.yml", "build"), ("docker-publish.yml", "changes")]
+GATES = [
     ("mutation-gate.yml", "mutation-gate"),
     ("dependency-audit.yml", "pip-audit"),
     ("pr-quality.yml", "check-body-and-size"),
     ("pr-quality.yml", "test-removal-guard"),
-    ("docker-publish.yml", "build"),
-    ("docker-publish.yml", "changes"),
+    ("lint.yml", "ruff"),
+    ("fast.yml", "two-input-lint"),
 ]
 
 
-@pytest.mark.parametrize("name,job", DRAFT_GATED)
-def test_heavy_job_skips_on_draft_and_reruns_on_ready(name, job):
+@pytest.mark.parametrize("name,job", DRAFT_SKIPPED)
+def test_image_build_skips_on_draft_and_reruns_on_ready(name, job):
     doc = _load(_wf(name))
     cond = str(doc["jobs"][job].get("if", ""))
     assert "! github.event.pull_request.draft" in cond
     assert "ready_for_review" in doc["on"]["pull_request"]["types"]
 
 
-@pytest.mark.parametrize(
-    "name,job", [("lint.yml", "ruff"), ("fast.yml", "two-input-lint")]
-)
-def test_draft_checks_still_run_on_draft(name, job):
+@pytest.mark.parametrize("name,job", GATES)
+def test_gates_run_on_draft(name, job):
     cond = str(_load(_wf(name))["jobs"][job].get("if", ""))
     assert "draft" not in cond
 
@@ -278,48 +301,94 @@ def test_probe_groups_differ_from_every_pr_group(pr_texts, probe_texts, expected
     assert probe_group_clashes(pr_texts, probe_texts) == expected
 
 
+# A .dockerignore built here, so the classifier is shown on rules the test owns.
+_IGNORE = parse_dockerignore(
+    "# comment\n.git\n**/__pycache__\ndata\n!data/models/keep.onnx\n.github\n*.md\n"
+    "!docs/knowledge/*.md\nlogs/\n/build\n"
+)
+
+
 @pytest.mark.parametrize(
-    "paths,expected",
+    "path,expected",
     [
-        (["tests/test_a.py"], False),
-        (["tests/test_a.py", "tests/fixtures/b.json"], False),
-        (["docs/RUNBOOK.md", "README.md"], False),
-        (["docs/diagram.png", "tests/test_b.py"], False),
-        (["tests/test_a.py", "app/main.py"], True),
-        (["docs/knowledge/concrete.md"], True),
-        (["README.md", "requirements.txt"], True),
-        (["Dockerfile"], True),
-        ([".github/workflows/docker-publish.yml"], True),
-        ([], True),
-        (["", "  "], True),
-        (["tests\\test_win.py"], False),
-        (["frontend/src/App.tsx"], True),
+        ("README.md", True),
+        ("CHANGELOG.md", True),
+        ("config/rules.md", False),
+        ("app/agents/configs/pm.md", False),
+        ("docs/RUNBOOK.md", False),
+        ("docs/knowledge/x.md", False),
+        ("data/raw/a.csv", True),
+        ("data/models/keep.onnx", False),
+        ("app/pkg/__pycache__/m.pyc", True),
+        ("__pycache__/m.pyc", True),
+        ("app/main.py", False),
+        ("logs/a.txt", True),
+        ("build/out.bin", True),
+        ("app/build/out.bin", False),
+        ("readme.MD", False),
     ],
 )
-def test_image_needed(paths, expected):
-    assert image_needed(paths) is expected
+def test_excluded_from_context_follows_docker_rules(path, expected):
+    assert excluded_from_context(path, _IGNORE) is expected
 
 
 @pytest.mark.parametrize(
     "path,expected",
     [
         ("tests/x.py", True),
-        ("docs/x.txt", True),
-        ("CHANGELOG.MD", True),
-        ("docs/knowledge/x.md", False),
+        ("tests\\win.py", True),
+        ("README.md", True),
+        ("config/rules.md", False),
+        ("docs/RUNBOOK.md", False),
+        (".github/workflows/docker-publish.yml", False),
+        (".github/CONVENTIONS.md", False),
         ("app/tests_helper.py", False),
         ("scripts/tests/x.py", False),
         ("", False),
+        ("   ", False),
     ],
 )
 def test_is_non_image_file(path, expected):
-    assert is_non_image_file(path) is expected
+    assert is_non_image_file(path, _IGNORE) is expected
 
 
 @pytest.mark.parametrize(
+    "paths,expected",
+    [
+        (["tests/test_a.py"], False),
+        (["tests/test_a.py", "README.md"], False),
+        (["tests/a.py", "   "], False),
+        (["README.md", "\t"], False),
+        (["tests/test_a.py", "app/main.py"], True),
+        (["README.md", "config/rules.md"], True),
+        (["docs/knowledge/concrete.md"], True),
+        (["README.md", "requirements.txt"], True),
+        (["Dockerfile"], True),
+        ([".dockerignore"], True),
+        ([".github/workflows/docker-publish.yml"], True),
+        ([], True),
+        (["", "  "], True),
+        (["frontend/src/App.tsx"], True),
+    ],
+)
+def test_image_needed(paths, expected):
+    assert image_needed(paths, _IGNORE) is expected
+
+
+def test_an_empty_dockerignore_excludes_nothing():
+    rules = parse_dockerignore("# only a comment\n\n")
+    assert rules == []
+    assert image_needed(["README.md"], rules) is True
+    assert image_needed(["tests/a.py"], rules) is False
+
+
+# The repo's own .dockerignore: runtime-read markdown outside the root builds.
+@pytest.mark.parametrize(
     "stdin,expected",
     [
-        ("tests/test_a.py\ndocs/x.md\n", "image=false"),
+        ("tests/test_a.py\nREADME.md\n", "image=false"),
+        ("tests/test_a.py\nconfig/driver_standing_rules.md\n", "image=true"),
+        ("app/prompts/construction_evm.md\n", "image=true"),
         ("tests/test_a.py\napp/main.py\n", "image=true"),
         ("", "image=true"),
     ],
@@ -333,3 +402,50 @@ def test_cli_prints_a_github_output_line(stdin, expected):
         check=True,
     )
     assert out.stdout.strip() == expected
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _move_in_a_repo(tmp_path, src, dst):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / src).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / src).write_text("def helper():\n    return 1\n" * 5)
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "a")
+    (tmp_path / dst).parent.mkdir(parents=True, exist_ok=True)
+    _git(tmp_path, "mv", src, dst)
+    _git(tmp_path, "commit", "-qm", "b")
+
+
+def _diff_args_in_workflow() -> list[str]:
+    """The workflow's own `git diff` arguments, BASE/HEAD bound to the repo."""
+    steps = _load(_wf("docker-publish.yml"))["jobs"]["changes"]["steps"]
+    run = next(s["run"] for s in steps if "git diff" in str(s.get("run", "")))
+    line = next(x for x in run.splitlines() if "git diff" in x)
+    args = line.split("|")[0].split()
+    return [{'"$BASE"': "HEAD~1", '"$HEAD"': "HEAD"}.get(a, a) for a in args[1:]]
+
+
+@pytest.mark.parametrize(
+    "src,dst",
+    [("app/helper.py", "tests/helper.py"), ("app/core/x.py", "tests/core/x.py")],
+)
+def test_a_move_out_of_product_code_builds(tmp_path, src, dst):
+    _move_in_a_repo(tmp_path, src, dst)
+    args = _diff_args_in_workflow()
+    assert "--no-renames" in args
+    listed = _git(tmp_path, *args).splitlines()
+    assert sorted(listed) == sorted([src, dst])
+    assert image_needed(listed, _IGNORE) is True
+    # With rename detection git lists only the new path: the move looks test-only.
+    renamed = _git(tmp_path, "diff", "--name-only", "-M", "HEAD~1", "HEAD").splitlines()
+    assert renamed == [dst]
+    assert image_needed(renamed, _IGNORE) is False
