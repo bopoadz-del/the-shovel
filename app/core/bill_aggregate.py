@@ -185,6 +185,81 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
     return out
 
 
+ROW_ITEM = "item"
+ROW_COLLECTION = "collection"
+ROW_REPEAT = "repeat"
+ROW_KINDS = (ROW_ITEM, ROW_COLLECTION, ROW_REPEAT)
+
+
+def _amount_only(row: SheetRow) -> bool:
+    """A line that prints an amount and neither a quantity nor a rate: the
+    shape of a page or section total, read off the cells, not the words."""
+    return (g.parse_number(row.amount) is not None
+            and g.parse_number(row.quantity) is None
+            and g.parse_number(row.rate) is None)
+
+
+def _last_place(text: str) -> float:
+    """One unit in the last decimal place the amount cell prints: the
+    rounding the document itself states for that figure (``1,234.50`` ->
+    0.01, ``1,234`` -> 1)."""
+    t = (text or "").strip().strip("()-").replace(",", "").replace(" ", "")
+    if "." not in t:
+        return 1.0
+    return 10.0 ** -len(t.split(".", 1)[1])
+
+
+def _same_figure(a: float, b: float, tol: float) -> bool:
+    """``a`` and ``b`` agree within ``tol`` (the binary float error of the
+    subtraction itself is not a printed difference)."""
+    return abs(a - b) <= tol * (1 + 1e-9)
+
+
+def row_kinds(items: Sequence[SheetRow]) -> list[str]:
+    """The kind of each row, decided by arithmetic, in the order of ``items``.
+
+    Rows are walked page by page (stable, so the sheet order is kept inside a
+    page). A line that prints only an amount is
+
+    * a ``collection`` when that amount equals the sum of the lines it follows
+      on its page since the last collection (at least one line), within one
+      unit of the amount cell's own last printed place;
+    * a ``repeat`` when it equals a collection already read on an earlier page
+      (a figure brought forward, or a page total listed on a collection page).
+      A repeat is covered by the next collection of its page, as an item is.
+
+    Every other row, and every row with no recorded page, is an ``item``. A
+    bill's total is the sum of its items; a collection or a repeat restates
+    figures that are already in that sum.
+    """
+    kinds = [ROW_ITEM] * len(items)
+    order = sorted((i for i, r in enumerate(items) if r.pages), key=lambda i: items[i].pages[-1])
+    earlier: list[tuple[float, float]] = []   # (amount, tolerance) of collections on earlier pages
+    page: int | None = None
+    page_collections: list[tuple[float, float]] = []
+    covered, lines = 0.0, 0
+    for i in order:
+        row = items[i]
+        if row.pages[-1] != page:
+            earlier.extend(page_collections)
+            page, page_collections, covered, lines = row.pages[-1], [], 0.0, 0
+        amount = g.parse_number(row.amount)
+        if amount is None:
+            continue
+        tol = _last_place(row.amount)
+        if _amount_only(row):
+            if lines and _same_figure(amount, covered, tol):
+                kinds[i] = ROW_COLLECTION
+                page_collections.append((amount, tol))
+                covered, lines = 0.0, 0
+                continue
+            if any(_same_figure(amount, a, max(t, tol)) for a, t in earlier):
+                kinds[i] = ROW_REPEAT
+        covered += amount
+        lines += 1
+    return kinds
+
+
 def _words(text: str) -> set[str]:
     return {w.casefold() for w in _WORD_RE.findall(text or "")}
 
@@ -712,6 +787,13 @@ def aggregate(
         raise ValueError("give description terms or a section to match")
     used, without = [], []
     sums: dict[str, float] = {}
+    kinds = row_kinds(items)
+    not_items = [
+        {"ref": row.ref, "pages": row.pages, "section": list(row.path),
+         "description": row.description, "kind": kind, "amount": g.parse_number(row.amount)}
+        for row, kind in zip(items, kinds) if kind != ROW_ITEM
+    ]
+    items = [row for row, kind in zip(items, kinds) if kind == ROW_ITEM]
     if scope is not None:
         selected = fullest_sections(scope, [row for row in items if scope.admits(row, measure)])
     else:
@@ -746,7 +828,8 @@ def aggregate(
             "item": sorted(scope.item),
             "either": sorted(scope.either),
         } if scope is not None else None),
-        "rows_scanned": len(items),
+        "rows_scanned": len(items) + len(not_items),
+        "not_items": not_items,
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
         "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
