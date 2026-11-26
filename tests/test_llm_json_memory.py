@@ -439,12 +439,25 @@ def test_init_db_creates_the_table_once_per_database(monkeypatch, tmp_path, firs
     monkeypatch.setattr(llm_memory, "LlmMemory", _Model)
     monkeypatch.setattr(llm_memory, "get_database_url", lambda: current["url"])
     monkeypatch.setattr(llm_memory, "_initialized_for_url", None)
+    entered = []
+
+    class _Lock:
+        def __enter__(self):
+            entered.append(current["url"])
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(llm_memory, "_lock", _Lock())
     llm_memory.init_db()
     llm_memory.init_db()
     assert created == [True]
+    # Once a database is set up, a call returns before taking the lock.
+    assert entered == [urls[0]]
     current["url"] = urls[1]
     llm_memory.init_db()
     assert created == [True, True]
+    assert entered == urls
     assert (tmp_path / "a").is_dir() is makes_dir and (tmp_path / "b").is_dir() is makes_dir
 
 
