@@ -384,17 +384,21 @@ def test_an_empty_dockerignore_excludes_nothing(text):
     assert image_needed(["tests/a.py"], rules) is False
 
 
-def test_an_unreadable_dockerignore_builds_and_says_so(tmp_path, capsys):
+@pytest.mark.parametrize(
+    "ignore_text,path",
+    [("*.md\n", "README.md"), ("docs/\n", "docs/guide.txt")],
+)
+def test_an_unreadable_dockerignore_builds_and_says_so(tmp_path, capsys, ignore_text, path):
     # No .dockerignore under tmp_path: nothing is excluded, a note goes to stderr.
     assert _load_rules(tmp_path) == []
     assert "not read" in capsys.readouterr().err
-    assert image_needed(["README.md"], _load_rules(tmp_path)) is True
+    assert image_needed([path], _load_rules(tmp_path)) is True
     capsys.readouterr()
-    (tmp_path / ".dockerignore").write_text("*.md\n", encoding="utf-8")
+    (tmp_path / ".dockerignore").write_text(ignore_text, encoding="utf-8")
     rules = _load_rules(tmp_path)
     assert len(rules) == 1
     assert capsys.readouterr().err == ""
-    assert image_needed(["README.md"], rules) is False
+    assert image_needed([path], rules) is False
 
 
 # The repo's own .dockerignore: runtime-read markdown outside the root builds.
