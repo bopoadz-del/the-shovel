@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+from dataclasses import dataclass
 import json
 import logging
 import logging as _logging
@@ -3465,10 +3466,59 @@ def _spreadsheet_band_for(sheet_name: str, band: str, band_sheet: str) -> str:
     return _SPREADSHEET_NO_BAND
 
 
+@dataclass(frozen=True)
+class SpreadsheetRow:
+    """One measured spreadsheet row as the sheet states it.
+
+    ``row_no`` is the 1-based row on the sheet (the locator a spreadsheet has
+    in place of a page). ``band`` is the locator text the row may carry (see
+    :func:`_spreadsheet_band_for`) and ``path`` its parts, outer to inner,
+    empty when the sheet states no band. ``fields`` holds the resolved columns
+    (description, quantity, unit, rate, total) that print a value; ``others``
+    every other non-empty cell under its own header text, in column order.
+    """
+
+    sheet: str
+    row_no: int
+    band: str
+    path: tuple[str, ...]
+    fields: dict[str, str]
+    others: tuple[tuple[str, str], ...]
+
+
 def _spreadsheet_row_chunks(
     file_path: str, filename: str, ext: str,
 ) -> list[str]:
     """One retrievable chunk per measured spreadsheet row, headers inherited."""
+    chunks: list[str] = []
+    for r in spreadsheet_rows(file_path, filename, ext):
+        parts: list[str] = []
+        if r.sheet:
+            parts.append(f"Sheet: {r.sheet}")
+        parts.append(f"Bill: {r.band}")
+        parts.append(f"Item: {r.fields.get('description', '')}")
+        for field, label in (
+            ("quantity", "Quantity"),
+            ("unit", "Unit"),
+            ("rate", "Rate"),
+            ("total", "Amount"),
+        ):
+            if field in r.fields:
+                parts.append(f"{label}: {r.fields[field]}")
+        for head, value in r.others:
+            parts.append(f"{head}: {value}")
+        chunks.append("; ".join(parts))
+    return chunks
+
+
+def spreadsheet_rows(
+    file_path: str, filename: str, ext: str,
+) -> list[SpreadsheetRow]:
+    """Every measured spreadsheet row, headers and band inherited.
+
+    The one row reader for spreadsheets: the retrievable row chunks and the
+    stored table rows are both made from what this returns.
+    """
     if ext not in _SPREADSHEET_EXTS or not file_path:
         return []
     from app.core import chunk_noise
@@ -3485,7 +3535,7 @@ def _spreadsheet_row_chunks(
             "spreadsheet row wiring skipped for %s: %s", filename, exc
         )
         return []
-    chunks: list[str] = []
+    out: list[SpreadsheetRow] = []
     for sheet_name, rows in sheets:
         found = _spreadsheet_header_row(rows, block)
         if found is None:
@@ -3514,7 +3564,7 @@ def _spreadsheet_row_chunks(
         # by `_spreadsheet_band_for`, so a later sheet can never pick up this
         # one's band even if this state outlives the loop iteration.
         band_sheet = sheet_name
-        for row in rows[hdr_idx + 1:]:
+        for row_no, row in enumerate(rows[hdr_idx + 1:], start=hdr_idx + 2):
             cells = list(row)
             while cells and cells[-1] == "":
                 cells.pop()
@@ -3575,22 +3625,12 @@ def _spreadsheet_row_chunks(
                 continue
             prev_label = ""
             band = _PATH_SEP.join(p for p in (root, sub) if p)
-            parts: list[str] = []
-            if sheet_name:
-                parts.append(f"Sheet: {sheet_name}")
-            parts.append(
-                f"Bill: {_spreadsheet_band_for(sheet_name, band, band_sheet)}"
-            )
-            parts.append(f"Item: {desc}")
-            for field, label in (
-                ("quantity", "Quantity"),
-                ("unit", "Unit"),
-                ("rate", "Rate"),
-                ("total", "Amount"),
-            ):
+            located = _spreadsheet_band_for(sheet_name, band, band_sheet)
+            fields: dict[str, str] = {"description": desc}
+            for field in ("quantity", "unit", "rate", "total"):
                 idx = colmap.get(field)
                 if idx is not None and idx < len(cells) and cells[idx] != "":
-                    parts.append(f"{label}: {cells[idx]}")
+                    fields[field] = cells[idx]
             # Every other cell the row states keeps its place, labelled with
             # the sheet's own header text. The resolver only names the
             # description and figure columns; an item reference, a bill
@@ -3603,14 +3643,22 @@ def _spreadsheet_row_chunks(
                 for f in ("description", "quantity", "unit", "rate", "total")
                 if f in colmap
             }
+            others: list[tuple[str, str]] = []
             for idx in range(len(cells)):
                 if idx in emitted_idxs or cells[idx] == "":
                     continue
                 head = header_cells[idx].strip() if idx < len(header_cells) else ""
                 if head:
-                    parts.append(f"{head}: {cells[idx]}")
-            chunks.append("; ".join(parts))
-    return chunks
+                    others.append((head, cells[idx]))
+            out.append(SpreadsheetRow(
+                sheet=sheet_name,
+                row_no=row_no,
+                band=located,
+                path=tuple(p for p in (root, sub) if p) if located == band else (),
+                fields=fields,
+                others=tuple(others),
+            ))
+    return out
 
 
 # ── Drawing tables → RAG ─────────────────────────────────────────────────────
