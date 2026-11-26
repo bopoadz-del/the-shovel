@@ -55,12 +55,14 @@ def dewatering_uplift_check(
     floor_thickness: float = 0.3,
     concrete_unit_weight: float = 2.5,
     water_unit_weight: float = 1.0,
-    required_fos: float = _UPLIFT_K.required_fos,
+    required_fos: Optional[float] = None,
 ) -> DewateringResult:
     """Check if dewatering can stop: FOS = counter-weight / uplift >= required_fos.
 
     With no ``required_fos`` given, the factor is the one the knowledge
-    base's uplift entry states (see ``_UPLIFT_K``)."""
+    base's uplift entry states (see ``_UPLIFT_K``), read on this call."""
+    if required_fos is None:
+        required_fos = _UPLIFT_K.required_fos
     if water_depth < 0:
         raise ValueError("water_depth must be >= 0")
     if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:

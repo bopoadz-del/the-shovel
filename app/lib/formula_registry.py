@@ -233,31 +233,61 @@ class Constant:
     source: Optional[str] = None
 
     @classmethod
-    def from_knowledge(cls, entry_id: str, field_path: str, unit: str, meaning: str) -> "Constant":
+    def from_knowledge(cls, entry_id: str, field_path: str, unit: str, meaning: str) -> "KnowledgeConstant":
         """A constant whose value the shipped knowledge base states.
 
         ``field_path`` is a dotted path inside the entry (``thresholds.x``).
-        The value is read from the entry when the calculator module loads,
-        so the knowledge base, not a literal in the calculator, decides it,
-        and the constant's source is the entry and its own provenance.
-        A missing entry, field or non-number raises: a calculator never
-        falls back to a figure nobody wrote down."""
+        Nothing is read here: the value is read from the entry every time a
+        calculator applies it (see :meth:`KnowledgeConstant.resolve`), so
+        the run's constants record names the figure and the entry it came
+        from, and an entry that is missing or broken fails the one
+        calculator that applies it, never the module that declares it."""
+        return KnowledgeConstant(entry_id, field_path, unit, meaning)
+
+    def resolve(self) -> "Constant":
+        """The constant as applied now: a literal constant is itself."""
+        return self
+
+
+@dataclass(frozen=True)
+class KnowledgeConstant:
+    """A declared constant whose number lives in a shipped knowledge entry,
+    read when it is applied, never copied into the calculator at import."""
+
+    entry_id: str
+    field_path: str
+    unit: str
+    meaning: str
+
+    def resolve(self) -> Constant:
+        """Read the entry now. A missing entry or field, a value that is not
+        a number, or a number that is not finite (NaN, infinity, too large
+        for a float) raises: a calculator never falls back to a figure
+        nobody wrote down, and never applies one no calculation can use."""
         from app.blocks import _knowledge
 
-        entry = _knowledge.shipped_entry(entry_id)
+        entry = _knowledge.shipped_entry(self.entry_id)
         if entry is None:
-            raise LookupError(f"knowledge entry {entry_id!r} is not in the shipped knowledge base")
+            raise LookupError(f"knowledge entry {self.entry_id!r} is not in the shipped knowledge base")
         node: Any = entry
-        for key in field_path.split("."):
+        for key in self.field_path.split("."):
             if not isinstance(node, dict) or key not in node:
-                raise LookupError(f"knowledge entry {entry_id!r} has no field {field_path!r}")
+                raise LookupError(f"knowledge entry {self.entry_id!r} has no field {self.field_path!r}")
             node = node[key]
         if isinstance(node, bool) or not isinstance(node, (int, float)):
-            raise LookupError(f"knowledge entry {entry_id!r} field {field_path!r} is not a number")
+            raise LookupError(f"knowledge entry {self.entry_id!r} field {self.field_path!r} is not a number")
+        try:
+            value = float(node)
+        except OverflowError:
+            value = math.inf
+        if not math.isfinite(value):
+            raise LookupError(
+                f"knowledge entry {self.entry_id!r} field {self.field_path!r} is not a finite number"
+            )
         prov = entry.get("provenance") or {}
         written = prov.get("course_reference") or prov.get("source")
-        source = f"knowledge entry {entry_id}" + (f" ({written})" if written else "")
-        return cls(float(node), unit, meaning, source=source)
+        source = f"knowledge entry {self.entry_id}" + (f" ({written})" if written else "")
+        return Constant(value, self.unit, self.meaning, source=source)
 
 
 _CONSTANT_READS: "contextvars.ContextVar[Optional[List[Tuple[str, Constant]]]]" = (
@@ -278,7 +308,7 @@ class Constants:
 
     def __init__(self, **declared: Constant) -> None:
         for key, c in declared.items():
-            if not isinstance(c, Constant):
+            if not isinstance(c, (Constant, KnowledgeConstant)):
                 raise TypeError(f"constant {key} must be declared as a Constant")
         object.__setattr__(self, "_declared", dict(declared))
 
@@ -286,7 +316,7 @@ class Constants:
         declared = object.__getattribute__(self, "_declared")
         if name not in declared:
             raise AttributeError(name)
-        c = declared[name]
+        c = declared[name].resolve()
         reads = _CONSTANT_READS.get()
         if reads is not None:
             reads.append((name, c))
@@ -295,7 +325,7 @@ class Constants:
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("declared constants are read-only")
 
-    def declared(self) -> Dict[str, Constant]:
+    def declared(self) -> Dict[str, Union[Constant, KnowledgeConstant]]:
         return dict(object.__getattribute__(self, "_declared"))
 
 

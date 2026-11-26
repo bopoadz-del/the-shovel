@@ -210,8 +210,14 @@ def test_course_value_is_read_from_the_entry(entry_id, field_path, course_figure
     ],
 )
 def test_uplift_calculator_default_follows_the_course(entry_id, field_path):
-    pairs = [(kb.get_rule(entry_id), field_path, dewatering_uplift_check, "required_fos")]
-    assert disagreements(pairs) == []
+    # The factor the calculator applies with none given is read in its body
+    # (its signature default is None): compare the value its record names.
+    from app.lib.formula_registry import recording_constants
+
+    with recording_constants() as rec:
+        dewatering_uplift_check(water_depth=10.0, raft_thickness=1.0, floor_count=0)
+    applied = {r["name"]: r["value"] for r in rec.rows}["required_fos"]
+    assert applied == pytest.approx(course_value(kb.get_rule(entry_id), field_path))
 
 
 def _floors(**kw):
