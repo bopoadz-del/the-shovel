@@ -105,3 +105,96 @@ def test_job_safety_analysis_keeps_its_numbered_step(step, tmp_path):
     numbered = [l.split(". ", 1)[1] for l in section.splitlines()
                 if l[:1].isdigit() and ". " in l]
     assert step in numbered
+
+
+# --- OPUSGRADE S658 5e89d7d test debt and fault 2 ---------------------------
+
+def _numbered(section):
+    return [l.split(". ", 1)[1] for l in section.splitlines()
+            if l[:1].isdigit() and ". " in l]
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "a number not given is UNKNOWN, never estimated",
+        "reportable events are flagged for the statutory process first",
+        "no individual is blamed in a record",
+    ],
+)
+def test_safety_binding_rules_keep_their_clauses(clause, tmp_path):
+    from app.agents.runtime import _apply_hat_kernels
+
+    safety = catalog.get_hat(Discipline.SAFETY)
+    body, _ = _apply_hat_kernels("base body", [safety.id], tmp_path / "a.md")
+    rules = next(l for l in body.splitlines() if l.startswith("Binding rules:"))
+    assert clause in rules
+
+
+@pytest.mark.parametrize(
+    "proc_id,done_when",
+    [
+        ("s4", "Done when: no cause is asserted, the reportable flag is explicit."),
+        ("s6", "Done when: no individual is identifiable, one control is named."),
+    ],
+)
+def test_safety_done_when_is_rendered_whole(proc_id, done_when, tmp_path):
+    lines = _safety_section(proc_id, tmp_path).splitlines()
+    assert done_when in lines
+
+
+@pytest.mark.parametrize(
+    "proc_id,clause",
+    [
+        ("s5", "inventing exposure limits or distances"),
+        ("s5", "generic hazards unrelated to the described steps"),
+    ],
+)
+def test_job_safety_analysis_keeps_its_refusals(proc_id, clause, tmp_path):
+    section = _safety_section(proc_id, tmp_path)
+    refusals = next(l for l in section.splitlines() if l.startswith("Refusals: "))
+    assert clause in refusals
+
+
+@pytest.mark.parametrize(
+    "proc_id,position,step",
+    [
+        ("s4", 0, "flag reportable classes first with the plan's citation or UNKNOWN"),
+        ("s4", -1, "statistics (frequency rates) only from supplied hours and counts "
+                   "via the executor, with the formula shown"),
+        ("s6", 0, "what happened in three sentences"),
+        ("s6", -1, "the sign-in block"),
+    ],
+)
+def test_safety_steps_keep_their_order(proc_id, position, step, tmp_path):
+    assert _numbered(_safety_section(proc_id, tmp_path))[position] == step
+
+
+def _agents_wearing_executor_steps():
+    """Every agent config wearing a hat whose procedure steps send the model
+    to "the executor", with those hats."""
+    from app.agents.runtime import load_agents
+
+    out = []
+    for name, agent in sorted(load_agents().items()):
+        hats = [h for h in catalog.list_hats() if h.id in (agent.hats or [])
+                and any("the executor" in s for p in (h.playbook.procedures or [])
+                        for s in (p.steps or []))]
+        if hats:
+            out.append((name, agent))
+    return out
+
+
+def test_a_step_sending_the_model_to_the_executor_has_one_bound():
+    # A step that says "via the executor, with the formula shown" must reach a
+    # bound tool whose result is declared computed (code ran the figure), on
+    # every agent that wears it; otherwise the model states the figure itself.
+    from app.agents.core import tool_registry as tr
+
+    wearing = _agents_wearing_executor_steps()
+    assert len(wearing) >= 2
+    for name, agent in wearing:
+        computed = [t for t in agent.allowed_blocks
+                    if (tr.result_spec(t) is not None
+                        and tr.result_spec(t).kind == "computed")]
+        assert computed, name
