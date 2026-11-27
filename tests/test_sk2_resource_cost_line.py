@@ -568,3 +568,24 @@ def test_the_envelope_states_each_conversion_the_working_used(params, first):
         assert shown == [] and "converted_inputs" not in env
     # the result itself stays the figures of the calculation alone
     assert not any(line.startswith("Converted ") for line in env["result"]["working"])
+
+
+# --- the public entry takes its inputs as an object, or as an object written in JSON
+@pytest.mark.parametrize("params,total,shown", [
+    ('{"quantity": "640 m2", "consumption_per_unit": "22 L/m2", "price_per_resource_unit": "310 per m3"}',
+     4364.8, ["Converted cited price per resource unit: 310 per m³ = 0.31 per L"]),
+    ('{"quantity": 100, "consumption_per_unit": 35, "price_per_resource_unit": 2.8}', 9800.0, None),
+])
+def test_inputs_written_as_a_json_object_are_read_through_the_public_entry(params, total, shown):
+    from app.lib.construction_formulas import run_calculation
+    env = run_calculation("resource_cost_line", params)
+    assert env["status"] == "success", env
+    assert env["result"]["line_total"] == total
+    assert env.get("converted_inputs") == shown
+
+
+@pytest.mark.parametrize("params", ["not an object", 42, 3.5])
+def test_inputs_that_are_not_an_object_are_refused_as_such(params):
+    from app.lib.construction_formulas import run_calculation
+    env = run_calculation("resource_cost_line", params)
+    assert env == {"status": "error", "error": "params must be an object of keyword arguments."}
