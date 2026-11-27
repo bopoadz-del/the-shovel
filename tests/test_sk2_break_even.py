@@ -272,3 +272,73 @@ def test_a_figure_beyond_ten_digits_or_below_a_ten_thousandth_prints_in_full(
     assert (p, v) == pytest.approx((price, variable)) and c == pytest.approx(p - v)
     f, c2, units = _printed(w[1])[:3]
     assert f == pytest.approx(fixed) and units == pytest.approx(f / c2, rel=1e-9)
+
+
+def _cent_cases(seed: int):
+    # Price and variable cost with cents, and fixed costs that are exactly a
+    # whole number n of contributions, all built in whole cents.
+    rng = random.Random(seed)
+    for _ in range(300):
+        var_c = rng.randint(1, 50_000)
+        price_c = var_c + rng.randint(1, 50_000)
+        n = rng.randint(1, 20_000)
+        yield price_c / 100, var_c / 100, (price_c - var_c) * n / 100, n
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_expected_equal_to_break_even_with_cents_is_no_shortfall(seed):
+    for price, var, fixed, n in _cent_cases(seed):
+        out = break_even_point(fixed, price, var, expected_units=n)
+        assert out["units_to_cover_fixed_costs"] == n, (price, var, fixed, n)
+        assert out["break_even_units"] == n
+        assert out["margin_of_safety_percent"] == 0.0
+        assert math.copysign(1, out["margin_of_safety_percent"]) == 1
+        assert out["profit_at_expected"] == 0.0
+        assert math.copysign(1, out["profit_at_expected"]) == 1
+        assert "shortfall" not in out["working"][-1]
+        assert out["working"][-1].endswith("= 0.00%")
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_one_unit_below_break_even_with_cents_is_a_shortfall(seed):
+    for price, var, fixed, n in _cent_cases(seed):
+        if n < 2:
+            continue
+        out = break_even_point(fixed, price, var, expected_units=n - 1)
+        assert out["working"][-1].endswith("(below break-even: a shortfall)")
+        assert out["profit_at_expected"] < 0
+
+
+@pytest.mark.parametrize("inputs", [
+    dict(fixed_costs=3000, price_per_unit=0.30, variable_cost_per_unit=0.10,
+         expected_units=15000),
+    dict(fixed_costs=7000, price_per_unit=10.70, variable_cost_per_unit=3.70,
+         expected_units=1000),
+])
+def test_public_path_break_even_with_cents_is_exact(inputs):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("break_even_point", dict(inputs))
+    assert env["status"] == "success", env
+    res = env["result"]
+    assert res["units_to_cover_fixed_costs"] == inputs["expected_units"]
+    assert res["margin_of_safety_percent"] == 0.0
+    assert "shortfall" not in " ".join(res["working"])
+
+
+@pytest.mark.parametrize("divisor, start", [(3, 2 ** 54), (7, 2 ** 55)])
+def test_whole_units_come_from_the_exact_quotient_beyond_float_precision(divisor, start):
+    # Past 2**53 the float quotient can round down onto a whole number; the
+    # whole units to sell are the ceiling of the exact quotient (checked
+    # against fractions, an independent exact oracle).
+    from fractions import Fraction
+
+    found = 0
+    for fixed in range(start, start + 4000, 8):
+        exact = math.ceil(Fraction(repr(float(fixed))) / divisor)
+        if math.ceil(float(fixed) / divisor) == exact:
+            continue
+        out = break_even_point(fixed, divisor, 0)
+        assert out["units_to_cover_fixed_costs"] == exact, fixed
+        found += 1
+    assert found > 0

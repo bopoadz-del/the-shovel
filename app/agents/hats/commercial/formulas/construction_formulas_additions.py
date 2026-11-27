@@ -70,6 +70,13 @@ def _amount(x: float) -> str:
     return f"{x:,.2f}"
 
 
+def _as_written(x: float) -> Decimal:
+    """A figure as the caller wrote it (the shortest decimal that reads back
+    as the same float), so sums and quotients of figures with cents carry no
+    binary residue: 0.30 - 0.10 is 0.2, not 0.19999999999999998."""
+    return Decimal(repr(float(x)))
+
+
 def _figure(x: float) -> str:
     """A working figure written out in full: thousands separators, no
     exponent, every digit up to ten significant figures, so the figures a
@@ -126,17 +133,22 @@ def break_even_point(
     if expected_units is not None and float(expected_units) < 0:
         return {"error": "expected_units must be >= 0."}
 
-    contribution = price - var
+    # Exact decimal arithmetic on the figures as written: a residue would put
+    # the break-even a hair above a whole quantity and call an expected
+    # volume equal to it a shortfall.
+    contribution_d = _as_written(price) - _as_written(var)
+    contribution = float(contribution_d)
     working = [(f"Contribution per unit = price {_figure(price)} - variable cost "
                 f"{_figure(var)} = {_figure(contribution)}")]
     q = None if expected_units is None else float(expected_units)
+    q_d = None if q is None else _as_written(q)
 
     def _profit_at_expected(out: dict) -> None:
         # Stated on both sides of the domain condition: below it the
         # expected volume makes a loss, and that loss is the answer.
         if q is None:
             return
-        profit = q * contribution - fixed
+        profit = float(q_d * contribution_d - _as_written(fixed))
         working.append(f"Profit at {_figure(q)} units = {_figure(q)} x "
                        f"{_figure(contribution)} - {_figure(fixed)} = {_amount(profit)}")
         out["profit_at_expected"] = round(profit, 2)
@@ -151,8 +163,9 @@ def break_even_point(
         out["working"] = working
         return out
 
-    units = fixed / contribution
-    whole = math.ceil(units - 1e-9)
+    units_d = _as_written(fixed) / contribution_d
+    units = float(units_d)
+    whole = math.ceil(units_d)
     revenue = units * price
     ratio = contribution / price
     working += [
@@ -171,12 +184,12 @@ def break_even_point(
     _profit_at_expected(out)
     if q is not None:
         if q > 0:
-            margin = (q - units) / q
-            out["margin_of_safety_units"] = round(q - units, 4)
+            margin = float((q_d - units_d) / q_d)
+            out["margin_of_safety_units"] = round(float(q_d - units_d), 4)
             out["margin_of_safety_percent"] = round(margin * 100.0, 2)
             working.append(
                 f"Margin of safety = ({_figure(q)} - {_figure(units)}) / {_figure(q)} "
                 f"= {margin:.2%}"
-                + (" (below break-even: a shortfall)" if q < units else ""))
+                + (" (below break-even: a shortfall)" if q_d < units_d else ""))
     out["working"] = working
     return out
