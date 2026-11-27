@@ -164,8 +164,14 @@ def _tool_entries() -> List[Dict[str, Any]]:
     from app.agents.core import tool_registry
 
     tool_registry.load()
+    # Only what the driver path offers: a tool that declares it is not for
+    # this path is neither indexed nor explained (the same declaration the
+    # tool list and the executor read).
+    offered = set(tool_registry.driver_tools())
     out = []
     for name, spec in sorted(tool_registry._TOOLS.items()):
+        if name not in offered:
+            continue
         described = ((spec.schema or {}).get("function") or {}).get("description") or ""
         entry = _entry(
             "tool", name, name=spec.display_name,

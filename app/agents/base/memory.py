@@ -1,12 +1,14 @@
 """The model's own JSON memory as three tools: ``write_memory``,
 ``read_memory``, ``list_memory`` (store: ``app.core.llm_memory``).
 
-A note is how to work -- paths that worked, which tool answers which kind of
-question, what to ask first -- never a figure: figures come from the tools at
-answer time. The project is the turn's, never an argument. Nothing here puts
-a note into a prompt; the model gets one only as the result of its own call,
-labelled as its note with the date it was written. Every call returns a
-``trace`` entry (operation, name, size, turn) the turn's trace record keeps.
+What a note is, the model reads in one text (``NOTES_ARE``): every tool
+description and the list result carry it, never a second wording. A note is
+how to work, or what the user told the model to keep, marked in the note's
+own JSON (``llm_memory.TOLD_BY_USER``). The project is the turn's, never an
+argument. Nothing here puts a note into a prompt; the model gets one only as
+the result of its own call, labelled with the date it was written and
+whether the owner verified it. Every call returns a ``trace`` entry
+(operation, name, size, turn) the turn's trace record keeps.
 """
 from __future__ import annotations
 
@@ -23,14 +25,16 @@ _NAME = {
                    "'.json' optional.",
 }
 
-_NOTES_NOT_FACTS = (
+#: What notes are, the one text the model reads it in.
+NOTES_ARE = (
     "Your memory holds YOUR NOTES for this project: how to work in it (paths that "
     "worked, which tool answers which kind of question, what to ask the user first) "
-    "and what the user tells you to remember about the project, written as told by "
-    "the user. A note is not verified until the owner keeps it; an answer that uses a "
-    "note says it comes from the notes and whether it is verified. Calculated figures "
-    "always come from the tools at answer time, never from a note. Notes belong to this "
-    "project only.")
+    "and what the user tells you to remember about the project, in a note whose "
+    f'object carries "{llm_memory.TOLD_BY_USER}": true. A note is not verified until '
+    "the owner keeps it; an answer that uses a note says it comes from the notes and "
+    "whether it is verified. A figure from a note the user told you is shown as told "
+    "by the user, never as verified; calculated figures always come from the tools at "
+    "answer time, never from a note. Notes belong to this project only.")
 
 
 def _fn(name: str, description: str, properties: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,7 +52,7 @@ def _fn(name: str, description: str, properties: Dict[str, Any]) -> Dict[str, An
 
 WRITE_SCHEMA = _fn(
     "write_memory",
-    _NOTES_NOT_FACTS + " Writes the whole note named `name`, replacing any note of that "
+    NOTES_ARE + " Writes the whole note named `name`, replacing any note of that "
                        "name. Read it first if you mean to add to it.",
     {"name": _NAME,
      "data": {"type": "string",
@@ -56,12 +60,12 @@ WRITE_SCHEMA = _fn(
 
 READ_SCHEMA = _fn(
     "read_memory",
-    _NOTES_NOT_FACTS + " Returns the note named `name` with the date it was written.",
+    NOTES_ARE + " Returns the note named `name` with the date it was written.",
     {"name": _NAME})
 
 LIST_SCHEMA = _fn(
     "list_memory",
-    _NOTES_NOT_FACTS + " Lists the names of your notes in this project, with their size "
+    NOTES_ARE + " Lists the names of your notes in this project, with their size "
                        "and the date each was written.",
     {})
 
@@ -88,9 +92,11 @@ def _refused(call: ToolCall, op: str, error: str, name: Any = None) -> dict:
                       "bytes": 0, "turn": turn_of(call), "ok": False}}
 
 
-def _label(written_at: str, review: str) -> str:
-    return (f"Your own note, written {written_at[:10]}, {llm_memory.verified_words(review)}. "
-            "From the project notes, not from a document or a calculation.")
+def _label(written_at: str, review: str, told: bool) -> str:
+    """The note's own record in words: when it was written, whether the user
+    told it, whether the owner verified it."""
+    by = "told by the user" if told else "not marked as told by the user"
+    return f"Your own note, written {written_at[:10]}, {by}, {llm_memory.verified_words(review)}."
 
 
 @tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={
@@ -120,9 +126,11 @@ async def handle_read_memory(call: ToolCall) -> dict:
         note = await off_loop(llm_memory.read, call.project_id or "", name)
     except llm_memory.MemoryRefused as exc:
         return _refused(call, "read", str(exc), name)
+    told = llm_memory.told_by_user(note["data"])
     return {"name": call.name, "ok": True,
-            "result": {"status": "success", "note": _label(note["written_at"], note.get("review", "")),
-                       "name": note["name"], "written_at": note["written_at"], "data": note["data"]},
+            "result": {"status": "success", "note": _label(note["written_at"], note.get("review", ""), told),
+                       "name": note["name"], "written_at": note["written_at"],
+                       "told_by_user": told, "data": note["data"]},
             "trace": {"memory": "read", "name": note["name"], "bytes": note["bytes"],
                       "turn": turn_of(call), "ok": True}}
 
@@ -135,7 +143,7 @@ async def handle_list_memory(call: ToolCall) -> dict:
         return _refused(call, "list", str(exc))
     return {"name": call.name, "ok": True,
             "result": {"status": "success",
-                       "note": "Your own notes in this project: how to work, not facts.",
+                       "note": NOTES_ARE,
                        "notes": [{"name": n["name"], "bytes": n["bytes"], "written_at": n["written_at"]}
                                  for n in notes]},
             "trace": {"memory": "list", "name": None, "bytes": sum(n["bytes"] for n in notes),

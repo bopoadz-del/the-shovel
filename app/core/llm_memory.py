@@ -157,6 +157,17 @@ def _not_json_constant(token: str) -> Any:
     raise ValueError(f"{token} is not a JSON number")
 
 
+#: The field of a note's object that marks what it holds as told by the
+#: user (true or false). A field of the note itself, no column: the note's
+#: own record says it, and a read hands it back with the note.
+TOLD_BY_USER = "told_by_user"
+
+
+def told_by_user(data: Any) -> bool:
+    """True when the note ``data`` is marked as told by the user."""
+    return isinstance(data, dict) and data.get(TOLD_BY_USER) is True
+
+
 def parse_data(data: Any) -> Tuple[str, Any]:
     """``(json_text, value)`` for a document: a JSON object or array, given
     as such or as JSON text. Anything else is refused."""
@@ -174,6 +185,9 @@ def parse_data(data: Any) -> Tuple[str, Any]:
                                "send the whole document as a JSON object") from None
     if not isinstance(value, (dict, list)):
         raise MemoryRefused("data must be a JSON object or array (the whole document)")
+    if isinstance(value, dict) and TOLD_BY_USER in value and not isinstance(value[TOLD_BY_USER], bool):
+        raise MemoryRefused(f"{TOLD_BY_USER} must be true or false (true: the user told you "
+                           "what this note holds)")
     if nested_deeper_than(value, max_depth()):
         # Before it is written out: a document this deep is refused, never
         # stored as a note no later turn could read back.

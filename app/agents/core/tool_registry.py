@@ -141,6 +141,9 @@ class ToolSpec:
     #: Offered on the driver path. A tool whose store the driver path does
     #: not read back declares False where it is defined.
     driver: bool = True
+    #: For a tool not offered on the driver path: the tool that does its
+    #: work there, named in the refusal the model reads if it calls it.
+    driver_instead: str = ""
 
 
 _TOOLS: Dict[str, ToolSpec] = {}
@@ -153,7 +156,7 @@ def tool(name: str, *, owner: str, display_name: str,
          reason_codes: Tuple[str, ...] = (),
          when_to_use: str = "", when_not: str = "",
          examples: Tuple[Dict[str, Any], ...] = (),
-         driver: bool = True) -> Callable[[Handler], Handler]:
+         driver: bool = True, driver_instead: str = "") -> Callable[[Handler], Handler]:
     from app.lib.formula_registry import declared_examples
 
     if owner not in OWNERS:
@@ -164,6 +167,8 @@ def tool(name: str, *, owner: str, display_name: str,
         raise ValueError(f"tool {name!r}: unknown result kind {kind!r}; one of {RESULT_KINDS}")
     if (kind == "computed") != (statement is not None):
         raise ValueError(f"tool {name!r}: a computed tool, and only a computed tool, declares a statement")
+    if driver and driver_instead:
+        raise ValueError(f"tool {name!r}: only a tool not offered on the driver path names one instead")
     codes = _reason_codes("tool", name, reason_codes)
     shown = declared_examples("tool", name, examples)
 
@@ -175,7 +180,7 @@ def tool(name: str, *, owner: str, display_name: str,
                                 dict(params) if params is not None else None,
                                 kind, statement, codes,
                                 (when_to_use or "").strip(), (when_not or "").strip(), shown,
-                                bool(driver))
+                                bool(driver), (driver_instead or "").strip())
         return fn
     return register
 
@@ -413,6 +418,19 @@ def driver_tools() -> List[str]:
     """Every registered tool the driver path offers (each declares it)."""
     load()
     return sorted(n for n, s in _TOOLS.items() if s.driver)
+
+
+def driver_refusal(name: Any) -> str:
+    """Why the driver path does not run ``name``, as the model reads it in
+    the call's result: empty when it may run it. The tool's own ``driver``
+    declaration decides, the same one ``driver_tools`` reads; a name that
+    is not a registered tool is not this function's to refuse."""
+    load()
+    spec = _TOOLS.get(name) if isinstance(name, str) else None
+    if spec is None or spec.driver:
+        return ""
+    instead = f" Use {spec.driver_instead} instead." if spec.driver_instead else ""
+    return f"{name} is not offered on this path and did not run; nothing was stored.{instead}"
 
 
 _loaded = False

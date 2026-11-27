@@ -435,6 +435,20 @@ def _working_document_records(text: str) -> list[EvidenceRecord]:
     return records
 
 
+def _told_note_records(content: Any) -> list[EvidenceRecord]:
+    """One record for a notes tool result whose own result says it is told
+    by the user (``told_by_user``), holding the note's data; none otherwise."""
+    try:
+        payload = json.loads(content or "")
+    except (TypeError, ValueError):
+        return []
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict) or result.get("told_by_user") is not True or "data" not in result:
+        return []
+    return [EvidenceRecord(kind="user_note", text=json.dumps(result["data"], ensure_ascii=False),
+                           source_class="user_note")]
+
+
 def _is_notes(name: Any) -> bool:
     from app.agents.core.tool_registry import is_notes
 
@@ -462,7 +476,11 @@ def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[Evidence
         elif role == "tool":
             name = m.get("name") or None
             if _is_notes(name):
-                # The model's own notes are never evidence for a figure.
+                # The model's own notes are never evidence for a figure, save
+                # what the user told: a note the read's own result marks as
+                # told by the user backs the figures it holds as the user's,
+                # from the notes (never as a document or a calculation).
+                records.extend(_told_note_records(m.get("content")))
                 continue
             tid = str(m.get("tool_call_id") or "")
             text = str(m.get("content") or "")
@@ -1683,6 +1701,7 @@ def figure_provenance(
         for rec in ev.records:
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
+        told_vals = {n for rec in ev.records if rec.kind == "user_note" for n in _nums(rec.text)}
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         # B11: the words of the ask a cited sentence must name when a chunk
         # carries competing figures in the same unit. Derived only on the
@@ -1854,6 +1873,8 @@ def figure_provenance(
                         break
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
+            if entry is None and _match(value, _rescaled(told_vals)):
+                entry = {"figure": fig, "source": pt.SOURCE_USER_NOTE, "doc_name": pt.USER_NOTE_LABEL}
             if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:

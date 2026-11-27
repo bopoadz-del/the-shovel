@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
+from app.agents.core import tool_registry
 from app.agents.core.tool_registry import is_notes
 from app.agents.driver import catalogue, context, llm, render, routes, sheet, sources, tools, trace_record, trace_store
 from app.core import turn_progress
@@ -360,6 +361,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     failed: List[tuple] = []  # (tool, its own error) of every run that failed
     succeeded = False  # any tool run this turn came back ok
     user_numbers = set(_NUMBER.findall(user_message or ""))
+    # Figures of notes read back this turn that the note's own record marks
+    # as told by the user: the user's numbers too, from an earlier chat.
+    told_numbers: set = set()
     evidence: List[Dict[str, Any]] = []  # tool results, whole, for the exit check
     exports: List[Dict[str, Any]] = []
     yield {"type": "start", "mode": "driver", "agent": agent.name}
@@ -412,7 +416,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 return None
             sent.append(piece)
             return {"type": "token", "content": piece}
-        if model_text and failed and not succeeded and set(_NUMBER.findall(piece)) - user_numbers:
+        if model_text and failed and not succeeded and set(_NUMBER.findall(piece)) - user_numbers - told_numbers:
             # Every tool this turn failed: nothing backs a number the user
             # did not write, bare counts included ("0 items were found").
             if opening or not has_words("".join(sent)):
@@ -540,6 +544,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             args, unreadable = _args(call)
             yield turn_progress.tool_call({"type": "tool_call", "tool": name, "name": name,
                                             "args_preview": json.dumps(args)[:200]})
+            not_offered = tool_registry.driver_refusal(name)
             if unreadable:
                 result_of_call: Dict[str, Any] = {"ok": False, "error": unreadable}
             elif name == tools.SELECT_HAT:
@@ -594,6 +599,11 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     refused.pop(workflow, None)
                 elif result_of_call.get("missing"):
                     refused[workflow] = result_of_call
+            elif not_offered:
+                # Not offered on this path (the tool's own declaration): a
+                # call the model makes anyway is refused in words it can act
+                # on, and nothing runs.
+                result_of_call = {"ok": False, "error": not_offered}
             else:
                 used.append(name)
                 result_of_call = await agent._run_tool_call(call, api_key, project_id, conversation_id,
@@ -625,7 +635,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 # only, with counts of the ids it was not given: read from the
                 # lookup's result, with no second pass over the catalogue.
                 call_record.update(catalogue.read_ids(result_of_call))
-            if name not in (tools.SELECT_HAT, catalogue.LOOKUP):
+            # A refused call that never ran is neither a run that worked nor
+            # one that failed: the model read the refusal and goes on.
+            if name not in (tools.SELECT_HAT, catalogue.LOOKUP) and not not_offered:
                 if ok:
                     # The model's own notes back no figure: a note that was
                     # read or written does not stand in for a tool that ran.
@@ -643,6 +655,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     if error:
                         failed.append((shown_name, error))
             yield {"type": "tool_result", "tool": name, "name": name, "ok": ok}
+            told = result_of_call.get("result") if ok and is_notes(name) else None
+            if isinstance(told, dict) and told.get("told_by_user") is True:
+                told_numbers.update(_NUMBER.findall(json.dumps(told.get("data"), ensure_ascii=False)))
             full = json.dumps(result_of_call, default=str)
             tool_msg = {"role": "tool", "name": name, "tool_call_id": call.get("id") or name}
             # The model gets at most _TOOL_RESULT_CHARS of a result; the exit
