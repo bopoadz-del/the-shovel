@@ -883,3 +883,17 @@ def test_a_label_with_no_bill_in_it_collects_no_unnamed_row(label, unnamed):
                               tolerance=0)["bills"]
     assert (bill["rows"], bill["rows_unplaced"], bill["state"]) == (
         0, unnamed, bpr.STATE_NOT_CHECKED)
+
+
+@pytest.mark.parametrize("sum_line, printed, want", [
+    (_carried(50), 51, bpr.STATE_RECONCILED),
+    ({"type": "total", "description": "page total", "amount": 51}, 52, bpr.STATE_FAILED),
+])
+def test_a_sum_line_naming_no_bill_inside_the_range_unplaces_nothing(sum_line, printed, want):
+    """Only an item line can be a bill's unplaced row: a carried or total line
+    on the bill's own page that names no bill leaves the bill checked."""
+    rows = _rows({"1": [_item("A", 10, 5, 50, bill="b"), sum_line],
+                  "2": [_item("B", 1, 1, 1, bill="b")]})
+    (bill,) = bpr.bill_states(rows, [], spans=[bpr.BillSpan("b", 1, 2, printed)],
+                              tolerance=0)["bills"]
+    assert (bill["rows_unplaced"], bill["state"]) == (0, want)
