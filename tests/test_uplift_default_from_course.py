@@ -221,3 +221,36 @@ def test_the_description_says_why_when_the_entry_cannot_be_applied(tmp_path, mon
     row = next(r for r in env["expected_params"] if r["name"] == "required_fos")
     assert row["default_from"].startswith(f"from knowledge entry {_entry_id()}, which cannot be applied: ")
     assert "states 7, outside" in row["default_from"]
+
+
+@pytest.mark.parametrize("words", ["from knowledge entry a.one (1.2)", "from knowledge entry b.two (3)"])
+def test_a_stated_default_reads_as_its_words(words):
+    from app.lib.construction_formulas import _StatedDefault
+
+    assert repr(_StatedDefault(words)) == f"<{words}>"
+    # the two methods by name, so the mutation gate selects this test for them
+    d = _StatedDefault.__new__(_StatedDefault)
+    d.__init__(words)
+    assert d.__repr__() == f"<{words}>"
+
+
+@pytest.mark.parametrize("stated", [1.1, 2.5])
+def test_signature_text_shows_the_entry_in_place_of_the_placeholder(tmp_path, monkeypatch, stated):
+    from app.lib.construction_formulas import _signature_text
+
+    _kb_stating(tmp_path, monkeypatch, stated)
+    text = _signature_text("dewatering_uplift_check", dewatering_uplift_check)
+    assert text.startswith("dewatering_uplift_check(water_depth")
+    assert f"required_fos: 'Optional[float]' = <from knowledge entry {_entry_id()} ({stated:g})>" in text
+    assert "= None" not in text and "floor_thickness: 'float' = 0.3" in text
+
+
+@pytest.mark.parametrize("fn_name", ["concrete_curing_time", "concrete_cylinders"])
+def test_signature_text_leaves_a_calculator_with_no_knowledge_default_as_is(fn_name):
+    import inspect
+
+    from app.lib import formula_registry
+    from app.lib.construction_formulas import _signature_text
+
+    spec = next(s for s in formula_registry.all_specs() if s.name == fn_name)
+    assert _signature_text(fn_name, spec.fn) == f"{fn_name}{inspect.signature(spec.fn)}"
