@@ -138,6 +138,9 @@ class ToolSpec:
     when_to_use: str = ""
     when_not: str = ""
     examples: Tuple[Dict[str, Any], ...] = ()
+    #: Offered on the driver path. A tool whose store the driver path does
+    #: not read back declares False where it is defined.
+    driver: bool = True
 
 
 _TOOLS: Dict[str, ToolSpec] = {}
@@ -149,7 +152,8 @@ def tool(name: str, *, owner: str, display_name: str,
          statement: Optional[Stater] = None,
          reason_codes: Tuple[str, ...] = (),
          when_to_use: str = "", when_not: str = "",
-         examples: Tuple[Dict[str, Any], ...] = ()) -> Callable[[Handler], Handler]:
+         examples: Tuple[Dict[str, Any], ...] = (),
+         driver: bool = True) -> Callable[[Handler], Handler]:
     from app.lib.formula_registry import declared_examples
 
     if owner not in OWNERS:
@@ -170,7 +174,8 @@ def tool(name: str, *, owner: str, display_name: str,
         _TOOLS[name] = ToolSpec(name, owner, fn, display_name.strip(), schema,
                                 dict(params) if params is not None else None,
                                 kind, statement, codes,
-                                (when_to_use or "").strip(), (when_not or "").strip(), shown)
+                                (when_to_use or "").strip(), (when_not or "").strip(), shown,
+                                bool(driver))
         return fn
     return register
 
@@ -402,6 +407,12 @@ def tools_of_kind(kind: str) -> List[str]:
 def tools_of(owner: str) -> List[str]:
     load()
     return sorted(n for n, s in _TOOLS.items() if s.owner == owner)
+
+
+def driver_tools() -> List[str]:
+    """Every registered tool the driver path offers (each declares it)."""
+    load()
+    return sorted(n for n, s in _TOOLS.items() if s.driver)
 
 
 _loaded = False

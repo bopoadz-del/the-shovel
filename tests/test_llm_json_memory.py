@@ -384,8 +384,10 @@ def test_the_turn_is_the_conversation_and_the_users_message_number(history, conv
 @pytest.mark.parametrize("written_at", ["2026-11-27T10:00:00+00:00", "2025-01-02T23:59:59+00:00"])
 def test_a_read_note_is_labelled_with_its_own_date(written_at):
     from app.agents.base import memory
-    label = memory._label(written_at)
-    assert label == f"Your own note, written {written_at[:10]}. A note on how to work, not a fact."
+    for review, words in (("", "not verified by the owner"), ("kept", "kept by the owner (verified)")):
+        label = memory._label(written_at, review)
+        assert label == (f"Your own note, written {written_at[:10]}, {words}. "
+                         "From the project notes, not from a document or a calculation.")
 
 
 @pytest.mark.parametrize("name,data", NOTES)
@@ -407,7 +409,7 @@ def test_the_three_handlers_write_read_and_list_with_a_trace(name, data):
     assert again["result"]["replaced"] is True
     got = asyncio.run(memory.handle_read_memory(_toolcall("read_memory", {"name": name}, pid)))
     assert got["ok"] is True and got["result"]["data"] == data
-    assert got["result"]["note"] == memory._label(got["result"]["written_at"])
+    assert got["result"]["note"] == memory._label(got["result"]["written_at"], "")
     assert got["trace"] == {"memory": "read", "name": stem, "bytes": size, "turn": "conv-a#1", "ok": True}
     listed = asyncio.run(memory.handle_list_memory(_toolcall("list_memory", {}, pid)))
     assert [n["name"] for n in listed["result"]["notes"]] == [stem]
@@ -1038,3 +1040,91 @@ def test_write_takes_the_new_note_lock_for_a_new_note_and_not_for_a_replace(monk
     assert taken == [pid]
     assert llm_memory.write(pid, name, '{"v": 2}', "t#2")["created"] is False
     assert taken == [pid]
+
+
+# -- one place, and it comes back (order 27 Nov 15:22Z) ----------------------
+
+TOLD = [
+    ("site", {"datum": "+2.35 m", "told_by": "user"}),
+    ("week", {"working_week": "Saturday to Thursday", "told_by": "user"}),
+]
+
+
+@pytest.mark.parametrize("name,data", TOLD)
+def test_the_driver_path_offers_one_memory_and_not_the_facts_tool(client, monkeypatch, name, data):
+    h = _user(client, "one")
+    pid = _project(client, h, f"One place {name}")
+    _, seen = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": name, "data": json.dumps(data)})
+    assert "write_memory" in seen[0]["tools"]
+    assert "remember_fact" not in seen[0]["tools"]
+
+
+@pytest.mark.parametrize("name,data", TOLD)
+def test_a_new_conversation_starts_with_the_notes_index_not_their_content(client, monkeypatch, name, data):
+    h = _user(client, "idx")
+    pid = _project(client, h, f"Index {name}")
+    other = _project(client, h, f"Index other {name}")
+    _run_one(client, monkeypatch, h, pid, "write_memory", {"name": name, "data": json.dumps(data)})
+    seen = []
+    _script(monkeypatch, [{"content": "ok"}], seen)
+    assert _turn(client, h, pid).status_code == 200
+    system = seen[0]["messages"][0]["content"]
+    line = next(x for x in system.splitlines() if x.startswith(f"- {name} | "))
+    assert line.endswith("| not verified by the owner")
+    assert list(data.values())[0] not in system
+    seen.clear()
+    _script(monkeypatch, [{"content": "ok"}], seen)
+    assert _turn(client, h, other).status_code == 200
+    assert f"- {name} | " not in seen[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("decision,listed,words", [
+    ("keep", True, "kept by the owner (verified)"), ("discard", False, None)])
+def test_the_index_shows_the_owners_mark_and_leaves_a_discarded_note_out(decision, listed, words):
+    from app.agents.driver import context
+    pid = f"idx-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "datum", json.dumps({"datum": decision}))
+    llm_memory.write(pid, "other", json.dumps([1]))
+    note = next(n for n in llm_memory.listing(pid, with_review=True) if n["name"] == "datum")
+    llm_memory.review(pid, "datum", decision, note["version"])
+    index = context.notes_index(pid)
+    assert "- other | " in index
+    line = [x for x in index.splitlines() if x.startswith("- datum | ")]
+    assert bool(line) is listed
+    if listed:
+        assert line[0].endswith("| " + words)
+
+
+@pytest.mark.parametrize("pid", [None, ""])
+def test_no_project_or_no_note_gives_no_index(pid):
+    from app.agents.driver import context
+    assert context.notes_index(pid) == ""
+    assert context.notes_index(f"empty-{uuid.uuid4().hex[:8]}") == ""
+
+
+@pytest.mark.parametrize("first,second", [({"week": "Saturday to Thursday"}, {"week": "Sunday to Thursday"}),
+                                          ({"datum": "+2.35 m"}, {"datum": "+2.40 m"})])
+def test_a_correction_replaces_the_note_and_the_old_value_is_not_returned(first, second):
+    pid = f"fix-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "told", json.dumps(first))
+    note = llm_memory.listing(pid, with_review=True)[0]
+    llm_memory.review(pid, "told", "keep", note["version"])
+    llm_memory.write(pid, "told", json.dumps(second))
+    got = llm_memory.read(pid, "told")
+    assert got["data"] == second
+    # The owner kept the old value; the correction is not verified until kept again.
+    assert got["review"] == ""
+
+
+@pytest.mark.parametrize("driver,offered", [(True, True), (False, False)])
+def test_a_tool_declares_whether_the_driver_path_offers_it(monkeypatch, driver, offered):
+    from app.agents.core import tool_registry
+    name = f"probe_tool_{uuid.uuid4().hex[:6]}"
+    monkeypatch.setattr(tool_registry, "_TOOLS", dict(tool_registry._TOOLS))
+
+    @tool_registry.tool(name, owner="base", display_name="Probe", driver=driver)
+    async def _h(call):
+        return {}
+    assert (name in tool_registry.driver_tools()) is offered
+    assert name in tool_registry.tools_of("base")
+

@@ -396,7 +396,11 @@ async def handle_bill_rows_aggregate(call: ToolCall) -> dict:
     return {"name": name, "ok": result.get("status") == "success", "result": result}
 
 
-@tool("remember_fact", owner="base", display_name='Project memory', params={
+# Not offered on the driver path: there, what the user tells the model to
+# keep goes into the model's own notes (app.agents.base.memory), the one
+# store a later turn can read back and the owner can keep or discard.
+# This store's rows reach a prompt only on the other path, once verified.
+@tool("remember_fact", owner="base", display_name='Project memory', driver=False, params={
     "key": Param(label="fact name", kind="text", required=True),
     "value": Param(label="fact", kind="text", required=True),
 })

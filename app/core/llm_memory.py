@@ -278,6 +278,12 @@ def write_retrying(project_id: str, name: Any, data: Any, turn: str = "") -> Dic
         return write(project_id, name, data, turn)
 
 
+def verified_words(review: str) -> str:
+    """Whether the owner verified a note, in words: only a note the owner
+    kept is verified."""
+    return "kept by the owner (verified)" if review == DECISIONS["keep"] else "not verified by the owner"
+
+
 def read(project_id: str, name: Any) -> Dict[str, Any]:
     if not project_id:
         raise MemoryRefused("memory needs a project; this conversation has none")
@@ -288,7 +294,8 @@ def read(project_id: str, name: Any) -> Dict[str, Any]:
         if row is None or row.review == DISCARDED:
             raise MemoryRefused(f"no note named {stem!r} in this project (list_memory shows them)")
         return {"name": row.name, "data": json.loads(row.data), "bytes": row.size_bytes,
-                "written_at": row.written_at, "written_by_turn": row.written_by_turn}
+                "written_at": row.written_at, "written_by_turn": row.written_by_turn,
+                "review": row.review}
 
 
 def listing(project_id: str, with_data: bool = False,

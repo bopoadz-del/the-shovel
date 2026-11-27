@@ -24,10 +24,13 @@ _NAME = {
 }
 
 _NOTES_NOT_FACTS = (
-    "Your memory holds YOUR OWN NOTES on how to work in this project: paths that "
-    "worked, which tool answers which kind of question, what to ask the user first. "
-    "It is not a source of facts: figures always come from the tools at answer time, "
-    "never from a note. Notes belong to this project only.")
+    "Your memory holds YOUR NOTES for this project: how to work in it (paths that "
+    "worked, which tool answers which kind of question, what to ask the user first) "
+    "and what the user tells you to remember about the project, written as told by "
+    "the user. A note is not verified until the owner keeps it; an answer that uses a "
+    "note says it comes from the notes and whether it is verified. Calculated figures "
+    "always come from the tools at answer time, never from a note. Notes belong to this "
+    "project only.")
 
 
 def _fn(name: str, description: str, properties: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,8 +88,9 @@ def _refused(call: ToolCall, op: str, error: str, name: Any = None) -> dict:
                       "bytes": 0, "turn": turn_of(call), "ok": False}}
 
 
-def _label(written_at: str) -> str:
-    return f"Your own note, written {written_at[:10]}. A note on how to work, not a fact."
+def _label(written_at: str, review: str) -> str:
+    return (f"Your own note, written {written_at[:10]}, {llm_memory.verified_words(review)}. "
+            "From the project notes, not from a document or a calculation.")
 
 
 @tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={
@@ -117,7 +121,7 @@ async def handle_read_memory(call: ToolCall) -> dict:
     except llm_memory.MemoryRefused as exc:
         return _refused(call, "read", str(exc), name)
     return {"name": call.name, "ok": True,
-            "result": {"status": "success", "note": _label(note["written_at"]),
+            "result": {"status": "success", "note": _label(note["written_at"], note.get("review", "")),
                        "name": note["name"], "written_at": note["written_at"], "data": note["data"]},
             "trace": {"memory": "read", "name": note["name"], "bytes": note["bytes"],
                       "turn": turn_of(call), "ok": True}}
