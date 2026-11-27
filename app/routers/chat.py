@@ -1356,6 +1356,11 @@ async def chat_stream_v1(
     session_id = body.get("session_id", "default")
     history = body.get("history", []) or []
     project_id = body.get("project_id")
+    if project_id:
+        # A project on the catalogue path (its profile's answer_path) takes
+        # the driver for this turn: marked before any shortcut can run.
+        from app.core.offload import off_loop as _sheet_off_loop
+        driver.mark_project(await _sheet_off_loop(driver.catalogue_path, project_id, auth.get("user_id")))
     # ── / agent-picker: the user can pin a specific agent for this turn. A
     # pinned agent (anything other than unset / "auto") bypasses BOTH the
     # predefined shortcut AND the smart-orchestrator auto-override — the user's

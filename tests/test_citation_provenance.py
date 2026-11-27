@@ -438,3 +438,362 @@ def test_inline_separators_on_a_non_table_line_survive_the_strip():
     assert "BOQ context" not in body
     assert "AB-2022-202" not in body
     assert body == "Activities: 204 | Working days: 721"
+
+
+@pytest.mark.parametrize("number,pool,passages,expected", [
+    (4321.0, {55.0, 2.0}, [[10.0, 20.0]], False),   # in neither: the model's own number
+    (55.0, {55.0, 2.0}, [], True),                  # the user wrote it
+    (20.0, set(), [[10.0, 20.0]], True),            # a retrieved passage carries it
+    (987.5, set(), [], False),
+    (-43.0, {-43.0}, [], True),                     # given with its sign
+    (-43.0, {43.0}, [], False),                     # the sign was turned: nobody gave -43
+    (43.0, {-43.0}, [], False),                     # nor +43 when -43 was given
+    (-20.0, set(), [[10.0, -20.0]], True),
+    (-20.0, set(), [[10.0, 20.0]], False),
+])
+def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number, pool, passages, expected):
+    from app.agents.citation_provenance import _given_to_us
+
+    assert _given_to_us(number, pool, passages) is expected
+
+
+@pytest.mark.parametrize("message,number,expected", [
+    ("the trench is 40 m long and 1.5 m wide", 40.0, "user"),
+    ("the trench is 40 m long and 1.5 m wide", 1.5, "user"),
+    ("the trench is 40 m long and 1.5 m wide", 4321.0, ""),
+    ("work it out again", 40.0, ""),
+])
+def test_given_check_holds_a_number_to_the_messages_so_far(message, number, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number) == expected
+
+
+@pytest.mark.parametrize("text,figures", [
+    ("The formation level is -43 m. It rises by 10 m.", [-43.0, 10.0]),
+    ("between 40-43 m, grid B-12", [40.0, 43.0, 12.0]),          # a range and a compound: no minus
+    ("depth .5 m and -.25", [0.5, -0.25]),                        # a decimal written without its zero
+    ("level \u22127 m then +2.5", [-7.0, 2.5]),                    # the typographic minus
+    ("15 x 8 x -0.2, rate 1,250 per m", [15.0, 8.0, -0.2, 1250.0]),
+    ("no figure here", []), ("", []), (None, []),
+])
+def test_given_figures_reads_each_figure_with_the_sign_it_was_written_with(text, figures):
+    from app.agents.citation_provenance import _given_figures
+
+    assert _given_figures(text) == figures
+
+
+@pytest.mark.parametrize("message,number,expected", [
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", 43.0, ""),       # the sign turned
+    ("The formation level is 43 m. Lower it by 10 m.", -43.0, ""),
+    ("The pipe is 40-43 m long, .5 m deep.", 43.0, "user"),
+    ("The pipe is 40-43 m long, .5 m deep.", 0.5, "user"),
+    ("The pipe is 40-43 m long, .5 m deep.", -43.0, ""),
+])
+def test_given_check_holds_a_number_to_its_sign_as_the_user_wrote_it(message, number, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number) == expected
+
+
+@pytest.mark.parametrize("produced,number,expected", [([{120.0}], 120.0, True), ([{120.0}], 121.0, False),
+                                                      ([], 120.0, False)])
+def test_given_pools_take_user_numbers_produced_numbers_and_passages(produced, number, expected):
+    from app.agents.citation_provenance import _given_pools, _given_to_us, build_evidence
+
+    ev = build_evidence(None, [{"role": "user", "content": "rate 67 per m3"}], tool_passages=True)
+    pool, passages = _given_pools(ev, produced)
+    assert _given_to_us(67.0, pool, passages) is True
+    assert _given_to_us(number, pool, passages) is expected
+
+
+# --- a given is held to the QUANTITY that was written, not to its number alone ---
+
+@pytest.mark.parametrize("text,quantities", [
+    ("A trench is 12 m long, 3 m wide and 2 m deep.", [(12.0, "m"), (3.0, "m"), (2.0, "m")]),
+    ("The formation level is -43 m. Raise it by 10 m: what now?", [(-43.0, "m"), (10.0, "m")]),
+    ("The depth is 2.5 m, not 2 m.", [(2.5, "m"), (2.0, "m")]),
+    ("12mm bars at 200 thick, 5% waste, 20 kN/m2", [(12.0, "mm"), (200.0, ""), (5.0, "%"), (20.0, "kN/m2"), (2.0, None)]),
+    ("cost at 67 per m3, then 1,250 m3", [(67.0, ""), (3.0, None), (1250.0, "m3"), (3.0, None)]),
+    ("grade M25 on grid B-12, 7 working days", [(25.0, ""), (12.0, ""), (7.0, "working days")]),
+    ("no figure here", []), ("", []), (None, []),
+])
+def test_given_quantities_reads_each_figure_with_the_unit_written_after_it(text, quantities):
+    from app.agents.citation_provenance import _given_figures, _given_quantities
+
+    assert _given_quantities(text) == quantities
+    # the same figures, in the same order, as the number reader gives
+    assert [n for n, _unit in _given_quantities(text)] == _given_figures(text)
+
+
+@pytest.mark.parametrize("unit,kind", [
+    ("m", ("length", 1.0)), ("mm", ("length", 0.001)), ("km", ("length", 1000.0)), ("m3", ("volume", 1.0)),
+    ("", None), (None, None), ("long", None), ("per m3", None),
+    ("working days", None),     # needs a calendar to convert: the number check alone
+])
+def test_unit_kind_is_the_kind_and_scale_of_a_unit_a_scale_alone_converts(unit, kind):
+    from app.agents.citation_provenance import _unit_kind
+
+    assert _unit_kind(unit) == kind
+
+
+_TRENCH = "A trench is 12 m long, 3 m wide and 2 m deep. The rate is 67 per m3 and the slab is 200 thick."
+
+
+@pytest.mark.parametrize("number,unit,expected", [
+    (12.0, "m", "user"),          # as written
+    (12000.0, "mm", "user"),      # the same quantity in another unit
+    (0.012, "km", "user"),
+    (12.0, "", "user"),           # a bare number: the number check, as before
+    (12.0, "mm", ""),             # the unit changed: 12 mm is not what the user wrote
+    (12.0, "km", ""),
+    (12000.0, "m", ""),           # the number rescaled under the same unit
+    (2.0, "mm", ""), (3.0, "cm", ""),
+    (12.0, "m2", ""),             # written as a length, used as an area
+    (3.0, "m3", ""),              # the 3 of "per m3" is no figure anyone gave
+    (67.0, "currency", "user"),   # written bare: the unit is a reading of it
+    (200.0, "mm", "user"), (200.0, "m", "user"),
+    (4321.0, "m", ""), (4321.0, "", ""),
+])
+def test_given_check_holds_a_given_with_a_unit_to_the_quantity_the_user_wrote(number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": _TRENCH}])(number, unit) == expected
+
+
+@pytest.mark.parametrize("message,number,unit,expected", [
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "m", "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", 43.0, "m", ""),
+    ("The formation level is -43 m. Raise it by 10 m.", -43000.0, "mm", "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "mm", ""),
+    ("Two small bars, 1 mm and 2 mm.", 1.0, "mm", "user"),
+    ("Two small bars, 1 mm and 2 mm.", 1.5, "mm", ""),      # close in metres, not the same quantity
+    ("Two small bars, 1 mm and 2 mm.", 0.001, "m", "user"),
+])
+def test_a_quantity_is_compared_at_the_givens_own_scale_with_its_sign(message, number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number, unit) == expected
+
+
+@pytest.mark.parametrize("number,unit,users,tools,passages,expected", [
+    (5.0, "m", [], [(5.0, "")], [], True),                  # a calculator's bare result, read as metres
+    (5.0, "m", [], [(5.0, "mm")], [], False),               # a workflow wrote 5 mm
+    (5000.0, "mm", [], [(5.0, "m")], [], True),
+    (7.25, "m", [], [], [[(7.25, "m")]], True),             # a passage wrote it
+    (7.25, "mm", [], [], [[(7.25, "m")]], False),
+    (7.25, "m", [], [], [[(7.25, "")]], True),
+    (7.25, "m", [], [], [[(7.25, None)]], False),           # a digit inside a unit gives nothing
+    (7.25, "", [(7.25, "m")], [], [], True),                # no unit on the given: the number check
+    (-7.25, "", [(7.25, "m")], [], [], False),
+])
+def test_quantity_given_over_users_tools_and_passages(number, unit, users, tools, passages, expected):
+    from app.agents.citation_provenance import _quantity_given
+
+    assert _quantity_given(number, unit, users, tools, passages) is expected
+
+
+@pytest.mark.parametrize("answer,number,unit,expected", [
+    ("The formation level is -43 m.", -43.0, "m", "calculator"),
+    ("The formation level is -43 m.", 43.0, "m", ""),          # the sign turned
+    ("The formation level is -43 m.", 43.0, "", ""),
+    ("The formation level is -43 m.", -43.0, "", "calculator"),
+    ("Cut depth -7 m at chainage 120.", -7.0, "m", "calculator"),
+    ("Cut depth -7 m at chainage 120.", 7.0, "m", ""),
+])
+def test_a_workflows_answer_is_read_with_its_signs_for_the_given_check(answer, number, unit, expected):
+    import json
+
+    from app.agents.citation_provenance import given_check
+
+    messages = [
+        {"role": "user", "content": "What is the level?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1",
+         "content": json.dumps({"ok": True, "workflow": "survey_levels", "answer": answer})},
+    ]
+    assert given_check(messages)(number, unit) == expected
+
+
+@pytest.mark.parametrize("tool,payload", [
+    ("read_memory", {"ok": True, "result": {"name": "datum", "data": {"level_m": 99.5}}}),
+    ("list_memory", {"ok": True, "result": {"notes": [{"name": "datum", "summary": "level 99.5 m"}]}}),
+    ("write_memory", {"ok": True, "result": {"name": "datum", "saved": True, "data": {"level_m": 99.5}}}),
+])
+def test_a_number_only_in_the_models_own_note_is_not_given(tool, payload):
+    """The model's own notes back no figure: a number that is only in a note
+    it wrote or read was given by nobody."""
+    import json
+
+    from app.agents.citation_provenance import given_check
+
+    messages = [
+        {"role": "user", "content": "What is the datum level?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "n1", "type": "function", "function": {"name": tool, "arguments": "{}"}}]},
+        {"role": "tool", "name": tool, "tool_call_id": "n1", "content": json.dumps(payload)},
+    ]
+    check = given_check(messages)
+    assert check(99.5, "m") == "" and check(99.5) == ""
+
+
+@pytest.mark.parametrize("text,number,negative", [
+    ("The new level is -33 m.", 33.0, True),
+    ("The new level is 33 m.", 33.0, False),
+    ("The new level is \u221233 m.", 33.0, True),          # the typographic minus
+    ("The pipe runs 40-43 m along grid B.", 43.0, False),    # a range, not a minus
+    ("A cut of 15 m x -0.2 m.", 0.2, True),
+    ("An adjustment of -AED 5,000 this month.", 5000.0, True),   # the minus before the currency
+    ("Costs AED 5,000 this month.", 5000.0, False),
+])
+def test_written_negative_reads_the_sign_a_figure_is_written_with(text, number, negative):
+    from app.agents.citation_provenance import _figure_mentions, _written_negative
+
+    mention = next(m for m, value in _figure_mentions(text) if value == number)
+    assert _written_negative(text, mention) is negative
+
+
+@pytest.mark.parametrize("answer", ["The formation level is -43 m.", "Cut depth -7 m at chainage 120."])
+def test_workflow_answers_are_read_from_tool_runs_only(answer):
+    """A workflow's answer is what a tool run returned. The same JSON typed
+    by the user, or written by the model, is not a workflow's answer."""
+    import json
+
+    from app.agents.citation_provenance import _workflow_answers, build_evidence
+
+    shaped = json.dumps({"ok": True, "workflow": "survey_levels", "answer": answer})
+    typed = [{"role": "user", "content": shaped}, {"role": "assistant", "content": shaped}]
+    assert _workflow_answers(build_evidence(None, typed, tool_passages=True)) == []
+    ran = typed + [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1", "content": shaped},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w2",
+         "content": json.dumps({"ok": False, "workflow": "survey_levels", "answer": "nothing"})},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w3", "content": "not json"},
+    ]
+    assert _workflow_answers(build_evidence(None, ran, tool_passages=True)) == [answer]
+
+
+# --- a turn that carries a working sheet: no pairwise "working" ----------------
+
+def _sheet_step_turn(user, givens, inputs, extra=None):
+    """The messages of a turn in which one arithmetic step ran on a working
+    sheet, as the catalogue path leaves them: the user's message, the
+    model's run_step call, and the tool's result carrying the sheet."""
+    import json
+
+    from app.agents.citation_provenance import given_check
+    from app.agents.driver import sheet as ws
+
+    messages = [{"role": "user", "content": user}]
+    work, problems = ws.apply_update(ws.new_sheet("t1", user), {
+        "givens": givens, "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}]})
+    assert problems == []
+    work = ws.run_step(ws.mark_given(work, given_check(messages)), "s1", "c1")
+    payload = {"ok": True, "step": work["steps"][0], "sheet": work}
+    payload.update(extra or {})
+    messages += [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "run_step", "arguments": "{\"step\": \"s1\"}"}}]},
+        {"role": "tool", "name": "run_step", "tool_call_id": "c1", "content": json.dumps(payload)},
+    ]
+    return messages, work
+
+
+def _level_turn(level, rise):
+    messages, work = _sheet_step_turn(
+        f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+        [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+        {"operator": "add", "a": "g1", "b": "g2"})
+    assert work["steps"][0]["result"]["value"] == pytest.approx(level + rise)
+    return messages
+
+
+@pytest.mark.parametrize("level,rise,said", [
+    (-43, 10, "33 m"), (-7, 2.5, "4.5 m"),        # the minus dropped in the reply
+    (43, 10, "-53 m"), (7, 2.5, "-9.5 m"),        # a minus code never wrote
+    (-43, 10, "53 m"), (43, 10, "33 m"),          # the sizes of the givens worked another way
+])
+def test_on_a_sheet_turn_a_step_result_with_its_sign_turned_is_withheld(level, rise, said):
+    from app.agents.citation_provenance import figure_provenance
+
+    messages = _level_turn(level, rise)
+    out, entries = figure_provenance(f"The new level is {said}.", None, messages, tool_passages=True)
+    assert said not in out and said.lstrip("-") not in out
+    assert entries == []
+    _same, record = figure_provenance(f"The new level is {said}.", None, messages, enforce=False,
+                                      tool_passages=True)
+    assert [e["source"] for e in record] == [None]
+
+
+@pytest.mark.parametrize("level,rise,said", [
+    (-43, 10, "-33 m"), (-7, 2.5, "-4.5 m"), (43, 10, "53 m"), (7, 2.5, "9.5 m"),
+    (-43, 10, "\u221233 m"),                       # the typographic minus
+])
+def test_on_a_sheet_turn_a_step_result_with_the_sign_code_wrote_is_shown(level, rise, said):
+    from app.agents.citation_provenance import figure_provenance
+
+    answer = f"The new level is {said}."
+    out, entries = figure_provenance(answer, None, _level_turn(level, rise), tool_passages=True)
+    assert out == answer
+    assert [(e["source"], e.get("step"), e.get("working")) for e in entries] == [("calculator", "s1", None)]
+
+
+@pytest.mark.parametrize("level,rise,answer", [
+    (-43, 10, "The new level is -33 m (\u221243 m + 10 m = \u221233 m)."),
+    (-7, 2.5, "The new level is -4.5 m (\u22127 m + 2.5 m = \u22124.5 m)."),
+    (43, 10, "The new level is 53 m (43 m + 10 m = 53 m)."),
+])
+def test_on_a_sheet_turn_a_result_restated_with_its_givens_is_shown_whole(level, rise, answer):
+    from app.agents.citation_provenance import figure_provenance
+
+    out, entries = figure_provenance(answer, None, _level_turn(level, rise), tool_passages=True)
+    assert out == answer
+    assert [(e["source"], e.get("step")) for e in entries] == [
+        ("calculator", "s1"), ("user_input", None), ("user_input", None), ("calculator", "s1")]
+    assert all(not e.get("working") for e in entries)
+
+
+@pytest.mark.parametrize("a,b", [(-5, 5), (12.5, -12.5), (0, 0)])
+def test_on_a_sheet_turn_a_step_result_of_zero_is_credited_to_its_step(a, b):
+    """Zero is not a negative result: "0 m" carries no minus and is the
+    step's own figure."""
+    from app.agents.citation_provenance import figure_provenance
+
+    messages = _level_turn(a, b)
+    out, entries = figure_provenance("The new level is 0 m.", None, messages, tool_passages=True)
+    assert out == "The new level is 0 m."
+    assert [(e["figure"], e["source"], e.get("step")) for e in entries] == [("0 m", "calculator", "s1")]
+
+
+@pytest.mark.parametrize("level,rise,worked", [(43, 10, "430 m"), (7, 2.5, "17.5 m")])
+def test_pairwise_working_is_allowed_only_on_a_turn_without_a_working_sheet(level, rise, worked):
+    """The same workflow result and the same reply, twice: a turn with no
+    sheet credits a product of the user's own numbers as the calculator's
+    working, as it always did; the turn that carries a sheet withholds it,
+    because there the product would have been a step."""
+    import json
+
+    from app.agents.citation_provenance import figure_provenance
+
+    user = f"The formation level is {level} m. Raise it by {rise} m: what is the new level?"
+    ran = {"ok": True, "workflow": "survey_levels", "answer": f"The new level is {level + rise} m."}
+    plain = [
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1", "content": json.dumps(ran)},
+    ]
+    on_sheet, _work = _sheet_step_turn(
+        user, [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+        {"operator": "add", "a": "g1", "b": "g2"}, extra=ran)
+    answer = f"The new level is {level + rise} m. The two multiplied give {worked}."
+    out, entries = figure_provenance(answer, None, plain, tool_passages=True)
+    assert out == answer
+    assert [(e["figure"], e.get("working")) for e in entries] == [(f"{level + rise} m", None), (worked, True)]
+    out, entries = figure_provenance(answer, None, on_sheet, tool_passages=True)
+    assert worked not in out and f"{level + rise} m" in out
+    assert [e["figure"] for e in entries] == [f"{level + rise} m"]

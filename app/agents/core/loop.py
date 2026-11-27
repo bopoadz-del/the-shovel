@@ -903,15 +903,24 @@ async def chat_stream(
             from app.core.rag.vector_store import start_turn_memo
             start_turn_memo()
             from app.agents import driver
+            from app.core.offload import off_loop
             try:
-                if driver.enabled() and not _depth:
+                # A project whose profile sets answer_path "catalogue" takes
+                # the driver with the working sheet (DESIGN V2); the profile
+                # is read in a thread, never on the event loop.
+                on_sheet = driver.on_sheet()
+                if on_sheet is None and not _depth and project_id:
+                    # A door that did not mark the turn: read the setting here.
+                    on_sheet = driver.mark_project(await off_loop(driver.catalogue_path, project_id, user_id))
+                on_sheet = bool(on_sheet) and not _depth
+                if (driver.enabled() or on_sheet) and not _depth:
                     # Driver mode (F-DRIVER Phase B, DRIVER_MODE): the model
                     # drives the turn; same deadline, heartbeat and guarantee.
                     from app.agents.driver import loop as driver_loop
                     events = driver_loop.stream(
                         self, user_message=user_message, history=history,
                         project_id=project_id, conversation_id=conversation_id,
-                        user_id=user_id, api_key=api_key,
+                        user_id=user_id, api_key=api_key, sheet_mode=bool(on_sheet),
                     )
                 else:
                     events = self._chat_stream_impl(

@@ -13,7 +13,7 @@ from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
 from app.agents.core.tool_registry import is_notes
-from app.agents.driver import catalogue, context, llm, render, routes, sources, tools
+from app.agents.driver import catalogue, context, llm, render, routes, sheet, sources, tools, trace_record, trace_store
 from app.core import turn_progress
 from app.core.llm_memory import nested_deeper_than
 from app.core.offload import off_loop
@@ -245,6 +245,30 @@ def _named_calculator_note(user_message: str) -> str:
             "say what it needs.")
 
 
+#: What the model is told with its sheet each round. The same words for
+#: every turn and project: how the sheet works, never what to answer.
+_SHEET_RULES = (
+    "Working sheet for this turn (JSON, below). Write the givens (each figure with its unit and "
+    "where it came from), a plan of formula steps whose inputs name givens or earlier steps, and "
+    "any input still missing, with sheet_update. Run each step with run_step: code runs the formula "
+    "and writes the result here. Every arithmetic step, even one division, is a step "
+    "(formula:arithmetic_step); never work a figure in your own text. Ask the user for a missing input "
+    "only when no document or tool gives it. A figure given for one thing is a given for that thing "
+    "only: when the question needs a rate, a quantity or a price that nobody gave for the very thing "
+    "asked about, write it under missing and ask for it; never borrow a figure that was given for "
+    "something else.")
+
+
+def _sheet_note(work: Dict[str, Any]) -> str:
+    return _SHEET_RULES + "\n" + sheet.render(work)
+
+
+def _build_sha() -> str:
+    from app.routers.health import _deployed_build_sha
+
+    return _deployed_build_sha() or ""
+
+
 #: Arguments nested deeper than this are not run: past it the JSON writer can
 #: run out of stack on them inside a turn (the trace, the tool's own result).
 _ARGS_MAX_DEPTH = 200
@@ -270,10 +294,24 @@ def _args(tool_call: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
     return (parsed if isinstance(parsed, dict) else {}), None
 
 
+
+def _given_check(messages: List[Dict[str, Any]]):
+    """The check the sheet marks a given with (citation_provenance.given_check)."""
+    from app.agents import citation_provenance as cp
+
+    return cp.given_check(messages)
+
+
 async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                  project_id: Optional[str] = None, conversation_id: Optional[str] = None,
                  user_id: Optional[str] = None, api_key: Optional[str] = None,
-                 **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
+                 sheet_mode: bool = False, **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
+    """One driver turn. ``sheet_mode`` (the project's ``answer_path`` is
+    ``catalogue``): the turn carries a working sheet, handed back to the model
+    every round; the tools stay offered every round and no code ends the turn
+    with a tool's question -- a needs-input result goes back to the model as
+    the tool result -- short of the round / seconds ceiling; one trace record
+    is written per turn."""
     t0 = time.monotonic()
     # 6b: anchor llm_first_token to the generation-turn start (the model-call
     # wait), not to turn_timing's `last` stage marker, which intervening
@@ -290,6 +328,30 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     note = await off_loop(_named_calculator_note, user_message)
     if note:
         msgs.insert(len(msgs) - 1, {"role": "system", "content": note})
+    work: Optional[Dict[str, Any]] = None  # the working sheet (sheet_mode only)
+    sheet_msg: Dict[str, Any] = {"role": "system", "content": ""}
+    question_set = trace_record.UNSET
+    if sheet_mode:
+        # Carried only for this user, project and stored conversation, through
+        # the conversation's own access check.
+        previous = await off_loop(trace_store.carried_sheet, conversation_id, user_id, project_id)
+        if conversation_id:
+            # Stored as the default path stores it at a turn's start (after the
+            # door's access check), so the next turn's carry finds the row.
+            # Read above first: a row this turn creates carries nothing now.
+            from app.core import agent_memory
+
+            await off_loop(agent_memory.get_or_create_conversation, conversation_id,
+                           getattr(agent, "name", "") or "driver", project_id, owner_id=user_id)
+        work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
+        sheet_msg["content"] = _sheet_note(work)
+        msgs.insert(len(msgs) - 1, sheet_msg)
+        # The request's own question set (a per-turn sheet request) wins;
+        # else the project's profile names one.
+        chosen_set = (driver.requested_question_set()
+                      or await off_loop(driver.project_setting, project_id, user_id, "question_set"))
+        if chosen_set in trace_record.QUESTION_SETS:
+            question_set = chosen_set
     used: List[str] = []
     ran: List[tuple] = []  # (tool, arguments) of every tool run, for the credit lines
     computed: List[tuple] = []  # (envelope, inputs) of every calculation that succeeded
@@ -393,8 +455,17 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     filled_from_ask: set = set()  # workflows whose inputs were read from the ask once
     reminded = False  # the model was told once to call a refused workflow again
     step = 0
-    for step in range(driver.max_steps()):
+    ceiling = False  # the sheet turn ran out of rounds or seconds
+    for step in range(driver.sheet_max_rounds() if sheet_mode else driver.max_steps()):
+        if sheet_mode and time.monotonic() - t0 > driver.sheet_max_seconds():
+            ceiling = True
+            break
         offered = tools.offered(agent, project_id, hat, disciplines)
+        if work is not None:
+            # The sheet as it stands, handed back every round; its tools are
+            # offered every round -- never withdrawn while a step is open.
+            sheet_msg["content"] = _sheet_note(work)
+            offered = offered + tools.sheet_schemas()
         trace.append({"step": step + 1, "hat": hat, "offered": len(offered),
                       "workflows": _offered_workflows(offered), "calls": []})
         # Streamed: each finished sentence is checked and sent while the model
@@ -480,6 +551,27 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 else:
                     result_of_call = {"ok": False,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
+            elif work is not None and name == tools.SHEET_UPDATE:
+                work, problems = sheet.apply_update(work, args)
+                # A given is checked when it is written: against the user's
+                # messages, the passages and the calculator results so far.
+                work = sheet.mark_given(work, _given_check(_trail()))
+                result_of_call = {"ok": not problems, "problems": problems, "sheet": work}
+                if problems:
+                    result_of_call["error"] = "; ".join(problems)
+            elif work is not None and name == tools.RUN_STEP:
+                used.append(name)
+                step_id = str(args.get("step") or "")
+                # Checked again before a step runs: a passage fetched after
+                # the given was written counts too.
+                work = sheet.mark_given(work, _given_check(_trail()))
+                work = await off_loop(sheet.run_step, work, step_id, call.get("id") or "")
+                entry = next((s for s in work["steps"] if s.get("id") == step_id), {})
+                result_of_call = {"ok": entry.get("status") == "done", "step": entry, "sheet": work}
+                if entry.get("status") == "waiting_input":
+                    result_of_call["needs_input"] = True
+                elif entry.get("status") != "done":
+                    result_of_call["error"] = entry.get("error") or "the step did not run"
             elif name == catalogue.LOOKUP:
                 # The full entries for the ids the model names from the index.
                 result_of_call = await off_loop(catalogue.lookup, args.get("ids"))
@@ -520,6 +612,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 # A calculator's own verdict: success, or needs_input and which inputs.
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
+                **({"step": str(args.get("step") or "")} if name == tools.RUN_STEP else {}),
             }
             # What the tool itself states for the trace record (e.g. a memory
             # note's operation, name, size and turn), as given. A tool that
@@ -561,7 +654,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             envelope = result_of_call.get("result") if isinstance(result_of_call, dict) else None
             if isinstance(envelope, dict) and envelope.get("calculation"):
                 inputs = args.get("params") if isinstance(args.get("params"), dict) else args
-                shown = render.render_calculation(envelope, inputs)
+                shown = render.render_calculation(envelope, inputs, on_sheet=work is not None)
                 if envelope.get("status") == "success":
                     computed.append((envelope, inputs))
                 if envelope.get("status") != "success" and str(envelope.get("question") or "").strip():
@@ -575,19 +668,25 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})
             answer_exit.note_tool_message(call, evidence[-1])
-        # A calculator that rejected or lacks an input ends the turn with its
-        # own question: the model is never given the chance to compute a
-        # figure the calculator refused (lane 2: it did).
-        if questions:
+        if work is not None:
+            trace[-1]["sheet"] = json.loads(sheet.render(work))
+        # Off the sheet, a calculator that rejected or lacks an input ends the
+        # turn with its own question: the model is never given the chance to
+        # compute a figure the calculator refused. On the sheet no code ends a
+        # turn with a tool's question: the needs-input result went back to the
+        # model as the tool result, and the model places it -- computes an
+        # earlier step, reads a document, or records it under missing and asks.
+        if questions and work is None:
             for question in dict.fromkeys(questions):
                 event = await off_loop(_release, question + "\n", model_text=False)
                 if event:
                     yield event
             answer_done = True
             break
-    if not answer_done and refused:
+    if not answer_done and refused and work is None:
         # Out of steps with a workflow still refusing: its deliverable comes
-        # from the workflow, so the turn asks for what it needs.
+        # from the workflow, so the turn asks for what it needs. On the sheet
+        # the closing call below answers, naming what is still missing.
         for request in dict.fromkeys(routes.input_request(w, r) for w, r in refused.items()):
             event = await off_loop(_release, request + "\n", model_text=False)
             if event:
@@ -595,6 +694,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         answer_done = True
     if not answer_done:
         # Out of steps: answer from the evidence already gathered, no tools.
+        ceiling = True  # the round (or seconds) ceiling ended the tool rounds
         msgs.append({"role": "system", "content": _FINISH})
         finished = False
         buffer = ""
@@ -716,6 +816,27 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         notes = "\n\n" + credit + notes
     if notes.strip():
         yield {"type": "token", "content": notes}
+    record_id = None
+    if sheet_mode:
+        ended = "ceiling" if ceiling else "answer" if model_answered else "asked_input"
+        if work is not None and ended == "answer" and sheet.unasked(work):
+            # The model ended the turn with inputs still missing on its sheet.
+            # Every sheet write closes an input whose step has its result
+            # (sheet.close_answered), so these wait on steps that never ran:
+            # its answer is where it asked for them. Mark them asked, so the
+            # next turn does not ask again.
+            work = sheet.mark_asked(work)
+            ended = "asked_input"
+        record = trace_record.build(
+            turn=(work or {}).get("turn", ""), question=user_message, rounds=trace,
+            final_answer="".join(sent), figures=provenance, ended=ended,
+            question_set=question_set, seconds=time.monotonic() - t0,
+            provider=str(getattr(agent, "provider", "") or ""), model=driver.model(),
+            temperature=llm.DECISION_TEMPERATURE, seed=llm.DECISION_SEED,
+            build_sha=_build_sha(), project_setting=driver.CATALOGUE,
+            sheet=work)
+        record_id = await off_loop(trace_store.save, record, conversation_id,
+                                   user_id=user_id, project_id=project_id)
     _LOG.info("DRIVER_TURN %s", json.dumps({
         "conversation": str(conversation_id or ""),  # an id, never the user's words
         "steps": trace, "ended": ("answer" if model_answered else "question" if answer_done else "step_limit"),
@@ -723,10 +844,11 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         # Lengths only: the answer's characters after each stage, what was
         # shown, and why a reply was withheld with its lengths (never text).
         "stage_chars": stage_chars, "shown_chars": len("".join(sent)),
-        "withheld": withheld,
+        "withheld": withheld, "trace_record": record_id,
         "elapsed_s": round(time.monotonic() - t0, 2)}, default=str))
     yield {"type": "end", "complete": True, "mode": "driver", "hat": hat, "tools": used, "exports": exports,
            "provenance": provenance, "exit_check": check,
            "sources": sources.panel(_trail(), provenance, "".join(sent),
                                     calculated=any(n == "construction_calc" for n, _ in ran)),
-           "steps": step + 1, "elapsed_s": round(time.monotonic() - t0, 2)}
+           "steps": step + 1, "elapsed_s": round(time.monotonic() - t0, 2),
+           **({"trace_record": record_id} if sheet_mode else {})}
