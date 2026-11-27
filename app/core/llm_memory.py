@@ -368,6 +368,15 @@ def review(project_id: str, name: Any, decision: Any, version: Any,
                 raise MemoryConflict(f"note {stem!r} was written again after it was opened; "
                                      "reload and decide on the version shown")
             back_in_sight = decision == "keep" and row.review == DISCARDED
+            if back_in_sight:
+                # Keeping a discarded note puts it back in the model's sight,
+                # so it takes a place under the limit like a new note: the
+                # same per-project lock as ``write``, and taken HERE, before
+                # the mark touches the row. A write that revives this same
+                # note takes the project lock and then the row; taking them
+                # in the other order here would let the two wait on each
+                # other for ever on Postgres.
+                _one_new_note_at_a_time(s, project_id)
             record = LlmMemoryReview(project_id=project_id, name=stem, decision=decision,
                                      data=row.data, note_written_at=row.written_at,
                                      note_written_by_turn=row.written_by_turn,
@@ -387,10 +396,8 @@ def review(project_id: str, name: Any, decision: Any, version: Any,
                 raise MemoryConflict(f"note {stem!r} was written again while the decision was "
                                      "being made; reload and decide on the version shown")
             if back_in_sight:
-                # Keeping a discarded note puts it back in the model's sight,
-                # so it takes a place under the limit like a new note: the
-                # same lock and count as ``write``, with this note counted.
-                _one_new_note_at_a_time(s, project_id)
+                # Counted under the project lock taken above, with this note
+                # counted: the count the Keep is made against.
                 count = _notes_in_sight(s, project_id)
                 if count > max_docs():
                     raise MemoryRefused(f"keeping {stem!r} would put {count} notes in the model's "

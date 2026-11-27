@@ -557,3 +557,99 @@ def test_the_same_content_rewritten_in_another_turn_or_time_is_a_new_version(mon
         llm_memory.review(pid, "paths", "discard", old)
     assert llm_memory.reviews(pid) == []
     assert llm_memory.listing(pid, with_review=True)[0]["review"] == ""
+
+
+def _lock_then_row(monkeypatch):
+    """Records, in order, each taking of the project lock ("lock") and each
+    UPDATE of a note row ("row") made through the store's own session."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    seen = []
+    real = llm_memory._one_new_note_at_a_time
+    monkeypatch.setattr(llm_memory, "_one_new_note_at_a_time",
+                        lambda s, project_id: (seen.append("lock"), real(s, project_id))[1])
+
+    def on_execute(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("UPDATE") and "llm_memory" in statement and "llm_memory_review" not in statement:
+            seen.append("row")
+
+    event.listen(Engine, "before_cursor_execute", on_execute)
+    return seen, lambda: event.remove(Engine, "before_cursor_execute", on_execute)
+
+
+@pytest.mark.parametrize("name,data", NOTES)
+def test_a_keep_that_brings_a_note_back_takes_the_project_lock_before_it_touches_the_row(monkeypatch, name, data):
+    """The owner's Keep on a discarded note and the model's rewrite of that
+    note take the same two locks. Both take the project lock FIRST and the
+    row second, so on Postgres neither can hold the one the other waits for."""
+    pid = f"cal-ord-{uuid.uuid4().hex[:8]}"
+    stem = _stem(name)
+    llm_memory.write(pid, stem, json.dumps(data), "c#1")
+    llm_memory.review(pid, stem, "discard", _ver(pid, stem))
+    seen, stop = _lock_then_row(monkeypatch)
+    try:
+        llm_memory.review(pid, stem, "keep", _ver(pid, stem))
+        keep = list(seen)
+        llm_memory.review(pid, stem, "discard", _ver(pid, stem))
+        seen.clear()
+        llm_memory.write(pid, stem, json.dumps({"again": True}), "c#2")
+        revive = list(seen)
+    finally:
+        stop()
+    assert keep == ["lock", "row"]                       # the Keep: project lock, then the mark
+    assert revive[0] == "row" and revive[1] == "lock"    # the write: a replace that matches nothing takes no row lock
+    assert revive.index("lock") < len(revive) - 1 and set(revive[revive.index("lock") + 1:]) == {"row"}
+
+
+@pytest.mark.parametrize("rounds,limit", [(12, 50), (12, 1)])
+def test_a_keep_and_a_rewrite_of_the_same_discarded_note_at_the_same_moment_both_end(monkeypatch, rounds, limit):
+    """Two connections at once, one keeping a discarded note and one writing
+    it again. Each ends: the Keep lands, or is told the note was written
+    again, or (at the limit) is refused; the write lands or is refused for
+    the limit. Neither is left waiting and neither fails with a database
+    error. (SQLite lets one writer in at a time; the Postgres shards are
+    where the two really meet.)"""
+    import threading
+
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", str(limit))
+    pid = f"cal-race-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "n0", json.dumps({"round": -1}), "c#0")
+    for i in range(rounds):
+        llm_memory.review(pid, "n0", "discard", _ver(pid, "n0"))
+        version = _ver(pid, "n0")
+        start = threading.Barrier(2)
+        outcome = {}
+
+        def keep():
+            start.wait(timeout=20)
+            try:
+                llm_memory.review(pid, "n0", "keep", version)
+                outcome["keep"] = "kept"
+            except (llm_memory.MemoryConflict, llm_memory.MemoryRefused) as exc:
+                outcome["keep"] = type(exc).__name__
+            except Exception as exc:  # noqa: BLE001 -- the failure this test exists to catch
+                outcome["keep"] = f"ERROR {type(exc).__name__}"
+
+        def rewrite():
+            start.wait(timeout=20)
+            try:
+                llm_memory.write_retrying(pid, "n0", json.dumps({"round": i}), f"c#{i + 1}")
+                outcome["write"] = "written"
+            except llm_memory.MemoryRefused:
+                outcome["write"] = "MemoryRefused"
+            except Exception as exc:  # noqa: BLE001
+                outcome["write"] = f"ERROR {type(exc).__name__}"
+
+        threads = [threading.Thread(target=keep), threading.Thread(target=rewrite)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        assert not any(t.is_alive() for t in threads), f"round {i}: left waiting"
+        assert outcome["keep"] in ("kept", "MemoryConflict", "MemoryRefused"), outcome
+        assert outcome["write"] in ("written", "MemoryRefused"), outcome
+        # Whatever the order, the note is whole and in the model's sight again.
+        assert llm_memory.read(pid, "n0")["data"] in ({"round": i}, {"round": i - 1}, {"round": -1})
+        assert len(llm_memory.listing(pid)) == 1
+
