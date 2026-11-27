@@ -622,10 +622,36 @@ def test_user_givens_are_the_givens_code_marked_as_the_users_own(by, kept):
     (43, [43.0]), (12.5, [12.5]), ("43 m", [43.0]), ("12.5m", [12.5]), ("-7", [-7.0]), (" -7.5 m", [-7.5]),
     ("1,250 m3", [1250.0]), ({"value": 4321, "unit": "m3"}, [4321.0]), ({"value": "987.5 m2"}, [987.5]),
     ([3, "4 m", {"value": 5}], [3.0, 4.0, 5.0]),
+    (".5 m", [0.5]), ("+.75 m", [0.75]), (".5", [0.5]), ("-.25 m", [-0.25]), ("5e3 m", [5000.0]),
+    ("AED 5,000", [5000.0]), ("20 ft", [20.0]), ("1,250.", [1250.0]),
     ("add", []), ("c30", []), ("m 43", []), (True, []), (None, []), ("", []), ({"unit": "m"}, []),
 ])
 def test_written_numbers_reads_a_number_in_every_shape_a_formula_would(literal, expected):
     assert ws.written_numbers(literal) == expected
+
+
+@pytest.mark.parametrize("depth,ran_on", [(".5 m", 0.5), ("+.75 m", 0.75), ("2 m", 2.0)])
+def test_a_literal_the_reader_finds_no_number_in_is_taken_as_the_formula_ran_it(monkeypatch, depth, ran_on):
+    """Whatever shape the reader of written numbers misses, the check reads
+    no less than the step did: the number the formula ran on for that input
+    stands in, so the result still rests on it."""
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": 40, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": "g1", "width_m": "1.5 m", "depth_m": depth}}]})
+    assert problems == []
+    ran = ws.run_step(work, "s1")
+    assert [st["status"] for st in ran["steps"]] == ["done"]
+    assert sorted(ws.rests_on(ran, "s1")) == sorted([40.0, 1.5, ran_on])
+    monkeypatch.setattr(ws, "written_numbers", lambda literal: [])      # a shape the reader cannot read
+    assert sorted(ws.rests_on(ran, "s1")) == sorted([40.0, 1.5, ran_on])
+    assert sorted(ws.rests_on(work, "s1")) == [40.0]                     # not run: nothing to fall back on
+
+
+@pytest.mark.parametrize("value,numbers", [(5.0, [5.0]), ([1, "x", 2.5], [1.0, 2.5]), ((3, 4), [3.0, 4.0]),
+                                           ("add", []), (True, []), (None, []), ([], [])])
+def test_ran_numbers_are_the_numbers_a_step_received_for_an_input(value, numbers):
+    assert ws._ran_numbers(value) == numbers
 
 
 @pytest.mark.parametrize("a,b", [("43 m", {"value": 10, "unit": "m"}), ("12.5 m", {"value": "8 m"})])

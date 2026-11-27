@@ -445,8 +445,11 @@ def test_inline_separators_on_a_non_table_line_survive_the_strip():
     (55.0, {55.0, 2.0}, [], True),                  # the user wrote it
     (20.0, set(), [[10.0, 20.0]], True),            # a retrieved passage carries it
     (987.5, set(), [], False),
-    (-43.0, {43.0}, [], True),                      # read from text without its sign
-    (-20.0, set(), [[10.0, 20.0]], True),
+    (-43.0, {-43.0}, [], True),                     # given with its sign
+    (-43.0, {43.0}, [], False),                     # the sign was turned: nobody gave -43
+    (43.0, {-43.0}, [], False),                     # nor +43 when -43 was given
+    (-20.0, set(), [[10.0, -20.0]], True),
+    (-20.0, set(), [[10.0, 20.0]], False),
 ])
 def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number, pool, passages, expected):
     from app.agents.citation_provenance import _given_to_us
@@ -461,6 +464,34 @@ def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number,
     ("work it out again", 40.0, ""),
 ])
 def test_given_check_holds_a_number_to_the_messages_so_far(message, number, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number) == expected
+
+
+@pytest.mark.parametrize("text,figures", [
+    ("The formation level is -43 m. It rises by 10 m.", [-43.0, 10.0]),
+    ("between 40-43 m, grid B-12", [40.0, 43.0, 12.0]),          # a range and a compound: no minus
+    ("depth .5 m and -.25", [0.5, -0.25]),                        # a decimal written without its zero
+    ("level \u22127 m then +2.5", [-7.0, 2.5]),                    # the typographic minus
+    ("15 x 8 x -0.2, rate 1,250 per m", [15.0, 8.0, -0.2, 1250.0]),
+    ("no figure here", []), ("", []), (None, []),
+])
+def test_given_figures_reads_each_figure_with_the_sign_it_was_written_with(text, figures):
+    from app.agents.citation_provenance import _given_figures
+
+    assert _given_figures(text) == figures
+
+
+@pytest.mark.parametrize("message,number,expected", [
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", 43.0, ""),       # the sign turned
+    ("The formation level is 43 m. Lower it by 10 m.", -43.0, ""),
+    ("The pipe is 40-43 m long, .5 m deep.", 43.0, "user"),
+    ("The pipe is 40-43 m long, .5 m deep.", 0.5, "user"),
+    ("The pipe is 40-43 m long, .5 m deep.", -43.0, ""),
+])
+def test_given_check_holds_a_number_to_its_sign_as_the_user_wrote_it(message, number, expected):
     from app.agents.citation_provenance import given_check
 
     assert given_check([{"role": "user", "content": message}])(number) == expected

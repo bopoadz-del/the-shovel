@@ -387,7 +387,7 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
         if sid in seen:
             continue
         seen.add(sid)
-        for ref in ((plan.get(sid) or {}).get("inputs") or {}).values():
+        for name, ref in ((plan.get(sid) or {}).get("inputs") or {}).items():
             if isinstance(ref, str) and _STEP_ID.match(ref):
                 frontier.append(ref)
             elif isinstance(ref, str) and _GIVEN_ID.match(ref):
@@ -396,27 +396,38 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
                 if number is not None and not given.get("checked"):
                     found.append(number)
             else:
-                found.extend(written_numbers(ref))
+                # A literal the reader below finds no number in, while the
+                # formula ran on one, is taken as the formula ran it: the
+                # check never reads less than the step did.
+                ran = ((_step(sheet, sid) or {}).get("inputs") or {}).get(name)
+                found.extend(written_numbers(ref) or _ran_numbers(ran))
     return found
 
 
-_LEADING_NUMBER = re.compile(r"^\s*([-+]?\d[\d,]*(?:\.\d+)?)")
+def _ran_numbers(value: Any) -> List[float]:
+    """The numbers a step ran on for one input, as the formula received them
+    (a number, or a series of them); an option or a flag is none."""
+    numbers = [_number(v) for v in (value if isinstance(value, (list, tuple)) else [value])]
+    return [n for n in numbers if n is not None]
 
 
 def written_numbers(literal: Any) -> List[float]:
-    """Every number a plan literal carries, in whatever shape the formula
-    would read it: a bare number, a quantity written as text ("43 m",
-    "-7"), a ``{"value": ..., "unit": ...}`` object, a list of any of
-    these. Text that does not begin with a number (an operator, a named
+    """Every number a plan literal carries, read by the formula registry's
+    own readers: a bare number, a quantity written as text ("43 m", "-7",
+    ".5 m", "AED 5,000"), a ``{"value": ..., "unit": ...}`` object, a list
+    of any of these. Text that carries no number (an operator, a named
     option) and a flag carry none."""
+    from app.lib import formula_registry
+
     if isinstance(literal, (int, float)):  # a flag is no number: _number refuses it
         number = _number(literal)
         return [] if number is None else [number]
     if isinstance(literal, str):
         number = _number(literal)
         if number is None:
-            lead = _LEADING_NUMBER.match(literal)
-            number = _number(lead.group(1).replace(",", "")) if lead else None
+            with_unit = formula_registry.value_and_unit(literal)
+            lead = re.match(rf"\s*({formula_registry.SIGNED_NUMBER})", literal)
+            number = with_unit[0] if with_unit else _number(lead.group(1).replace(",", "")) if lead else None
         return [] if number is None else [number]
     if isinstance(literal, dict):
         return [n for value in literal.values() for n in written_numbers(value)]

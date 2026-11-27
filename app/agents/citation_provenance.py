@@ -1839,13 +1839,25 @@ def figure_provenance(
 
 
 def _given_pools(ev: Any, produced: Iterable[Iterable[float]]) -> tuple[set[float], list[list[float]]]:
-    """What was given to the platform in ``ev``: the numbers of every user
-    message and of every ``produced`` set (calculator and workflow results),
-    rescaled, and the numbers of each retrieved passage."""
-    pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _nums(rec.text))
+    """What was given to the platform in ``ev``: the figures of every user
+    message, each with the sign it was written with, and of every
+    ``produced`` set (calculator and workflow results), rescaled, and the
+    figures of each retrieved passage."""
+    pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _given_figures(rec.text))
     for nums in produced:
         pool |= _rescaled(nums)
-    return pool, [_nums(r.text) for r in ev.records if r.kind == "retrieval" and r.text]
+    return pool, [_given_figures(r.text) for r in ev.records if r.kind == "retrieval" and r.text]
+
+
+def _given_figures(text: str) -> list[float]:
+    """The figures written in ``text``, each with its sign, read with the
+    formula registry's own rule for a sign inside a sentence (a hyphen after
+    a digit or a word is a range or a compound, not a minus); a decimal
+    written without its zero (".5") is read as one."""
+    from app.lib import formula_registry
+
+    figure = formula_registry.FIGURE_SIGN + r"(?:\d[\d,]*(?:\.\d+)?|(?<![\w.,])\.\d+)"
+    return [float(tok.replace(",", "")) for tok in re.findall(figure, (text or "").replace("−", "-"))]
 
 
 def given_check(messages: list[dict[str, Any]] | None, *, tool_passages: bool = True):
@@ -1870,12 +1882,12 @@ def given_check(messages: list[dict[str, Any]] | None, *, tool_passages: bool = 
 
 
 def _given_to_us(number: float, given_pool: set[float], passages: list[list[float]]) -> bool:
-    """True when ``number`` was given to the platform: it is in ``given_pool``
-    (the users' messages and the calculator and workflow results, rescaled)
-    or in one of the retrieved ``passages``. A number found in neither is the
-    model's own."""
-    size = abs(number)  # the pools hold magnitudes: a number is read from text without its sign
-    return _match(size, given_pool) or any(_match(size, nums) for nums in passages)
+    """True when ``number`` was given to the platform, with its sign: it is in
+    ``given_pool`` (the users' messages and the calculator and workflow
+    results, rescaled) or in one of the retrieved ``passages``. A number
+    found in neither is the model's own -- and so is a given figure with its
+    sign turned (-43 written as 43)."""
+    return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
 
 
 def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:

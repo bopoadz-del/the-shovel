@@ -1066,6 +1066,48 @@ def test_a_negative_number_the_user_wrote_is_a_given_and_its_result_is_shown(mon
     assert [g.get("checked") for g in row["sheet"]["givens"]] == ["user", "user"]
 
 
+@pytest.mark.parametrize("depth,volume", [(".5 m", 30), ("+.75 m", 45)])
+def test_a_depth_nobody_gave_written_without_its_zero_is_not_made_a_code_figure(monkeypatch, depth, volume):
+    """The user gives the length and the width only. The model writes the
+    depth in the plan as ".5 m": the formula reads it, and so does the
+    check, so the volume is the model's own number passed through a formula."""
+    conv = f"own-dot-{volume}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                      "inputs": {"length_m": "40 m", "width_m": "1.5 m", "depth_m": depth}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The excavation is {volume} m3."},
+    ])
+    shown = _text(_run(user_message="A trench 40 m long and 1.5 m wide. How much is excavated?",
+                       conversation_id=conv, sheet_mode=True))
+    assert f"{volume} m3" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(volume)]    # the step did run
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("level,rise,wrong", [(-43, 10, "53"), (-7, 2.5, "9.5")])
+def test_a_given_with_its_sign_turned_is_not_the_users_and_its_result_is_not_shown(monkeypatch, level, rise, wrong):
+    """The user writes a level below datum; the model writes the given
+    without the minus. Nobody gave that number, so the sum is not credited."""
+    conv = f"flip-{rise}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": -level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The new level is {wrong} m."},
+    ])
+    shown = _text(_run(user_message=f"The formation level is {level} m. It rises by {rise} m. What is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    assert f"{wrong} m" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == [None, "user"]
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
 @pytest.mark.parametrize("a,b", [(55, 2), (120, 35)])
 def test_a_carried_given_keeps_its_credit_when_no_history_is_sent(monkeypatch, a, b):
     """Turn 2 arrives with no history at all: the given written in turn 1 was
