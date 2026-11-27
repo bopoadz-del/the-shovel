@@ -127,15 +127,22 @@ def _is_production() -> bool:
     return env in ("prod", "production")
 
 
+#: The values that turn the durable-store guard on, after strip + lower.
+DURABLE_GUARD_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def guard_value_on(raw: str) -> bool:
+    """True when ``raw`` is a value that turns the guard on (any other is off)."""
+    return (raw or "").strip().lower() in DURABLE_GUARD_ON_VALUES
+
+
 def durable_guard_requested() -> bool:
     """True when the operator has turned the rollout gate on.
 
     The live task does not set this. Leaving it unset is what keeps a
     deploy from refusing to boot before a durable volume exists.
     """
-    return os.getenv("REQUIRE_DURABLE_DOCUMENT_STORE", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    return guard_value_on(os.getenv("REQUIRE_DURABLE_DOCUMENT_STORE", ""))
 
 
 def _unescape_mount(value: str) -> str:
