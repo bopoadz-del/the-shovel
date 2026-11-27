@@ -668,3 +668,53 @@ def test_message_records_skip_a_non_message_and_a_notes_tool(junk):
 def test_not_json_constant_refuses_the_token_by_name(token):
     with pytest.raises(ValueError, match=f"^{token} is not a JSON number$"):
         llm_memory._not_json_constant(token)
+
+
+@pytest.fixture
+def failing_tool():
+    from app.agents.core.tool_registry import _TOOLS, tool
+
+    name = "memtest_item_check"
+
+    @tool(name, owner="base", display_name="Item check")
+    async def handle(_call):
+        return {"name": name, "ok": False, "error": "Could not use these items: red, green, blue",
+                "result": {"items": ["red", "green", "blue"], "item_count": 0}}
+
+    yield name
+    _TOOLS.pop(name, None)
+
+
+@pytest.mark.parametrize("figure", ["9", "418"])
+@pytest.mark.parametrize("notes_call", [
+    None,
+    ("write_memory", {"name": "paths", "data": json.dumps({"ask_first": "which bill"})}),
+    ("read_memory", {"name": "paths"}),
+    ("list_memory", {}),
+])
+def test_a_notes_call_does_not_back_a_figure_when_the_tool_failed(client, monkeypatch, failing_tool,
+                                                                  figure, notes_call):
+    """A turn whose only real tool failed shows the failure and no figure --
+    the same with a successful notes call beside it as without one."""
+    h = _user(client, "nb")
+    pid = _project(client, h, "Notes back nothing")
+    llm_memory.write(pid, "paths", json.dumps({"ask_first": "which bill"}), "c#1")
+    calls = [_call(failing_tool, {}, "t1")]
+    if notes_call:
+        calls.append(_call(notes_call[0], notes_call[1], "m1"))
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": calls},
+                          {"content": f"0 items were found. The total is {figure}."}], seen)
+    r = _turn(client, h, pid, message="how many items are usable?")
+    assert r.status_code == 200, r.text
+    if notes_call:
+        assert _tool_results(seen)["m1"]["ok"] is True
+    text = _streamed_text(r)
+    assert f"The total is {figure}" not in text
+    assert "Could not use these items: red, green, blue" in text
+
+
+@pytest.mark.parametrize("data,where", [("{bad", "at character 1"), ("[1,2", "at character 4")])
+def test_data_that_is_not_json_says_where_it_breaks(data, where):
+    with pytest.raises(llm_memory.MemoryRefused, match=where):
+        llm_memory.parse_data(data)

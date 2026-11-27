@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
+from app.agents.core.tool_registry import is_notes
 from app.agents.driver import context, llm, render, routes, sources, tools
 from app.core import turn_progress
 from app.core.offload import off_loop
@@ -508,7 +509,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             trace[-1]["calls"].append(call_record)
             if name != tools.SELECT_HAT:
                 if ok:
-                    succeeded = True
+                    # The model's own notes back no figure: a note that was
+                    # read or written does not stand in for a tool that ran.
+                    if not is_notes(name):
+                        succeeded = True
                 elif not _asks_for_input(result_of_call):
                     # A tool asking for an input has not failed: its question is
                     # the answer. A real failure is told in its own words; one
