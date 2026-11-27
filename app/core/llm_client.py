@@ -383,22 +383,22 @@ async def complete(
                 user_id=user_id, agent_name=agent_name,
             )
             if r.status_code >= 400:
-                exc = httpx.HTTPStatusError(
+                last_exc = httpx.HTTPStatusError(
                     f"{a_cfg['provider']} HTTP {r.status_code}", request=r.request, response=r
                 )
                 if _http_status_is_retryable(r.status_code) and not is_last:
-                    last_exc = exc
                     continue
-                raise exc
+                break  # not retryable, or nothing left to try: raised below
             return ((data or {})["choices"][0]["message"].get("content") or "").strip()
-        except httpx.HTTPStatusError:
-            raise
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            break  # the egress refused outright: never retried, raised below
         except Exception as e:  # network / timeout / parse
             last_exc = e
             if not is_last:
                 continue
-            raise
-    # Unreachable in practice (loop always returns or raises), but keeps types honest.
+            break
+    # The one place a failed completion is raised from: the last failure seen.
     raise last_exc or RuntimeError("LLM completion failed")
 
 

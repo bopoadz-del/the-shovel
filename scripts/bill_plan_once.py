@@ -675,7 +675,11 @@ def production_model_read(document_id: str, work_dir: str, tolerance: float):
             path.append(found)
         return bpr.render_page_png(path[0], index)
 
-    reader = bpr.model_page_reader(bpr.provider_ask(), render)
+    # The first call keeps the provider's reasoning (it reads a page's sum
+    # lines best); a page whose reply came back empty is asked again for a
+    # plain reply, so it is read instead of counted NOT READ.
+    reader = bpr.model_page_reader(bpr.provider_ask(), render,
+                                   ask_again=bpr.provider_ask(plain_reply=True))
     return bpr.model_bill_read(bpr.saved_page_reader(reader, work_dir), tolerance=tolerance)
 
 

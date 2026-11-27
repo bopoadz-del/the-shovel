@@ -358,8 +358,14 @@ def model_page_reader(
     *,
     prompt: str = PAGE_READ_PROMPT,
     attempts: int = PAGE_READ_ATTEMPTS,
+    ask_again: Callable[[list[dict[str, Any]]], Any] | None = None,
 ) -> Callable[[Any], Any]:
     """A ``read_page`` for :func:`rows_of_model_reads`.
+
+    ``ask_again``, when given, makes every call after the first: the same
+    messages through another ask (in production, the provider asked for a
+    plain reply -- see :func:`provider_ask`). Without it every call goes
+    through ``ask``.
 
     For one ``bill_classify.PageRead`` it renders the page (``render_png`` gets
     the 0-based index), sends it with ``prompt`` through ``ask`` (messages ->
@@ -376,9 +382,9 @@ def model_page_reader(
             render_png(page_read.index))
         replies: list[str] = []
         errors: list[str] = []
-        for _ in range(attempts):
+        for attempt in range(attempts):
             try:
-                text = ask(messages)
+                text = (ask_again if ask_again is not None and attempt else ask)(messages)
             except _CALL_ERRORS as exc:  # an attempt that failed, never a page of no rows
                 code = attempt_error(exc)
                 replies.append(code)
@@ -412,13 +418,20 @@ def render_page_png(file_path: str, index: int, dpi: int = PAGE_READ_DPI) -> byt
             doc.close()
 
 
-def provider_ask(max_tokens: int = PAGE_READ_MAX_TOKENS) -> Callable[[list[dict[str, Any]]], str]:
+def provider_ask(
+    max_tokens: int = PAGE_READ_MAX_TOKENS, *, plain_reply: bool = False,
+) -> Callable[[list[dict[str, Any]]], str]:
     """``ask`` through the product's provider client (``llm_client.complete``):
     the configured provider and model, its usage recording and fallback.
 
-    A page read copies what the page prints, so it asks for a plain reply
-    (``plain_reply``): with the provider's hidden reasoning on, a dense page
-    spent the whole allowance on it and came back empty."""
+    ``plain_reply`` asks the provider to reply without its hidden reasoning.
+    Measured on a dense page of a priced bill: with the reasoning on, the
+    page's sum line was read right, but the reasoning took 5,400 to 16,000
+    tokens of the page's allowance and about half the replies came back
+    empty; with it off the page was read every time, in a fifth of the
+    tokens, with every item right and one digit of that sum line wrong. So
+    the first call keeps the reasoning and the plain reply is for the call
+    after an empty one (``model_page_reader(ask_again=...)``)."""
     import asyncio
 
     from app.core import llm_client
@@ -426,7 +439,7 @@ def provider_ask(max_tokens: int = PAGE_READ_MAX_TOKENS) -> Callable[[list[dict[
     def ask(messages: list[dict[str, Any]]) -> str:
         return asyncio.run(llm_client.complete(
             messages, temperature=0.0, max_tokens=max_tokens,
-            agent_name="bill_page_read", plain_reply=True))
+            agent_name="bill_page_read", plain_reply=plain_reply))
 
     return ask
 
