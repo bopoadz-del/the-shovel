@@ -1,0 +1,58 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:fetch_document",
+  "kind": "rag",
+  "facts": {
+    "name": "Document reader",
+    "described_as": "Fetch the content of ONE specific project document by document_id or filename. Use this when the user refers to a specific or attached file. For open-ended questions across the corpus use search_project_documents instead.",
+    "inputs": [
+      {
+        "name": "document_id",
+        "label": "document id",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The document id (preferred when known, e.g. from an attachment note or a prior search result)."
+      },
+      {
+        "name": "filename",
+        "label": "file name",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The document's original filename (used when the id is not known)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "fetch_document",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": [],
+    "question_kinds": []
+  }
+}

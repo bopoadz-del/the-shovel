@@ -1,0 +1,108 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:dewatering_well_point_spacing",
+  "kind": "formula",
+  "facts": {
+    "name": "Well-point spacing for dewatering",
+    "described_as": "Well-point spacing and number of stages for a dewatering depth and soil type.",
+    "inputs": [
+      {
+        "name": "soil_permeability_m_s",
+        "label": "soil permeability",
+        "type": "number",
+        "unit": "m/s",
+        "range": [
+          1e-12,
+          1
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "required_drawdown_m",
+        "label": "required drawdown",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "well_point_diameter_m",
+        "label": "well point diameter",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "soil_type",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "permeability_m_s",
+        "unit": "m/s",
+        "main": false
+      },
+      {
+        "name": "required_drawdown_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "stages_needed",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "max_depth_capacity_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "well_point_spacing_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "well_point_diameter_m",
+        "unit": "m",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "dewatering_well_point_spacing"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Well-point spacing for dewatering"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

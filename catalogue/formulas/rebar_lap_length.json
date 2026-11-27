@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:rebar_lap_length",
+  "kind": "formula",
+  "facts": {
+    "name": "Reinforcement lap length",
+    "described_as": "Tension lap-splice length of a deformed reinforcing bar.",
+    "inputs": [
+      {
+        "name": "bar_diameter_mm",
+        "label": "bar diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          4,
+          60
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fy_mpa",
+        "label": "reinforcement yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          1500
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fc_mpa",
+        "label": "concrete compressive strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          5,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "confinement_ratio",
+        "label": "confinement term",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          2.5
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "lap_length_mm",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "rebar_lap_length"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Reinforcement lap length"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_rc.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

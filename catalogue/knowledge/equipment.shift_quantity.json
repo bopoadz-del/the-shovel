@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.shift_quantity",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Share of the daily output for one shift",
+    "described_as": "Shift quantity = daily output x shift hours / working hours per day (the course splits a 20 h day as 11 h day shift and 9 h night shift). The hourly rate is th…",
+    "inputs": [
+      {
+        "name": "daily_quantity",
+        "label": "Required daily output",
+        "type": "number",
+        "unit": "meter**3/day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "shift_hours",
+        "label": "Working hours of this shift",
+        "type": "number",
+        "unit": "hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_day",
+        "label": "Working hours per day, all shifts",
+        "type": "number",
+        "unit": "hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.shift_quantity"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Share of the daily output for one shift",
+      "entry": "equipment.shift_quantity",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.shift_quantity",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

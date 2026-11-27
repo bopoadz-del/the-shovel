@@ -1,0 +1,85 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:electrical_installation_sequence",
+  "kind": "formula",
+  "facts": {
+    "name": "Electrical installation programme",
+    "described_as": "Electrical installation programme: stage durations from first fix to handover, at the project's own stage rates.",
+    "inputs": [
+      {
+        "name": "floor_area_m2",
+        "label": "floor area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "num_floors",
+        "label": "number of floors",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          300
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "stage_output_rates",
+        "label": "stage output rates, m2 per day by stage",
+        "type": "table",
+        "unit": "m2/day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_area_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "stages",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "total_days",
+        "unit": "days",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "electrical_installation_sequence"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Electrical installation programme"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:concrete_shrinkage",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete drying shrinkage",
+    "described_as": "Drying shrinkage strain of concrete at a given age.",
+    "inputs": [
+      {
+        "name": "time_days",
+        "label": "age",
+        "type": "number",
+        "unit": "days",
+        "range": [
+          0,
+          36500
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "ultimate_shrinkage_microstrain",
+        "label": "ultimate shrinkage",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          3000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "time_constant_days",
+        "label": "shrinkage time constant",
+        "type": "number",
+        "unit": "days",
+        "range": [
+          1,
+          3650
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shrinkage_microstrain",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "shrinkage_strain",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "fraction_of_ultimate",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "concrete_shrinkage"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete drying shrinkage"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

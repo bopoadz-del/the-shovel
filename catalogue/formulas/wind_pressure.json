@@ -1,0 +1,116 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:wind_pressure",
+  "kind": "formula",
+  "facts": {
+    "name": "Wind pressure",
+    "described_as": "Wind velocity pressure from a wind speed and the selected code's coefficients.",
+    "inputs": [
+      {
+        "name": "wind_speed_m_s",
+        "label": "wind speed",
+        "type": "number",
+        "unit": "m/s",
+        "range": [
+          0,
+          120
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "kz",
+        "label": "velocity pressure exposure coefficient (Kz)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          3
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "kzt",
+        "label": "topographic factor (Kzt)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          4
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "kd",
+        "label": "directionality factor (Kd)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "air_density_kg_m3",
+        "label": "air density",
+        "type": "number",
+        "unit": "kg/m3",
+        "range": [
+          0.5,
+          2
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "velocity_pressure_pa",
+        "unit": "Pa",
+        "main": false
+      },
+      {
+        "name": "velocity_pressure_kn_m2",
+        "unit": "kN/m2",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "wind_pressure"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Wind pressure"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_loads.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

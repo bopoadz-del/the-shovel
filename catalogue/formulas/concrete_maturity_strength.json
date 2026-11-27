@@ -1,0 +1,143 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:concrete_maturity_strength",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete strength by maturity",
+    "described_as": "Concrete strength from its temperature history by the maturity method.",
+    "inputs": [
+      {
+        "name": "temperature_history_c",
+        "label": "recorded temperatures",
+        "type": "series",
+        "unit": "degC",
+        "range": [
+          -30,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "time_intervals_hours",
+        "label": "time intervals",
+        "type": "series",
+        "unit": "h",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "datum_temperature",
+        "label": "datum temperature",
+        "type": "number",
+        "unit": "degC",
+        "range": [
+          -30,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "strength_28d_n_mm2",
+        "label": "28-day strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          1,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "reference_temperature_c",
+        "label": "reference temperature",
+        "type": "number",
+        "unit": "degC",
+        "range": [
+          -30,
+          80
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "gain_a",
+        "label": "strength-gain constant a",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          50
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "gain_b",
+        "label": "strength-gain constant b",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "predicted_strength_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "percent_of_28d",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "maturity_index_c_hrs",
+        "unit": "degC.h",
+        "main": false
+      },
+      {
+        "name": "equivalent_age_days",
+        "unit": "days",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "concrete_maturity_strength"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete strength by maturity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:grout_pressure_calc"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

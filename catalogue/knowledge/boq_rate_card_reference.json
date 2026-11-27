@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:boq_rate_card_reference",
+  "kind": "knowledge",
+  "facts": {
+    "name": "BOQ rate card — observed unit rates by asset type (median and interquartile range)",
+    "described_as": "Generated from `app/lib/data/boq_rate_card.json` by scripts/kb_from_code.py; edit the source, not this copy.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/boq_rate_card_reference.md",
+      "title": "BOQ rate card — observed unit rates by asset type (median and interquartile range)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/boq_rate_card_reference.md",
+      "sections": [
+        "Buildings/Towers — AED",
+        "Buildings/Towers — SAR",
+        "Data Center — USD",
+        "Infrastructure — SAR",
+        "Villas — SAR"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

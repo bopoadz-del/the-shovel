@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:concrete.split_cylinder_tensile",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Splitting tensile strength of a cylinder",
+    "described_as": "Splitting tensile strength f = 2P / (pi x D x L), cylinder loaded along its full length (course standard cylinder 15 cm dia x 30 cm). P in kgf and lengths in c…",
+    "inputs": [
+      {
+        "name": "failure_load",
+        "label": "Load P at splitting failure",
+        "type": "number",
+        "unit": "kilogram_force",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cylinder_diameter",
+        "label": "Cylinder diameter D",
+        "type": "number",
+        "unit": "centimeter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cylinder_length",
+        "label": "Cylinder length L",
+        "type": "number",
+        "unit": "centimeter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "kilogram_force/centimeter**2",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "concrete.split_cylinder_tensile"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Splitting tensile strength of a cylinder",
+      "entry": "concrete.split_cylinder_tensile",
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "concrete.split_cylinder_tensile",
+      "type": "formula",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

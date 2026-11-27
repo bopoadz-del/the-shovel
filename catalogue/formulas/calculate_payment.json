@@ -1,0 +1,139 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:calculate_payment",
+  "kind": "formula",
+  "facts": {
+    "name": "Payment due on a claim",
+    "described_as": "Payment due this period: the amount certified for this period less retention on it. Certificates issued before are not deducted here; they only add to the cumulative certified, so give this period's amount, not a to-date total.",
+    "inputs": [
+      {
+        "name": "claimed_amount",
+        "label": "amount claimed",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": "period"
+      },
+      {
+        "name": "certified_amount",
+        "label": "amount certified",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": "period"
+      },
+      {
+        "name": "retention_rate",
+        "label": "retention",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cumulative_previous_certified",
+        "label": "previously certified amount",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": "cumulative"
+      },
+      {
+        "name": "contract_value",
+        "label": "contract value",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "claimed_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "certified_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "retention_held",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "net_payment_due",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "cumulative_certified",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "percent_complete",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "disputed_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "retention_rate_pct",
+        "unit": "%",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "calculate_payment"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Payment due on a claim"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_knowledge.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:cash_flow"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

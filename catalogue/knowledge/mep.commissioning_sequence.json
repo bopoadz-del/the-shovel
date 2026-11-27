@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:mep.commissioning_sequence",
+  "kind": "knowledge",
+  "facts": {
+    "name": "MEP commissioning sequence and activity-interface charts",
+    "described_as": "MEP commissioning is sequenced and driven by activity-interface charts that map the dependencies between trades and between MEP and the building fabric - e.g.…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "mep.commissioning_sequence"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "MEP commissioning sequence and activity-interface charts",
+      "entry": "mep.commissioning_sequence",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "mep.commissioning_sequence",
+      "type": "checklist",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

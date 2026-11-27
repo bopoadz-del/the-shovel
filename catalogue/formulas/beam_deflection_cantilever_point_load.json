@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_deflection_cantilever_point_load",
+  "kind": "formula",
+  "facts": {
+    "name": "Cantilever deflection under a point load",
+    "described_as": "Tip deflection of a cantilever under a point load at its free end.",
+    "inputs": [
+      {
+        "name": "p_kn",
+        "label": "point load",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "ec_mpa",
+        "label": "modulus of elasticity",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          300000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "i_mm4",
+        "label": "second moment of area",
+        "type": "number",
+        "unit": "mm4",
+        "range": [
+          1,
+          1000000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "deflection",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_deflection_cantilever_point_load"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Cantilever deflection under a point load"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

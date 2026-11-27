@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.cycle_production",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Hourly production of one machine from its cycle time",
+    "described_as": "Production per machine per hour = (60 / cycle time in minutes) x capacity per cycle; 60 / cycle time is the number of trips (cycles) per hour. The result is in…",
+    "inputs": [
+      {
+        "name": "cycle_time",
+        "label": "Full cycle time of one machine",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "unit_capacity",
+        "label": "Quantity moved per cycle (m3, or t for a tanker)",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3/hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.cycle_production"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Hourly production of one machine from its cycle time",
+      "entry": "equipment.cycle_production",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.cycle_production",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

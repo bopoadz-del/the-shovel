@@ -1,0 +1,272 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cost_buildup_concrete",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete cost build-up",
+    "described_as": "Cost build-up of concrete per cubic metre from materials, labour, plant and overheads.",
+    "inputs": [
+      {
+        "name": "quantity_m3",
+        "label": "quantity",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cement_kg_m3",
+        "label": "cement content",
+        "type": "number",
+        "unit": "kg/m3",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "cement_price_per_t",
+        "label": "cement price",
+        "type": "number",
+        "unit": "currency/t",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "aggregate_price_per_t",
+        "label": "aggregate price",
+        "type": "number",
+        "unit": "currency/t",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "water_price_per_m3",
+        "label": "water price",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "microsilica_kg_m3",
+        "label": "microsilica content",
+        "type": "number",
+        "unit": "kg/m3",
+        "range": [
+          0,
+          200
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "microsilica_price_per_kg",
+        "label": "microsilica price",
+        "type": "number",
+        "unit": "currency/kg",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "plasticizer_lit_m3",
+        "label": "plasticizer dose per m3",
+        "type": "number",
+        "unit": "l/m3",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "plasticizer_price_per_lit",
+        "label": "plasticizer price",
+        "type": "number",
+        "unit": "currency/l",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "plant_cost_per_m3",
+        "label": "plant cost",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "labour_cost_per_m3",
+        "label": "labour cost",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "erection_per_m3",
+        "label": "erection cost",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "power_per_m3",
+        "label": "power cost",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "indirect_per_m3",
+        "label": "indirect cost",
+        "type": "number",
+        "unit": "currency/m3",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "indirect_pct",
+        "label": "indirect cost share",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "markup_pct",
+        "label": "markup",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "waste_pct",
+        "label": "waste allowance",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rates",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "material_cost_per_m3",
+        "unit": "currency/m3",
+        "main": false
+      },
+      {
+        "name": "direct_cost_per_m3",
+        "unit": "currency/m3",
+        "main": false
+      },
+      {
+        "name": "selling_price_per_m3",
+        "unit": "currency/m3",
+        "main": true
+      },
+      {
+        "name": "total_project_value",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cost_buildup_concrete"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete cost build-up"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:concrete_mix_design_sg"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

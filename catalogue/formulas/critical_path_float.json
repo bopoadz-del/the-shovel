@@ -1,0 +1,100 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:critical_path_float",
+  "kind": "formula",
+  "facts": {
+    "name": "Total float and criticality",
+    "described_as": "Total float of an activity from its early and late dates, and whether it is critical.",
+    "inputs": [
+      {
+        "name": "early_start",
+        "label": "early start",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "early_finish",
+        "label": "early finish",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "late_start",
+        "label": "late start",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "late_finish",
+        "label": "late finish",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_float",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "is_critical",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "consistency_check_lf_minus_ef",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "critical_path_float"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Total float and criticality"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:fidic_contracts_red_white",
+  "kind": "knowledge",
+  "facts": {
+    "name": "FIDIC Contracts Reference — Red Book (Construction) + White Book (Consultant)",
+    "described_as": "Structural / mechanism reference for the platform's knowledge base. Summarises",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/fidic_contracts_red_white.md",
+      "title": "FIDIC Contracts Reference — Red Book (Construction) + White Book (Consultant)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/fidic_contracts_red_white.md",
+      "sections": [
+        "The FIDIC \"rainbow suite\" — pick the right book",
+        "FIDIC RED BOOK — Conditions of Contract for Construction (2nd ed, 2017; reprinted 2022 w/ amendments)",
+        "FIDIC WHITE BOOK — Client/Consultant Model Services Agreement (5th ed, 2017)",
+        "How they interlock"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

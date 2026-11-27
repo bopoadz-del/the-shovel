@@ -1,0 +1,39 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:evm_thresholds_and_traffic_lights",
+  "kind": "knowledge",
+  "facts": {
+    "name": "EVM Thresholds and Traffic Light System",
+    "described_as": "Interpretation note: an SPI of 0.8 means the project has earned only 80 cents of value for every dollar planned. An SPI below 1.0 always means the project is b…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/evm_thresholds_and_traffic_lights.md",
+      "title": "EVM Thresholds and Traffic Light System"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/evm_thresholds_and_traffic_lights.md",
+      "sections": [
+        "CPI and SPI — Definitions",
+        "CPI Traffic Light System",
+        "Worked Examples",
+        "SPI Traffic Light System",
+        "Combined CPI / SPI Interpretation",
+        "TCPI — To-Complete Performance Index",
+        "Worked Example — Section 20 Overrun",
+        "Forecasting",
+        "Key Rule"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

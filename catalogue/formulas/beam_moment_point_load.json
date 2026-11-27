@@ -1,0 +1,78 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_moment_point_load",
+  "kind": "formula",
+  "facts": {
+    "name": "Beam bending moment under a point load",
+    "described_as": "Maximum bending moment of a simply supported beam under one point load at a given position.",
+    "inputs": [
+      {
+        "name": "point_load_kn",
+        "label": "point load",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "distance_from_left_m",
+        "label": "distance of the load from the left support",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "max_moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_moment_point_load"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Beam bending moment under a point load"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_beam_analysis.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

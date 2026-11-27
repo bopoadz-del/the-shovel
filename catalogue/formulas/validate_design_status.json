@@ -1,0 +1,66 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:validate_design_status",
+  "kind": "formula",
+  "facts": {
+    "name": "Design status check",
+    "described_as": "Whether a status may be written on a design document under the design review procedure.",
+    "inputs": [
+      {
+        "name": "design_status",
+        "label": "design review status",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "design_status",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "valid",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "message",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "primary_result",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "validate_design_status"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Design status check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/results.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

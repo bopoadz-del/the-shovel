@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_deflection_ss_udl",
+  "kind": "formula",
+  "facts": {
+    "name": "Beam deflection under a uniform load",
+    "described_as": "Midspan deflection of a simply supported beam under a uniformly distributed load.",
+    "inputs": [
+      {
+        "name": "w_kn_m",
+        "label": "uniform load",
+        "type": "number",
+        "unit": "kN/m",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "ec_mpa",
+        "label": "modulus of elasticity",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          300000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "i_mm4",
+        "label": "second moment of area",
+        "type": "number",
+        "unit": "mm4",
+        "range": [
+          1,
+          1000000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "deflection",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_deflection_ss_udl"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Beam deflection under a uniform load"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

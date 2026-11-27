@@ -1,0 +1,32 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:interior_finishes_process",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Interior Finishes Take-off and Estimate — the Process Contract",
+    "described_as": "How interior quantities and resource costs are derived on this platform.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/interior_finishes_process.md",
+      "title": "Interior Finishes Take-off and Estimate — the Process Contract"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/interior_finishes_process.md",
+      "sections": [
+        "The process",
+        "Why no defaults"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

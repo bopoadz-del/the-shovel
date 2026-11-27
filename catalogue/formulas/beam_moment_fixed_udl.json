@@ -1,0 +1,76 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_moment_fixed_udl",
+  "kind": "formula",
+  "facts": {
+    "name": "Fixed-end beam moments under a uniform load",
+    "described_as": "Support and midspan bending moments of a fixed-ended beam under a uniformly distributed load.",
+    "inputs": [
+      {
+        "name": "udl_w_kn_m",
+        "label": "uniform load",
+        "type": "number",
+        "unit": "kN/m",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "support_moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "midspan_moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "max_moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_moment_fixed_udl"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Fixed-end beam moments under a uniform load"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_beam_analysis.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

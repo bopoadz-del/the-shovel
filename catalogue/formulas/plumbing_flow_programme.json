@@ -1,0 +1,76 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:plumbing_flow_programme",
+  "kind": "formula",
+  "facts": {
+    "name": "Plumbing installation programme",
+    "described_as": "Plumbing installation programme: stage durations from submittal to handover.",
+    "inputs": [
+      {
+        "name": "floor_area_m2",
+        "label": "floor area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "num_floors",
+        "label": "number of floors",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          300
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "stages",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "cumulative_days",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "total_days",
+        "unit": "days",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "plumbing_flow_programme"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Plumbing installation programme"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

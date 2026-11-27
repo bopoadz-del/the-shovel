@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:search_project_documents",
+  "kind": "rag",
+  "facts": {
+    "name": "Project document search",
+    "described_as": "Search inside this project's documents (including imported Drive files).",
+    "inputs": [
+      {
+        "name": "query",
+        "label": "what to look for",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": "",
+        "described_as": "What to search for."
+      },
+      {
+        "name": "top_k",
+        "label": "number of passages",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          100
+        ],
+        "required": false,
+        "basis": "",
+        "described_as": "Max number of results (default 5)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "search_project_documents",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": [],
+    "question_kinds": []
+  }
+}

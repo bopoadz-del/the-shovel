@@ -1,0 +1,47 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:contracts",
+  "kind": "kernel",
+  "facts": {
+    "name": "Contracts Hat",
+    "described_as": "Variation orders, EOT claims, contractual risk scoring, compliance gates, FIDIC workflow, and dispute handling.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "contracts"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.contracts.json",
+      "manifest": "fork.hat.contracts",
+      "formulas": [
+        "formula:delay_damages_daily",
+        "formula:enforce_critical_rules",
+        "formula:generate_doc_number",
+        "formula:next_ncr_status",
+        "formula:score_risk"
+      ],
+      "tools": [
+        "tool:rfi_generator"
+      ],
+      "skills": [
+        "skill:contracts.c1",
+        "skill:contracts.c2",
+        "skill:contracts.c3",
+        "skill:contracts.c4",
+        "skill:contracts.c5",
+        "skill:contracts.c6",
+        "skill:contracts.c7"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:procurement",
+  "kind": "kernel",
+  "facts": {
+    "name": "Procurement Hat",
+    "described_as": "Tender evaluation, supplier management, purchase orders, material delivery tracking, crane/lifting logistics, procurement lead-time planning. Owns the supply chain and logistics workflow.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "procurement"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.procurement.json",
+      "manifest": "fork.hat.procurement",
+      "formulas": [
+        "formula:crane_planning",
+        "formula:evaluate_tender"
+      ],
+      "tools": [
+        "tool:procurement_list_generator"
+      ],
+      "skills": []
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

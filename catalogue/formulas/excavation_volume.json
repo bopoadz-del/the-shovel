@@ -1,0 +1,105 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:excavation_volume",
+  "kind": "formula",
+  "facts": {
+    "name": "Excavation volume",
+    "described_as": "Bank (in-situ) excavation volume of a rectangular pit or trench, and the loose volume after bulking.",
+    "inputs": [
+      {
+        "name": "length_m",
+        "label": "length",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "width_m",
+        "label": "width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "depth_m",
+        "label": "depth",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          500
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "bulking_factor",
+        "label": "bulking",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "bank_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "loose_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "bulked_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "bulking_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "excavation_volume"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Excavation volume"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_earthwork.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

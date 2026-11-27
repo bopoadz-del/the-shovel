@@ -1,0 +1,71 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:laser_scan_accuracy",
+  "kind": "formula",
+  "facts": {
+    "name": "Laser scan accuracy at range",
+    "described_as": "A scanner's stated ranging accuracy scaled to a working range, for comparison with the tolerance.",
+    "inputs": [
+      {
+        "name": "range_m",
+        "label": "distance",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          2000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "accuracy_at_10m_mm",
+        "label": "stated accuracy",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "range_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "estimated_accuracy_mm",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "laser_scan_accuracy"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Laser scan accuracy at range"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

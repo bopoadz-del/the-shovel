@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:compaction_control",
+  "kind": "formula",
+  "facts": {
+    "name": "Field compaction check",
+    "described_as": "Field compaction as a percentage of the laboratory maximum dry density, against the specified minimum.",
+    "inputs": [
+      {
+        "name": "field_dry_density",
+        "label": "field dry density",
+        "type": "number",
+        "unit": "t/m3",
+        "range": [
+          0.5,
+          3
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "max_dry_density",
+        "label": "maximum dry density",
+        "type": "number",
+        "unit": "t/m3",
+        "range": [
+          0.5,
+          3
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "required_compaction_percent",
+        "label": "required compaction",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          110
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "compaction_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "required_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "passed",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "compaction_control"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Field compaction check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

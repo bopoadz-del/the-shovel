@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:eu_eurocodes_geotechnical_seismic",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Eurocodes — geotechnical and seismic reference pointers",
+    "described_as": "Citation-only scope map, checked 2026-11-06 (Asia/Dubai). No requirements,",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/eu_eurocodes_geotechnical_seismic.md",
+      "title": "Eurocodes — geotechnical and seismic reference pointers"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/eu_eurocodes_geotechnical_seismic.md",
+      "sections": [
+        "EN 1997 — ground engineering",
+        "EN 1998 — earthquake interface",
+        "Verified newer split of the general/building topic",
+        "Application boundary",
+        "Public sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

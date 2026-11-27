@@ -1,0 +1,297 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:mobilization_cost_estimate",
+  "kind": "formula",
+  "facts": {
+    "name": "Mobilisation cost",
+    "described_as": "Mobilisation cost for site set-up from its component items, at the project's own rates.",
+    "inputs": [
+      {
+        "name": "num_personnel",
+        "label": "number of personnel",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "duration_months",
+        "label": "duration",
+        "type": "integer",
+        "unit": "month",
+        "range": [
+          1,
+          240
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "camp_type",
+        "label": "camp type",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "include_offices",
+        "label": "include offices",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "include_camp",
+        "label": "include camp",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "include_transport",
+        "label": "include transport",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "include_safety_medical",
+        "label": "include safety and medical",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "remote_area_factor",
+        "label": "remote area factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          3
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "office_rate_per_person_month",
+        "label": "office cost per person per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "camp_rate_per_person_month",
+        "label": "camp cost per person per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "transport_rate_per_person_month",
+        "label": "transport cost per person per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "safety_medical_rate_per_person_month",
+        "label": "safety and medical cost per person per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "it_rate_per_person_month",
+        "label": "IT cost per person per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "office_setup_cost",
+        "label": "office set-up cost",
+        "type": "text",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "camp_setup_cost",
+        "label": "camp set-up cost",
+        "type": "text",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "safety_setup_cost",
+        "label": "safety set-up cost",
+        "type": "text",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "warehouse_equipment_cost",
+        "label": "warehouse equipment cost",
+        "type": "text",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "demobilization_cost",
+        "label": "demobilisation cost",
+        "type": "text",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rates",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "num_personnel",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "duration_months",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "camp_type",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "remote_area_factor",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "breakdown",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "recurring_monthly",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "total_recurring",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "total_fixed",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "grand_total",
+        "unit": "currency",
+        "main": true
+      },
+      {
+        "name": "currency",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "mobilization_cost_estimate"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Mobilisation cost"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

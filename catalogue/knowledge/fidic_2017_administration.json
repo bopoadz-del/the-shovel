@@ -1,0 +1,44 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:fidic_2017_administration",
+  "kind": "knowledge",
+  "facts": {
+    "name": "FIDIC 2017 Contract Administration — Practice Layer (claims, time, payment, disputes)",
+    "described_as": "Structural / mechanism reference for the platform's knowledge base. Captures the",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/fidic_2017_administration.md",
+      "title": "FIDIC 2017 Contract Administration — Practice Layer (claims, time, payment, disputes)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/fidic_2017_administration.md",
+      "sections": [
+        "What changed 1999 → 2017 (why the practice differs)",
+        "Document hierarchy (descending precedence)",
+        "Employer's Requirements + the three-phase error check (Yellow/Silver)",
+        "The Engineer (Clause 3) and determinations (SC 3.7)",
+        "Review vs No-objection (SC 5.2.2)",
+        "Programme & time (Clause 8) — ties to the platform's schedule engine",
+        "Tests on Completion, Taking-Over, Defects (Clauses 9-11)",
+        "Measurement, valuation & payment (Clauses 12 & 14)",
+        "Securities (Clause 4 / 14)",
+        "Suspension, termination, force majeure (Clauses 15, 16, 19)",
+        "Claims procedure (Clause 20) — the hard time-bars",
+        "DAAB (Clause 21) — standing dispute board",
+        "Key deadline cheat-sheet",
+        "Worked scenarios (how the clauses interact)"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

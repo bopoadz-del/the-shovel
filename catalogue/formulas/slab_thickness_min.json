@@ -1,0 +1,113 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:slab_thickness_min",
+  "kind": "formula",
+  "facts": {
+    "name": "Minimum slab thickness",
+    "described_as": "Minimum one-way slab thickness for deflection control, from span and support condition.",
+    "inputs": [
+      {
+        "name": "span_mm",
+        "label": "span",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          100,
+          200000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "support_condition",
+        "label": "support condition",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "fy_mpa",
+        "label": "reinforcement yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          1500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "cover_mm",
+        "label": "nominal cover",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          0,
+          200
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "bar_diameter_mm",
+        "label": "bar diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          0,
+          60
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "min_thickness_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "support_condition",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "slab_thickness_min"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Minimum slab thickness"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_rc.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

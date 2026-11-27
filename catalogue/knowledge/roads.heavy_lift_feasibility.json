@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:roads.heavy_lift_feasibility",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Heavy-lift required capacity per crane",
+    "described_as": "Required lifted capacity per crane for a multi-crane (tandem) beam erection = beam weight x rigging factor / number of cranes. The rigging factor de-rates for…",
+    "inputs": [
+      {
+        "name": "beam_wt",
+        "label": "Beam (girder) weight",
+        "type": "number",
+        "unit": "ton",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "rigging_factor",
+        "label": "De-rating multiplier for rigging, spreader and dynamic effects",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "n_cranes",
+        "label": "Number of cranes sharing the lift",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "ton",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "roads.heavy_lift_feasibility"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Heavy-lift required capacity per crane",
+      "entry": "roads.heavy_lift_feasibility",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "roads.heavy_lift_feasibility",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

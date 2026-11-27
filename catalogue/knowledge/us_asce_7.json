@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_asce_7",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ASCE 7 — loading, hazard inputs, and compatible design combinations",
+    "described_as": "Original summary of **ASCE/SEI 7-22**, using public ASCE, government, and",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_asce_7.md",
+      "title": "ASCE 7 — loading, hazard inputs, and compatible design combinations"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_asce_7.md",
+      "sections": [
+        "Establish a complete loading basis",
+        "Edition-sensitive examples resolved from public evidence",
+        "Review and verification boundary",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

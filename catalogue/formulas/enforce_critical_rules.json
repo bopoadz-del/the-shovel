@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:enforce_critical_rules",
+  "kind": "formula",
+  "facts": {
+    "name": "Critical-rules gate",
+    "described_as": "Checks a piece of document text against the critical procedure rules and lists every rule it breaks.",
+    "inputs": [
+      {
+        "name": "document_text",
+        "label": "document text",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "compliant",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "violation_count",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "violations",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "enforce_critical_rules"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Critical-rules gate"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "contracts",
+      "file": "app/agents/hats/contracts/formulas/document_rules.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

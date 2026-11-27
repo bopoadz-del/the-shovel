@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_ipc_imc_ifgc",
+  "kind": "knowledge",
+  "facts": {
+    "name": "US building services — IPC, IMC, and IFGC",
+    "described_as": "Original summaries of **2021 IPC, IMC, and IFGC**. Public publisher contents verify",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_ipc_imc_ifgc.md",
+      "title": "US building services — IPC, IMC, and IFGC"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_ipc_imc_ifgc.md",
+      "sections": [
+        "IPC — water quality, drainage, and usable facilities",
+        "IMC — ventilation, exhaust, fire interfaces, and maintenance access",
+        "IFGC — demand, installation, combustion air, and verification",
+        "Remaining governing-code decisions",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

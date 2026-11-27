@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:foundation.floor_counterweight",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Counterweight per unit area from the raft and the floor slabs above it",
+    "described_as": "Counterweight per unit area that resists uplift = concrete unit weight x (raft thickness + number of floor slabs x slab thickness), the counterweight term of f…",
+    "inputs": [
+      {
+        "name": "concrete_unit_weight",
+        "label": "Unit weight of reinforced concrete",
+        "type": "number",
+        "unit": "tonne/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "raft_thickness",
+        "label": "Raft (foundation slab) thickness",
+        "type": "number",
+        "unit": "meter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "slab_count",
+        "label": "Number of floor slabs cast above the raft",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "slab_thickness",
+        "label": "Typical floor slab thickness",
+        "type": "number",
+        "unit": "meter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "tonne/meter**2",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "foundation.floor_counterweight"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Counterweight per unit area from the raft and the floor slabs above it",
+      "entry": "foundation.floor_counterweight",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "foundation.floor_counterweight",
+      "type": "formula",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

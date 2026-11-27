@@ -1,0 +1,226 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:supervision_ratio",
+  "kind": "formula",
+  "facts": {
+    "name": "Supervision manpower",
+    "described_as": "Supervision manpower for given quantities, at the project's own supervision ratios.",
+    "inputs": [
+      {
+        "name": "concrete_m3",
+        "label": "concrete volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "structural_steel_t",
+        "label": "structural steel",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "piping_dia_inch",
+        "label": "piping",
+        "type": "number",
+        "unit": "in",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "electrical_cable_km",
+        "label": "electrical cable",
+        "type": "number",
+        "unit": "km",
+        "range": [
+          0,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "area_m2",
+        "label": "gross area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "concrete_m3_per_supervisor",
+        "label": "concrete per civil supervisor",
+        "type": "text",
+        "unit": "m3",
+        "range": [
+          1,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_t_per_supervisor",
+        "label": "steel per structural supervisor",
+        "type": "text",
+        "unit": "t",
+        "range": [
+          1,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "dia_inch_per_supervisor",
+        "label": "dia-inch per piping supervisor",
+        "type": "text",
+        "unit": "",
+        "range": [
+          1,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "cable_km_per_supervisor",
+        "label": "cable per electrical supervisor",
+        "type": "text",
+        "unit": "km",
+        "range": [
+          1,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "area_m2_per_supervisor",
+        "label": "area per general supervisor",
+        "type": "text",
+        "unit": "m2",
+        "range": [
+          1,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "supervisors_per_hse_officer",
+        "label": "supervisors per HSE officer",
+        "type": "text",
+        "unit": "count",
+        "range": [
+          1,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "staff_per_document_controller",
+        "label": "supervisors per document controller",
+        "type": "text",
+        "unit": "count",
+        "range": [
+          1,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "civil_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "structural_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "piping_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "electrical_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "general_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "total_supervisors",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "hse_officers",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "document_controllers",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "total_supervision_staff",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "supervision_ratio"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Supervision manpower"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

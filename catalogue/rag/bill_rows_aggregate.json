@@ -1,0 +1,86 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:bill_rows_aggregate",
+  "kind": "rag",
+  "facts": {
+    "name": "Bill row count and total",
+    "described_as": "Count, or total the quantity or amount of, the bill of quantities rows whose description contains every given term (optionally only inside a section). Use this for 'how many items ...' and 'what is the total quantity / amount of ...' over a bill: it reads every row of the bill and lists the rows it used with reference and page. Report its count, sum and rows as given; do not add figures yourself.",
+    "inputs": [
+      {
+        "name": "terms",
+        "label": "description words",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "Words every matching row's description contains."
+      },
+      {
+        "name": "section",
+        "label": "section words",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "Words of the bill section (heading path) to stay inside. Optional."
+      },
+      {
+        "name": "measure",
+        "label": "quantity or amount",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "choices": [
+          "quantity",
+          "amount"
+        ],
+        "described_as": "What to sum (default quantity)."
+      },
+      {
+        "name": "document_id",
+        "label": "document id",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The bill document (source PDF or its derived sheet). Optional: default every derived bill."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "computed"
+      }
+    ],
+    "call": {
+      "tool": "bill_rows_aggregate",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "computed",
+      "passages_are_sources": false,
+      "reason_codes": [
+        "no_derived_bill_sheet",
+        "derived_sheet_has_no_readable_bytes",
+        "derived_sheet_is_not_a_readable_workbook"
+      ]
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": [],
+    "question_kinds": []
+  }
+}

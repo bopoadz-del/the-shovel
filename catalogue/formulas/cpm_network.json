@@ -1,0 +1,97 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cpm_network",
+  "kind": "formula",
+  "facts": {
+    "name": "Critical path of an activity network",
+    "described_as": "Forward and backward pass over an activity network: early and late dates, total float and free float of every activity, the project duration and the critical path.",
+    "inputs": [
+      {
+        "name": "activities",
+        "label": "activities with durations and predecessors",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "project_start",
+        "label": "project start date",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "calendar",
+        "label": "working calendar (working weekdays and holidays)",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "near_critical_band_days",
+        "label": "near-critical float band",
+        "type": "number",
+        "unit": "working days",
+        "range": [
+          0,
+          100000
+        ],
+        "required": false,
+        "basis": "",
+        "lower_bound_excluded": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "project_duration",
+        "unit": "working days",
+        "main": true
+      },
+      {
+        "name": "critical_path",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "activities",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "working",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cpm_network"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Critical path of an activity network"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

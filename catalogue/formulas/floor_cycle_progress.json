@@ -1,0 +1,83 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:floor_cycle_progress",
+  "kind": "formula",
+  "facts": {
+    "name": "Floor-cycle progress weighting",
+    "described_as": "Weighted progress across floor/zone elements from completed and total units per element.",
+    "inputs": [
+      {
+        "name": "completed_units",
+        "label": "completed units (series)",
+        "type": "series",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "total_units",
+        "label": "total units (series)",
+        "type": "series",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "weights",
+        "label": "element weights (series, input)",
+        "type": "series",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "weighted_progress",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "element_progress",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "floor_cycle_progress"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Floor-cycle progress weighting"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/project_control.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

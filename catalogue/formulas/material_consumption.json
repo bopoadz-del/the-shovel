@@ -1,0 +1,100 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:material_consumption",
+  "kind": "formula",
+  "facts": {
+    "name": "Material consumption",
+    "described_as": "Material required for a quantity of work from the output per unit and an optional waste factor.",
+    "inputs": [
+      {
+        "name": "quantity_of_work",
+        "label": "quantity of work",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "output_per_unit",
+        "label": "output per unit",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "waste_factor",
+        "label": "waste allowance",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "waste_percent",
+        "label": "waste allowance",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "material_required",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "base_without_waste",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "waste_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "material_consumption"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Material consumption"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

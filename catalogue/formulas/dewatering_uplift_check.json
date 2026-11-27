@@ -1,0 +1,151 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:dewatering_uplift_check",
+  "kind": "formula",
+  "facts": {
+    "name": "Uplift check for stopping dewatering",
+    "described_as": "Whether dewatering can stop: factor of safety of the structure's weight against groundwater uplift.",
+    "inputs": [
+      {
+        "name": "water_depth",
+        "label": "groundwater head",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "raft_thickness",
+        "label": "raft thickness",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          20
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "floor_count",
+        "label": "number of floors",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          0,
+          300
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "floor_thickness",
+        "label": "floor thickness",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          5
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "concrete_unit_weight",
+        "label": "concrete unit weight",
+        "type": "number",
+        "unit": "t/m3",
+        "range": [
+          1,
+          5
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "water_unit_weight",
+        "label": "water unit weight",
+        "type": "number",
+        "unit": "t/m3",
+        "range": [
+          0.9,
+          1.1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "required_fos",
+        "label": "required factor of safety",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          5
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "uplift_force_t_m2",
+        "unit": "t/m2",
+        "main": false
+      },
+      {
+        "name": "counter_weight_t_m2",
+        "unit": "t/m2",
+        "main": false
+      },
+      {
+        "name": "fos",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "can_stop",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "needs_tension_piles",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "min_floors_for_stop",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "dewatering_uplift_check"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Uplift check for stopping dewatering"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

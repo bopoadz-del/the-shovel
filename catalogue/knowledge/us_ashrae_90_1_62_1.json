@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_ashrae_90_1_62_1",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ASHRAE 90.1 and 62.1 — energy and ventilation are coordinated, not interchangeable",
+    "described_as": "Original guidance for **90.1-2022 and 62.1-2022**, using public publisher and DOE",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_ashrae_90_1_62_1.md",
+      "title": "ASHRAE 90.1 and 62.1 — energy and ventilation are coordinated, not interchangeable"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_ashrae_90_1_62_1.md",
+      "sections": [
+        "90.1-2022 — whole compliance paths, not isolated efficiency claims",
+        "62.1-2022 — use, population, distribution, and system intake",
+        "Demand control and CO2 — retain the addendum conditions",
+        "Remaining verification",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

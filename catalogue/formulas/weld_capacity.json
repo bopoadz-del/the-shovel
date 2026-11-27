@@ -1,0 +1,118 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:weld_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Fillet weld capacity",
+    "described_as": "Design strength of a fillet weld over its length.",
+    "inputs": [
+      {
+        "name": "leg_size_mm",
+        "label": "weld leg size",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          2,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "length_mm",
+        "label": "weld length",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          1,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "electrode_strength_mpa",
+        "label": "electrode strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          200,
+          1500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "beta_w",
+        "label": "weld correlation factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0.5,
+          1.5
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_grade",
+        "label": "steel grade",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "capacity_per_mm_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "effective_throat_mm",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "weld_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Fillet weld capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_steel.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

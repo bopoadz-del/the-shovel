@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:slabs.flat_vs_drophead",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Slab system: flat (two-way) plate vs drop-head/drop-panel",
+    "described_as": "Decision pattern for high-rise floor slabs. A flat two-way plate gives the simplest soffit, fastest table-form cycling, and minimum floor-to-floor height, but…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "slabs.flat_vs_drophead"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Slab system: flat (two-way) plate vs drop-head/drop-panel",
+      "entry": "slabs.flat_vs_drophead",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "slabs.flat_vs_drophead",
+      "type": "decision_pattern",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

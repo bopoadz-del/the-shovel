@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:columns.value_engineering_grade_up",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Value engineering: grade up 60->80 to delete composite I-beam",
+    "described_as": "Value-engineering pattern observed on the tower: increasing column concrete grade from 60 to 80 N/mm2 raised capacity enough to DELETE an embedded composite st…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "columns.value_engineering_grade_up"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Value engineering: grade up 60->80 to delete composite I-beam",
+      "entry": "columns.value_engineering_grade_up",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "columns.value_engineering_grade_up",
+      "type": "decision_pattern",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

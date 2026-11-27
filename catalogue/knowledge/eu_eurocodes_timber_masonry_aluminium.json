@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:eu_eurocodes_timber_masonry_aluminium",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Eurocodes — timber, masonry and aluminium reference pointers",
+    "described_as": "Citation-only navigation, checked 2026-11-06 (Asia/Dubai). Descriptions below are",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/eu_eurocodes_timber_masonry_aluminium.md",
+      "title": "Eurocodes — timber, masonry and aluminium reference pointers"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/eu_eurocodes_timber_masonry_aluminium.md",
+      "sections": [
+        "EN 1995 — structural timber",
+        "EN 1996 — structural masonry",
+        "EN 1999 — structural aluminium",
+        "Application boundary",
+        "Public sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

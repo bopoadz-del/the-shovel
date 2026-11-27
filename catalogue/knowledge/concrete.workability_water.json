@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:concrete.workability_water",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Mix water beyond what hydration needs",
+    "described_as": "Water added for workability = mix water (w/c x cement) - water needed for hydration (hydration fraction x cement). The course states hydration needs about 20-2…",
+    "inputs": [
+      {
+        "name": "water_cement_ratio",
+        "label": "Free water / cement ratio of the mix",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cement_content",
+        "label": "Cement in the batch or per m3",
+        "type": "number",
+        "unit": "kilogram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "hydration_fraction",
+        "label": "Water needed for hydration as a fraction of cement weight (course: 0.20-0.25)",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "liter",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "concrete.workability_water"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Mix water beyond what hydration needs",
+      "entry": "concrete.workability_water",
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp25-26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "concrete.workability_water",
+      "type": "formula",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp25-26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

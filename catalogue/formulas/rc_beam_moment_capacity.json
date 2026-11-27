@@ -1,0 +1,113 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:rc_beam_moment_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete beam bending capacity",
+    "described_as": "Design flexural capacity of a singly reinforced rectangular concrete beam.",
+    "inputs": [
+      {
+        "name": "steel_area_mm2",
+        "label": "steel area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fy_mpa",
+        "label": "reinforcement yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          1500
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "width_mm",
+        "label": "section width",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          50,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "eff_depth_mm",
+        "label": "effective depth",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          20,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fc_mpa",
+        "label": "concrete compressive strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          5,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "moment_capacity_kn_m",
+        "unit": "kN.m",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "rc_beam_moment_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete beam bending capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_rc.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:shear_stress_check"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

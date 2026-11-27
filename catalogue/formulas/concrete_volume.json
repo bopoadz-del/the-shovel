@@ -1,0 +1,209 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:concrete_volume",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete volume",
+    "described_as": "Concrete volume of a rectangular element, a cylinder or a trapezoidal section, with an optional waste factor and element count.",
+    "inputs": [
+      {
+        "name": "length_m",
+        "label": "length",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "width_m",
+        "label": "width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "thickness_m",
+        "label": "thickness",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          50
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "shape",
+        "label": "shape",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "diameter_m",
+        "label": "diameter",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "height_m",
+        "label": "height",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "top_width_m",
+        "label": "top width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "bottom_width_m",
+        "label": "bottom width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "depth_m",
+        "label": "depth",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "waste_factor",
+        "label": "waste allowance",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "quantity",
+        "label": "number of elements",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          1,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shape",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "quantity",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "net_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "volume_with_waste_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "value",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "waste_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "concrete_volume"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete volume"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_quantities.py"
+    },
+    "required_groups": [
+      [
+        "length_m",
+        "diameter_m",
+        "top_width_m"
+      ]
+    ],
+    "feeds": [
+      "formula:carbon_footprint_concrete"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

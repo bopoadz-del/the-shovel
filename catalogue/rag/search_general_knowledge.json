@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:search_general_knowledge",
+  "kind": "rag",
+  "facts": {
+    "name": "Knowledge base search",
+    "described_as": "Search the platform's general-knowledge library (standards, codes, guidance and training material) -- not the project's own documents. Results are cited as general knowledge.",
+    "inputs": [
+      {
+        "name": "query",
+        "label": "what to look for",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": "",
+        "described_as": "What to look for."
+      },
+      {
+        "name": "top_k",
+        "label": "number of passages",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          20
+        ],
+        "required": false,
+        "basis": "",
+        "described_as": "How many passages (default 5)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/knowledge.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": [],
+    "question_kinds": []
+  }
+}

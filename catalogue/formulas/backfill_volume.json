@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:backfill_volume",
+  "kind": "formula",
+  "facts": {
+    "name": "Backfill volume",
+    "described_as": "Backfill needed around a structure: the void left after the structure, and the loose volume to import allowing for swell.",
+    "inputs": [
+      {
+        "name": "excavation_bank_m3",
+        "label": "excavated bank volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "structure_volume_m3",
+        "label": "structure volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "swell_factor",
+        "label": "swell",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "void_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "loose_backfill_needed_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "swell_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "backfill_volume"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Backfill volume"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_earthwork.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

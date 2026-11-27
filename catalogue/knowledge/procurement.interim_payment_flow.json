@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:procurement.interim_payment_flow",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Interim Payment Certification Flow",
+    "described_as": "Governs the progress / interim payment cycle from a registered contractor payment request through cost-consultant recommendation and a mandatory payment-certif…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "procurement.interim_payment_flow"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Interim Payment Certification Flow",
+      "entry": "procurement.interim_payment_flow",
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document_pattern",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "procurement.interim_payment_flow",
+      "type": "workflow",
+      "domain": "construction.procurement",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document_pattern",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

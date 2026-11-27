@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.fleet_study_hourly_rate",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Fleet study: hourly rate per hauling machine from its outputs at three haul distances",
+    "described_as": "Fleet study method of the course: for each of the three haul distances of the study, output per machine per hour = (60 / cycle time in minutes) x load per trip…",
+    "inputs": [
+      {
+        "name": "unit_capacity",
+        "label": "Quantity carried per load by one hauling machine (scraper bowl, truck body)",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_short",
+        "label": "Full cycle time of one machine at the shortest haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_middle",
+        "label": "Full cycle time of one machine at the middle haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_long",
+        "label": "Full cycle time of one machine at the longest haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3/hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.fleet_study_hourly_rate"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Fleet study: hourly rate per hauling machine from its outputs at three haul distances",
+      "entry": "equipment.fleet_study_hourly_rate",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.fleet_study_hourly_rate",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

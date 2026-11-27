@@ -1,0 +1,153 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:post_tensioning_force",
+  "kind": "formula",
+  "facts": {
+    "name": "Post-tensioning force",
+    "described_as": "Post-tensioning force needed to balance a share of the distributed load, from span and tendon drape.",
+    "inputs": [
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "slab_thickness_m",
+        "label": "slab thickness",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          5
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "live_load_kn_m2",
+        "label": "live load",
+        "type": "number",
+        "unit": "kN/m2",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "dead_load_kn_m2",
+        "label": "dead load",
+        "type": "number",
+        "unit": "kN/m2",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "tendon_stress_n_mm2",
+        "label": "tendon stress",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          100,
+          2500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "tendon_diameter_mm",
+        "label": "tendon diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          3,
+          50
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "eccentricity_ratio",
+        "label": "eccentricity ratio",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "tendon_force_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "tendon_area_mm2",
+        "unit": "mm2",
+        "main": false
+      },
+      {
+        "name": "num_strands",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "balanced_load_kn_m",
+        "unit": "kN/m",
+        "main": false
+      },
+      {
+        "name": "eccentricity_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "cable_profile",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "post_tensioning_force"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Post-tensioning force"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:masonry_wall_capacity"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

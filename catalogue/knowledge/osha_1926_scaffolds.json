@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:osha_1926_scaffolds",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Scaffolds — Site Safety Criteria (OSHA 29 CFR 1926 Subpart L)",
+    "described_as": "REAL, sourced scaffold thresholds for construction sites. Source: OSHA 29 CFR",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/osha_1926_scaffolds.md",
+      "title": "Scaffolds — Site Safety Criteria (OSHA 29 CFR 1926 Subpart L)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/osha_1926_scaffolds.md",
+      "sections": [
+        "Capacity and stability",
+        "Fall protection and guardrails",
+        "Minimum clearance from energized power lines",
+        "KSA applicability",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

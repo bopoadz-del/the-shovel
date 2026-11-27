@@ -1,0 +1,41 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:ksa_construction_authorities",
+  "kind": "knowledge",
+  "facts": {
+    "name": "KSA Construction Regulatory Authorities & Approvals",
+    "described_as": "General-knowledge reference on the Saudi Arabian (KSA) authorities that govern",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/ksa_construction_authorities.md",
+      "title": "KSA Construction Regulatory Authorities & Approvals"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/ksa_construction_authorities.md",
+      "sections": [
+        "Approval sequence across the build lifecycle",
+        "MOMRAH — Ministry of Municipalities and Housing",
+        "Municipalities (Amanah) and the Balady platform",
+        "Saudi Building Code (SBC) and SBCNC",
+        "National Water Company (NWC) — water & wastewater",
+        "Electricity — SEC and the regulator (SERA)",
+        "Civil Defense (DGCD) — fire & life safety via Salamah",
+        "Environmental — NCEC",
+        "Product conformity — SASO / SABER",
+        "Special zones — RCJY and giga-projects",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:leed_points_estimate",
+  "kind": "formula",
+  "facts": {
+    "name": "LEED certification level",
+    "described_as": "Maps a LEED point total to its certification level.",
+    "inputs": [
+      {
+        "name": "points",
+        "label": "LEED points",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          110
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "points",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "certification_level",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "leed_points_estimate"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "LEED certification level"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_formulas_reference_tables.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

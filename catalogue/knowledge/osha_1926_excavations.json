@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:osha_1926_excavations",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Excavations & Trenching — Site Safety Criteria (OSHA 29 CFR 1926 Subpart P)",
+    "described_as": "REAL, sourced excavation and trenching thresholds for construction sites.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/osha_1926_excavations.md",
+      "title": "Excavations & Trenching — Site Safety Criteria (OSHA 29 CFR 1926 Subpart P)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/osha_1926_excavations.md",
+      "sections": [
+        "Access, egress and edge protection",
+        "When a protective system is required",
+        "Maximum allowable slopes by soil type (simple slope)",
+        "Inspection and water",
+        "KSA applicability",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

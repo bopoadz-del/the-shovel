@@ -1,0 +1,87 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:carbon_footprint_concrete",
+  "kind": "formula",
+  "facts": {
+    "name": "Embodied carbon of concrete",
+    "described_as": "Embodied carbon of a concrete volume from an emission factor per cubic metre.",
+    "inputs": [
+      {
+        "name": "volume_m3",
+        "label": "volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "grade",
+        "label": "concrete grade",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "embodied_kgco2e_m3",
+        "label": "embodied carbon per m3",
+        "type": "number",
+        "unit": "kgCO2e/m3",
+        "range": [
+          0,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_kgco2e",
+        "unit": "kgCO2e",
+        "main": false
+      },
+      {
+        "name": "total_tco2e",
+        "unit": "tCO2e",
+        "main": false
+      },
+      {
+        "name": "factor_kgco2e_m3",
+        "unit": "kgCO2e/m3",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "carbon_footprint_concrete"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Embodied carbon of concrete"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_reference_tables.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:concrete_volume"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

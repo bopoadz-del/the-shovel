@@ -1,0 +1,54 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:fineness_modulus",
+  "kind": "formula",
+  "facts": {
+    "name": "Aggregate fineness modulus",
+    "described_as": "Fineness modulus of an aggregate from its cumulative sieve retentions.",
+    "inputs": [
+      {
+        "name": "sieve_retained_percentages",
+        "label": "cumulative percentages retained",
+        "type": "series",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "fineness_modulus",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "fineness_modulus"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Aggregate fineness modulus"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

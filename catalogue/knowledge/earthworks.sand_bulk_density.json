@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.sand_bulk_density",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Calibrated bulk density of the sand-cone sand",
+    "described_as": "Sand bulk density = mass of sand filling the calibration container / container volume (the calibration step of the sand-cone field density test; the course's l…",
+    "inputs": [
+      {
+        "name": "sand_mass",
+        "label": "Mass of sand filling the calibration container",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "container_volume",
+        "label": "Calibrated volume of the container",
+        "type": "number",
+        "unit": "centimeter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "gram/centimeter**3",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.sand_bulk_density"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Calibrated bulk density of the sand-cone sand",
+      "entry": "earthworks.sand_bulk_density",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.sand_bulk_density",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

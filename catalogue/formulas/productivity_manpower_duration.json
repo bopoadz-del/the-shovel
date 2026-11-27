@@ -1,0 +1,254 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:productivity_manpower_duration",
+  "kind": "formula",
+  "facts": {
+    "name": "Quantity, productivity, manpower and duration",
+    "described_as": "Links quantity, productivity, manpower and duration: any one from the others.",
+    "inputs": [
+      {
+        "name": "quantity_executed",
+        "label": "quantity executed",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "man_hours",
+        "label": "man-hours",
+        "type": "number",
+        "unit": "man-hour",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "quantity",
+        "label": "work quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "productivity",
+        "label": "labour productivity",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "manpower",
+        "label": "crew size",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "working_hours",
+        "label": "working hours",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "remaining_manhours",
+        "label": "remaining man-hours",
+        "type": "number",
+        "unit": "man-hour",
+        "range": [
+          0,
+          10000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "available_hours",
+        "label": "available hours",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "daily_production",
+        "label": "daily production",
+        "type": "number",
+        "unit": "",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "remaining_qty",
+        "label": "remaining quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "remaining_days",
+        "label": "remaining duration",
+        "type": "number",
+        "unit": "days",
+        "range": [
+          0,
+          36500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "productivity_rate",
+        "label": "production rate",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "rate_unit",
+        "label": "rate unit",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "crew_cost_per_day",
+        "label": "crew cost per day",
+        "type": "number",
+        "unit": "currency/day",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "day_rate",
+        "label": "day rate",
+        "type": "number",
+        "unit": "currency/day",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "gang_cost_per_day",
+        "label": "gang cost per day",
+        "type": "number",
+        "unit": "currency/day",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "productivity",
+        "unit": "1/man-hour",
+        "main": false
+      },
+      {
+        "name": "required_manpower",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "manhours_required",
+        "unit": "h",
+        "main": false
+      },
+      {
+        "name": "daily_required_production",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "duration",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "total_cost",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "productivity_manpower_duration"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Quantity, productivity, manpower and duration"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:cost_per_area"
+    ],
+    "fed_by": [
+      "formula:crew_sizing"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

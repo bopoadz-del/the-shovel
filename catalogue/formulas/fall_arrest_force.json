@@ -1,0 +1,100 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:fall_arrest_force",
+  "kind": "formula",
+  "facts": {
+    "name": "Fall arrest force",
+    "described_as": "Peak arrest force on a falling worker from mass, free-fall distance and deceleration distance.",
+    "inputs": [
+      {
+        "name": "worker_mass_kg",
+        "label": "worker mass",
+        "type": "number",
+        "unit": "kg",
+        "range": [
+          20,
+          300
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "free_fall_m",
+        "label": "free-fall distance",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "deceleration_distance_m",
+        "label": "deceleration distance",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "g",
+        "label": "gravitational acceleration",
+        "type": "number",
+        "unit": "",
+        "range": [
+          9.7,
+          9.9
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "max_arrest_force_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "within_osha_limit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "osha_limit_kn",
+        "unit": "kN",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "fall_arrest_force"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Fall arrest force"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "safety",
+      "file": "app/agents/hats/safety/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

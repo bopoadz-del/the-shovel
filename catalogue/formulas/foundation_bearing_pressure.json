@@ -1,0 +1,117 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:foundation_bearing_pressure",
+  "kind": "formula",
+  "facts": {
+    "name": "Foundation bearing pressure",
+    "described_as": "Bearing pressure under a foundation from load and area, and its factor of safety against the soil capacity.",
+    "inputs": [
+      {
+        "name": "foundation_width_m",
+        "label": "foundation width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "foundation_length_m",
+        "label": "foundation length",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "column_load_kn",
+        "label": "column load",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "soil_bearing_capacity_kn_m2",
+        "label": "allowable bearing capacity",
+        "type": "number",
+        "unit": "kN/m2",
+        "range": [
+          0,
+          20000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "foundation_depth_m",
+        "label": "foundation depth",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          50
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "bearing_pressure_kn_m2",
+        "unit": "kN/m2",
+        "main": false
+      },
+      {
+        "name": "net_pressure_kn_m2",
+        "unit": "kN/m2",
+        "main": false
+      },
+      {
+        "name": "fos_against_bearing",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "bearing_ok",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "foundation_bearing_pressure"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Foundation bearing pressure"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

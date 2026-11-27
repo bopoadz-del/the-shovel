@@ -1,0 +1,68 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:design",
+  "kind": "kernel",
+  "facts": {
+    "name": "Design Hat",
+    "described_as": "Structural and geotechnical design checks: loads, beams, columns, reinforced concrete and steel members, masonry and earthwork design parameters.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "design"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.design.json",
+      "manifest": "fork.hat.design",
+      "formulas": [
+        "formula:beam_deflection_cantilever_point_load",
+        "formula:beam_deflection_cantilever_udl",
+        "formula:beam_deflection_ss_point_load_midspan",
+        "formula:beam_deflection_ss_udl",
+        "formula:beam_governing_moment",
+        "formula:beam_moment_fixed_udl",
+        "formula:beam_moment_point_load",
+        "formula:beam_moment_simple",
+        "formula:beam_reactions",
+        "formula:beam_shear_simple",
+        "formula:bolt_shear_capacity",
+        "formula:carbon_footprint_concrete",
+        "formula:column_axial_capacity",
+        "formula:composite_column_design",
+        "formula:concrete_mix_design_sg",
+        "formula:concrete_mix_slip_form",
+        "formula:dewatering_uplift_check",
+        "formula:dewatering_well_point_spacing",
+        "formula:foundation_bearing_pressure",
+        "formula:live_load_reduction",
+        "formula:masonry_wall_capacity",
+        "formula:modulus_of_elasticity_concrete",
+        "formula:post_tensioning_force",
+        "formula:precast_beam_erection_check",
+        "formula:rc_beam_moment_capacity",
+        "formula:rc_beam_shear_capacity",
+        "formula:rebar_lap_length",
+        "formula:seismic_base_shear",
+        "formula:shear_stress_check",
+        "formula:slab_thickness_min",
+        "formula:slope_fos_simple",
+        "formula:steel_tension_capacity",
+        "formula:thermal_shrinkage_equivalence",
+        "formula:unit_weight_concrete",
+        "formula:weld_capacity",
+        "formula:wind_pressure"
+      ],
+      "tools": [],
+      "skills": []
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

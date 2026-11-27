@@ -1,0 +1,91 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:score_risk",
+  "kind": "formula",
+  "facts": {
+    "name": "Risk score",
+    "described_as": "Risk score and band from probability and impact ratings.",
+    "inputs": [
+      {
+        "name": "probability",
+        "label": "probability",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          5
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "impact",
+        "label": "impact rating",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          5
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "probability",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "impact",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "score",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "band",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "requires_action",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "description",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "score_risk"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Risk score"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "contracts",
+      "file": "app/agents/hats/contracts/formulas/construction_knowledge.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,149 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:calculate_evm",
+  "kind": "formula",
+  "facts": {
+    "name": "Earned value measures",
+    "described_as": "Earned value measures (cost and schedule variance, CPI, SPI, estimate at completion) from PV, EV, AC and BAC.",
+    "inputs": [
+      {
+        "name": "bac",
+        "label": "budget at completion",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "bcwp",
+        "label": "earned value (BCWP)",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "bcws",
+        "label": "planned value (BCWS)",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "acwp",
+        "label": "actual cost (ACWP)",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "pv",
+        "label": "planned value",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ev",
+        "label": "earned value",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ac",
+        "label": "actual cost",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "cost",
+        "unit": "currency (CV, CPI, EAC)",
+        "main": false
+      },
+      {
+        "name": "schedule",
+        "unit": "currency (SV, SPI)",
+        "main": false
+      },
+      {
+        "name": "cpi_health",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "calculate_evm"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Earned value measures"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_knowledge.py"
+    },
+    "required_groups": [
+      [
+        "pv",
+        "bcws"
+      ],
+      [
+        "ev",
+        "bcwp"
+      ],
+      [
+        "ac",
+        "acwp"
+      ]
+    ],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_ada_icc_a117_1",
+  "kind": "knowledge",
+  "facts": {
+    "name": "US accessibility — ADA 2010 and ICC A117.1-2017 are distinct obligations",
+    "described_as": "Original summary of the **2010 ADA Standards** and selected **ICC A117.1-2017**",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_ada_icc_a117_1.md",
+      "title": "US accessibility — ADA 2010 and ICC A117.1-2017 are distinct obligations"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_ada_icc_a117_1.md",
+      "sections": [
+        "Separate legal coverage, scoping, and technical detail",
+        "Publicly resolved dimensions — keep the edition and context attached",
+        "Review the continuous usable journey",
+        "Remaining applicability",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

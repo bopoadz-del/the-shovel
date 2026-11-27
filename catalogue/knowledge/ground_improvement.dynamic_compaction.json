@@ -1,0 +1,79 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:ground_improvement.dynamic_compaction",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Dynamic compaction improvement depth",
+    "described_as": "Depth of ground improvement from dynamic (drop-weight) compaction: D = 0.5 * sqrt(M * H), where D is improvement depth in metres, M is the bounder (tamper) mas…",
+    "inputs": [
+      {
+        "name": "M",
+        "label": "Bounder (tamper) mass, 2-50 t",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "H",
+        "label": "Drop height, 7-35 m",
+        "type": "number",
+        "unit": "meter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "ground_improvement.dynamic_compaction"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Dynamic compaction improvement depth",
+      "entry": "ground_improvement.dynamic_compaction",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "ground_improvement.dynamic_compaction",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

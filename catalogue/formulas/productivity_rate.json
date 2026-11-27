@@ -1,0 +1,115 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:productivity_rate",
+  "kind": "formula",
+  "facts": {
+    "name": "Productivity rate",
+    "described_as": "Output per man-hour; with the crew size, also the crew-hours and the output per crew-hour. Without a crew size the per-crew figures are not computed -- the crew is never assumed.",
+    "inputs": [
+      {
+        "name": "output_quantity",
+        "label": "output quantity",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "labor_hours",
+        "label": "man-hours",
+        "type": "number",
+        "unit": "man-hour",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crew_size",
+        "label": "crew size",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "rate_per_hour",
+        "unit": "output/man-hour",
+        "main": false
+      },
+      {
+        "name": "rate_per_worker_hour",
+        "unit": "output/worker-hour",
+        "main": false
+      },
+      {
+        "name": "rate_per_crew_hour",
+        "unit": "output/crew-hour",
+        "main": false
+      },
+      {
+        "name": "crew_hours",
+        "unit": "h",
+        "main": false
+      },
+      {
+        "name": "crew_size",
+        "unit": "nr",
+        "main": false
+      },
+      {
+        "name": "unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "value",
+        "unit": "output/man-hour",
+        "main": false
+      },
+      {
+        "name": "rate_per_worker_hour_unit",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "productivity_rate"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Productivity rate"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_commercial.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:pe_unit_convert"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

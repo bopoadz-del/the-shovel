@@ -1,0 +1,76 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:manhours_scurve",
+  "kind": "formula",
+  "facts": {
+    "name": "Manhours S-curve",
+    "described_as": "Planned vs actual manhours percent complete and a productivity index (progress earned per manhour).",
+    "inputs": [
+      {
+        "name": "planned_mh",
+        "label": "planned manhours (series)",
+        "type": "series",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "actual_mh",
+        "label": "actual manhours to date (series)",
+        "type": "series",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "cum_planned_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "cum_actual_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "productivity_index",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "manhours_scurve"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Manhours S-curve"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/project_control.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

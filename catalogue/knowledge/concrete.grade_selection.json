@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:concrete.grade_selection",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Concrete grade selection by structural element",
+    "described_as": "Select compressive strength grade by element function. Core walls, columns and other primary vertical load-bearing elements typically use high-strength concret…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "concrete.grade_selection"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Concrete grade selection by structural element",
+      "entry": "concrete.grade_selection",
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "concrete.grade_selection",
+      "type": "rule",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

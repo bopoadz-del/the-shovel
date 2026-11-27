@@ -1,0 +1,53 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:thermal.mass_pour_mockup_peak_temperatures",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Mass-concrete mock-up: peak temperature and time of peak per logger",
+    "described_as": "Recorded maximum temperature and the elapsed time at which it occurred, per embedded logger, for a mass-concrete mock-up instrumented on four lines (centre, si…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "thermal.mass_pour_mockup_peak_temperatures"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Mass-concrete mock-up: peak temperature and time of peak per logger",
+      "entry": "thermal.mass_pour_mockup_peak_temperatures",
+      "provenance": {
+        "source": "mass concrete site-experience reference",
+        "course_reference": "owner-supplied course material, mass concrete mock-up results, pp12-13, 15-16, 18-19, 21-22",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "thermal.mass_pour_mockup_peak_temperatures",
+      "type": "table",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "mass concrete site-experience reference",
+        "course_reference": "owner-supplied course material, mass concrete mock-up results, pp12-13, 15-16, 18-19, 21-22",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

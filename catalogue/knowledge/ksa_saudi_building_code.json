@@ -1,0 +1,53 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:ksa_saudi_building_code",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Saudi Building Code (SBC) — Structure & Application",
+    "described_as": "General-knowledge reference on the Saudi Building Code (SBC): what it is, how the",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/ksa_saudi_building_code.md",
+      "title": "Saudi Building Code (SBC) — Structure & Application"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/ksa_saudi_building_code.md",
+      "sections": [
+        "What the SBC is",
+        "Role in the approval lifecycle",
+        "Series structure",
+        "Structural sub-series (300s)",
+        "How to apply it in practice",
+        "Discipline summaries — evidence and edition limits",
+        "SBC 201 — Overall building strategy and approvals (2024 references)",
+        "SBC 301 — Structural actions and hazard inputs (2018 section references only)",
+        "SBC 302 — Temporary works, concrete execution, and inspection (2024 references)",
+        "SBC 303 — Ground investigation and foundation behaviour (2024 references)",
+        "SBC 304 — Concrete strength, durability, and detailing (2024 references)",
+        "SBC 305 — Masonry systems, restraint, and quality (2024 references)",
+        "SBC 306 — Steel members, stability, and connections (2024 AR navigation only)",
+        "SBC 401 — Electrical safety and installation verification (2024 references)",
+        "SBC 501 — Ventilation, HVAC installation, and system interfaces (2024 references)",
+        "SBC 601 — Energy review for nonresidential buildings (2018 references only)",
+        "SBC 701 — Water, sanitary drainage, and stormwater (2024 references)",
+        "SBC 801 — Fire prevention, response, and protection systems (2024 references)",
+        "SBC 901 — Assessing and changing existing buildings (2024 references)",
+        "Using these summaries in an answer",
+        "Sources",
+        "Public sources for the discipline summaries",
+        "Additional sources for bounded operative examples"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

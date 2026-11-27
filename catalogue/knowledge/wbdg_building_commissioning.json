@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:wbdg_building_commissioning",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Building Commissioning — Process, Documents & Roles (WBDG)",
+    "described_as": "Reference note on the building commissioning (Cx) process. Source: WBDG Building",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/wbdg_building_commissioning.md",
+      "title": "Building Commissioning — Process, Documents & Roles (WBDG)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/wbdg_building_commissioning.md",
+      "sections": [
+        "The commissioning process phases",
+        "Key commissioning documents",
+        "Types of commissioning",
+        "Roles",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

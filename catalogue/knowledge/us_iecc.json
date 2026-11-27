@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_iecc",
+  "kind": "knowledge",
+  "facts": {
+    "name": "IECC — commercial and residential energy compliance",
+    "described_as": "Original summary of the **2021 International Energy Conservation Code**, based",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_iecc.md",
+      "title": "IECC — commercial and residential energy compliance"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_iecc.md",
+      "sections": [
+        "Commercial route and mandatory interfaces",
+        "Air leakage — values must retain their test boundary",
+        "Residential provisions",
+        "What still requires a governing-code decision",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

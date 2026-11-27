@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:modulus_of_rupture",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete modulus of rupture",
+    "described_as": "Flexural tensile strength (modulus of rupture) of concrete, to the selected code.",
+    "inputs": [
+      {
+        "name": "fck_n_mm2",
+        "label": "characteristic concrete strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          5,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "fck_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "value",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "modulus_of_rupture_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "split_cylinder_aci_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "tensile_pct_of_compressive",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "modulus_of_rupture"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete modulus of rupture"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:modulus_of_elasticity_concrete"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

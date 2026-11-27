@@ -1,0 +1,71 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:roi_calculator",
+  "kind": "formula",
+  "facts": {
+    "name": "Return on investment",
+    "described_as": "Return on investment as a percentage of cost.",
+    "inputs": [
+      {
+        "name": "gain",
+        "label": "amount gained",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          -10000000000000.0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cost",
+        "label": "investment cost",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "net_profit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "roi_percent",
+        "unit": "%",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "roi_calculator"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Return on investment"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_formulas_commercial.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

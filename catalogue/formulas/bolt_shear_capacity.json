@@ -1,0 +1,113 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:bolt_shear_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Bolt shear capacity",
+    "described_as": "Design shear capacity of a bolt over its shear planes, to the selected code. A nominal metric size is the tensile stress area.",
+    "inputs": [
+      {
+        "name": "bolt_area_mm2",
+        "label": "bolt area",
+        "type": "text",
+        "unit": "mm2",
+        "range": [
+          1,
+          20000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "shear_strength_mpa",
+        "label": "bolt shear strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          10,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "n_shear_planes",
+        "label": "number of shear planes",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          4
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "alpha_v",
+        "label": "shear coefficient",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "grade",
+        "label": "bolt property class",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "n_shear_planes",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "bolt_shear_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Bolt shear capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_steel.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

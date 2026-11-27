@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.wet_density",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Wet (bulk) density from a weighed sample of known volume",
+    "described_as": "Wet density = (mass of container + soil - mass of container) / volume. In the compaction (Proctor) test the container is the mould and the volume is the mould…",
+    "inputs": [
+      {
+        "name": "gross_mass",
+        "label": "Mass of container (mould) plus wet soil",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "container_mass",
+        "label": "Mass of the empty container (mould); 0 when the soil is weighed net",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "volume",
+        "label": "Volume the soil occupies (mould volume or test-hole volume)",
+        "type": "number",
+        "unit": "centimeter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "megagram/meter**3",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.wet_density"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Wet (bulk) density from a weighed sample of known volume",
+      "entry": "earthworks.wet_density",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p11 (formula p9-10)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.wet_density",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p11 (formula p9-10)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

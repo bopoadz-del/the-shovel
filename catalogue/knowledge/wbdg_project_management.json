@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:wbdg_project_management",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Construction Project Management — Delivery Methods & Phases (WBDG)",
+    "described_as": "Reference guidance on construction project delivery and project management.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/wbdg_project_management.md",
+      "title": "Construction Project Management — Delivery Methods & Phases (WBDG)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/wbdg_project_management.md",
+      "sections": [
+        "Project delivery methods",
+        "Project phases",
+        "Cost and estimating discipline",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

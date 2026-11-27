@@ -1,0 +1,83 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cut_fill_balance",
+  "kind": "formula",
+  "facts": {
+    "name": "Cut and fill balance",
+    "described_as": "Site earthwork balance: surplus to export or deficit to import, from cut and fill volumes.",
+    "inputs": [
+      {
+        "name": "cut_volume_m3",
+        "label": "cut volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fill_volume_m3",
+        "label": "fill volume",
+        "type": "number",
+        "unit": "m3",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "bulking_factor",
+        "label": "bulking",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "balance_bank_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "haul_loose_m3",
+        "unit": "m3",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cut_fill_balance"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Cut and fill balance"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_earthwork.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:wbdg_operations_maintenance",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Operations & Maintenance — Handover, Manuals & Strategy (WBDG)",
+    "described_as": "Reference guidance on facility operations and maintenance (O&M) and the",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/wbdg_operations_maintenance.md",
+      "title": "Operations & Maintenance — Handover, Manuals & Strategy (WBDG)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/wbdg_operations_maintenance.md",
+      "sections": [
+        "What O&M covers",
+        "Maintenance strategies",
+        "The handover",
+        "Systems / O&M Manual contents",
+        "COBie handover",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

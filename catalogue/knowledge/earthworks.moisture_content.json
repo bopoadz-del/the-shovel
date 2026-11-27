@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.moisture_content",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Moisture content from container weighings",
+    "described_as": "Moisture content w (%) = (A - B) / (B - C) x 100, where A = container + wet soil, B = container + oven-dry soil, C = container. Used by both the laboratory com…",
+    "inputs": [
+      {
+        "name": "wet_with_container",
+        "label": "A: container plus wet soil",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "dry_with_container",
+        "label": "B: container plus oven-dry soil",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "container_mass",
+        "label": "C: empty container",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "percent",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.moisture_content"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Moisture content from container weighings",
+      "entry": "earthworks.moisture_content",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.moisture_content",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

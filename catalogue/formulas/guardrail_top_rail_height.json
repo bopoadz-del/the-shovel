@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:guardrail_top_rail_height",
+  "kind": "formula",
+  "facts": {
+    "name": "Guardrail top-rail height",
+    "described_as": "Required guardrail top-rail height for fall protection.",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "top_rail_height_in",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "top_rail_height_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "top_rail_height_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "mid_rail_height_in",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "mid_rail_height_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "mid_rail_height_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "tolerance_in",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "tolerance_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "scope",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "guardrail_top_rail_height"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Guardrail top-rail height"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "safety",
+      "file": "app/agents/hats/safety/defaults.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:interior_finishes_takeoff",
+  "kind": "formula",
+  "facts": {
+    "name": "Interior finishes take-off",
+    "described_as": "Interior finish quantities (wall, ceiling, skirting) from a room take-off and the floor-to-ceiling height.",
+    "inputs": [
+      {
+        "name": "floor_area_m2",
+        "label": "floor area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "perimeter_m",
+        "label": "perimeter",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "room_count",
+        "label": "number of rooms",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "floor_to_ceiling_m",
+        "label": "floor-to-ceiling height",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          20
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "door_width_m",
+        "label": "door width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "door_height_m",
+        "label": "door height",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "doors_per_room",
+        "label": "doors per room",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          50
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "shared_wall_fraction",
+        "label": "shared-wall fraction",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "window_deduction_m2",
+        "label": "window deduction",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "floor_screed_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "floor_tiling_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "ceiling_finish_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "skirting_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "wall_paint_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "blockwork_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "gross_wall_face_m2",
+        "unit": "m2",
+        "main": false
+      },
+      {
+        "name": "door_deduction_m2",
+        "unit": "m2",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "interior_finishes_takeoff"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Interior finishes take-off"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_quantities.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.fleet_study_machines",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Fleet study: number of hauling machines by the course's route",
+    "described_as": "Fleet study method of the course: machines = required hourly rate / hourly rate per machine, rounded UP, where the rate per machine is the combined output at t…",
+    "inputs": [
+      {
+        "name": "required_rate",
+        "label": "Required output per hour, all shifts",
+        "type": "number",
+        "unit": "meter**3/hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "unit_capacity",
+        "label": "Quantity carried per load by one hauling machine (scraper bowl, truck body)",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_short",
+        "label": "Full cycle time of one machine at the shortest haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_middle",
+        "label": "Full cycle time of one machine at the middle haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_long",
+        "label": "Full cycle time of one machine at the longest haul distance of the study",
+        "type": "number",
+        "unit": "minute",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "machines",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.fleet_study_machines"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Fleet study: number of hauling machines by the course's route",
+      "entry": "equipment.fleet_study_machines",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.fleet_study_machines",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

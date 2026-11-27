@@ -1,0 +1,143 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:crew_sizing",
+  "kind": "formula",
+  "facts": {
+    "name": "Crew sizing and productivity",
+    "described_as": "Crews required, crew-days and man-hours for a quantity at a given productivity rate, plus the duration a stated number of crews gives.",
+    "inputs": [
+      {
+        "name": "quantity",
+        "label": "quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "duration_days",
+        "label": "duration in working days",
+        "type": "number",
+        "unit": "days",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "rate_per_crew_day",
+        "label": "rate (units per crew-day)",
+        "type": "number",
+        "unit": "count/d",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_day",
+        "label": "working hours per day",
+        "type": "number",
+        "unit": "h/d",
+        "range": [
+          0,
+          24
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "crew_size",
+        "label": "crew size",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "crews",
+        "label": "number of crews",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "crews_required",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crews_required_rounded_up",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crew_days",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "man_hours",
+        "unit": "man-hour",
+        "main": false
+      },
+      {
+        "name": "duration_for_crews",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "identity_check",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "crew_sizing"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Crew sizing and productivity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/project_control.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:productivity_manpower_duration"
+    ],
+    "fed_by": [
+      "formula:productivity_benchmark"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

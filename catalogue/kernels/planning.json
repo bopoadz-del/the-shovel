@@ -1,0 +1,57 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:planning",
+  "kind": "kernel",
+  "facts": {
+    "name": "Planning Hat",
+    "described_as": "WBS build-up, schedule logic, earned value management (CPI/SPI/EAC). Owns critical path, float, lookahead, and duration calibration.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "planning"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.planning.json",
+      "manifest": "fork.hat.planning",
+      "formulas": [
+        "formula:cash_flow",
+        "formula:cpm_network",
+        "formula:crew_sizing",
+        "formula:critical_path_float",
+        "formula:electrical_installation_sequence",
+        "formula:floor_cycle_progress",
+        "formula:manhours_scurve",
+        "formula:monte_carlo_cost_percentiles",
+        "formula:monte_carlo_percentiles",
+        "formula:plumbing_flow_programme",
+        "formula:productivity_benchmark",
+        "formula:productivity_manpower_duration",
+        "formula:progress_kpi",
+        "formula:progress_quantity",
+        "formula:supervision_ratio"
+      ],
+      "tools": [
+        "tool:generate_wbs",
+        "tool:look_ahead",
+        "tool:resource_histogram"
+      ],
+      "skills": [
+        "skill:planning.l1",
+        "skill:planning.l2",
+        "skill:planning.l3",
+        "skill:planning.l4",
+        "skill:planning.l5"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

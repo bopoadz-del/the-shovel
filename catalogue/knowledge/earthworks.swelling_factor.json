@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.swelling_factor",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Earthworks swelling factor from Proctor density and compaction",
+    "described_as": "Swelling factor = (Proctor density A x Compaction factor C) / Loose density B. Reference table sub-base row: A=2.18, B=1.6, C=96, expected D=1.31. Unit convent…",
+    "inputs": [
+      {
+        "name": "A",
+        "label": "Modified Proctor density",
+        "type": "number",
+        "unit": "ton/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "B",
+        "label": "Loose density",
+        "type": "number",
+        "unit": "ton/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "C",
+        "label": "Compaction factor (percent, 0-100 scale used as raw number)",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "dimensionless",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.swelling_factor"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Earthworks swelling factor from Proctor density and compaction",
+      "entry": "earthworks.swelling_factor",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": "AASHTO T 180-93 (Modified Proctor)"
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.swelling_factor",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": "AASHTO T 180-93 (Modified Proctor)"
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

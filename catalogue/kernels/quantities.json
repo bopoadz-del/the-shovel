@@ -1,0 +1,47 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:quantities",
+  "kind": "kernel",
+  "facts": {
+    "name": "Quantities Hat",
+    "described_as": "Quantity take-off and BOQ production: concrete, rebar, formwork, earthworks, room take-off from drawings, line-item extensions. Owns measurement and bill production workflow.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "quantities"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.quantities.json",
+      "manifest": "fork.hat.quantities",
+      "formulas": [
+        "formula:concrete_mix_proportions",
+        "formula:cost_buildup_concrete",
+        "formula:cost_buildup_formwork",
+        "formula:cost_buildup_rebar",
+        "formula:crane_cost_estimate",
+        "formula:cut_fill_balance",
+        "formula:interior_finishes_takeoff",
+        "formula:material_consumption",
+        "formula:mobilization_cost_estimate",
+        "formula:rebar_by_area",
+        "formula:rebar_weight",
+        "formula:resource_line_cost"
+      ],
+      "tools": [],
+      "skills": [
+        "skill:quantities.q2",
+        "skill:quantities.q5"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

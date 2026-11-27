@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:foundation.uplift_fos",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Foundation uplift factor of safety (counterweight vs uplift)",
+    "described_as": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force…",
+    "inputs": [
+      {
+        "name": "counterweight",
+        "label": "Available resisting/counterweight force (self-weight + ballast)",
+        "type": "number",
+        "unit": "kN",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "uplift",
+        "label": "Applied uplift / buoyancy force",
+        "type": "number",
+        "unit": "kN",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "dimensionless",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "foundation.uplift_fos"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Foundation uplift factor of safety (counterweight vs uplift)",
+      "entry": "foundation.uplift_fos",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "foundation.uplift_fos",
+      "type": "formula",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

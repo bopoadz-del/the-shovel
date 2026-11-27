@@ -1,0 +1,204 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:crane_planning",
+  "kind": "formula",
+  "facts": {
+    "name": "Number of cranes needed",
+    "described_as": "Number of cranes needed for a lifting demand and crane cycle capacity.",
+    "inputs": [
+      {
+        "name": "total_lift_demand_tons",
+        "label": "total lift demand",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crane_capacity_tons",
+        "label": "crane capacity",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "utilization_pct",
+        "label": "crane utilisation",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "shifts_per_day",
+        "label": "shifts per day",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          24
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_shift",
+        "label": "hours per shift",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          1,
+          24
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "cycle_time_minutes",
+        "label": "lift cycle time",
+        "type": "number",
+        "unit": "min",
+        "range": [
+          1,
+          600
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "working_days",
+        "label": "working days per month",
+        "type": "integer",
+        "unit": "days",
+        "range": [
+          1,
+          31
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "dry_hire_rate_per_month",
+        "label": "dry hire rate per crane per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rate",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_lift_demand_tons",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crane_capacity_tons",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "utilization_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "shifts_per_day",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "hours_per_shift",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "cycle_time_minutes",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "lifts_per_hour_per_crane",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "daily_tonnage_per_crane",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "cranes_required",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "monthly_rate",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "total_monthly_cost",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "currency",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "crane_planning"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Number of cranes needed"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "procurement",
+      "file": "app/agents/hats/procurement/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:precast_beam_erection_check"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

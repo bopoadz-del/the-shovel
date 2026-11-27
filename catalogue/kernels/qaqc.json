@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:qaqc",
+  "kind": "kernel",
+  "facts": {
+    "name": "QAQC Hat",
+    "described_as": "Inspection test plans, non-conformance tracking, mix design validation, concrete maturity, thermal cracking checks. Owns all quality and inspection workflow.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "qaqc"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.qaqc.json",
+      "manifest": "fork.hat.qaqc",
+      "formulas": [
+        "formula:bim_clash_tolerance",
+        "formula:check_review_timeline",
+        "formula:compaction_control",
+        "formula:concrete_curing_time",
+        "formula:concrete_cylinders",
+        "formula:concrete_maturity_strength",
+        "formula:concrete_shrinkage",
+        "formula:concrete_thermal_cracking_check",
+        "formula:fineness_modulus",
+        "formula:formwork_striking_time",
+        "formula:grout_pressure_calc",
+        "formula:laser_scan_accuracy",
+        "formula:modulus_of_rupture",
+        "formula:validate_design_status"
+      ],
+      "tools": [
+        "tool:commissioning_checklist"
+      ],
+      "skills": [
+        "skill:qaqc.s1",
+        "skill:qaqc.s2",
+        "skill:qaqc.s3"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

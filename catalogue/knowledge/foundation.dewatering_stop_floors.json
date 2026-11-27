@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:foundation.dewatering_stop_floors",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Dewatering can stop once enough floors are built to counter uplift",
+    "described_as": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift. Floors required before…",
+    "inputs": [
+      {
+        "name": "min_fos",
+        "label": "Required uplift factor of safety (counterweight / uplift)",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "uplift",
+        "label": "Uplift pressure under the raft = water unit weight x head",
+        "type": "number",
+        "unit": "ton/meter**2",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "raft_weight",
+        "label": "Raft self-weight per unit area = raft thickness x concrete unit weight",
+        "type": "number",
+        "unit": "ton/meter**2",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "floor_weight",
+        "label": "Dead load of one floor per unit area = equivalent concrete thickness x concrete unit weight",
+        "type": "number",
+        "unit": "ton/meter**2",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "floors",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "foundation.dewatering_stop_floors"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Dewatering can stop once enough floors are built to counter uplift",
+      "entry": "foundation.dewatering_stop_floors",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p9-10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "foundation.dewatering_stop_floors",
+      "type": "formula",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p9-10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cash_flow",
+  "kind": "formula",
+  "facts": {
+    "name": "Contractor cash flow (monthly)",
+    "described_as": "Advance, retention, certified valuations, net cash and the peak funding requirement from a monthly value and cost series.",
+    "inputs": [
+      {
+        "name": "monthly_value",
+        "label": "projected monthly work value (series)",
+        "type": "series",
+        "unit": "currency",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "monthly_cost",
+        "label": "monthly cost (series)",
+        "type": "series",
+        "unit": "currency",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "advance_pct",
+        "label": "advance % (suggested 10%)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "retention_pct",
+        "label": "retention % (suggested 5%)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "payment_lag_days",
+        "label": "payment lag days (suggested 15)",
+        "type": "number",
+        "unit": "days",
+        "range": [
+          0,
+          365
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "contract_value",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "advance_payment",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "retention_total",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "peak_funding_requirement",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "check_advance_recovery",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "check_retention",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "check_valuation",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cash_flow"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Contractor cash flow (monthly)"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/project_control.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:calculate_payment"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

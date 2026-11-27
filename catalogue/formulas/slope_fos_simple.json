@@ -1,0 +1,112 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:slope_fos_simple",
+  "kind": "formula",
+  "facts": {
+    "name": "Slope factor of safety",
+    "described_as": "Factor of safety of an infinite slope, with and without cohesion.",
+    "inputs": [
+      {
+        "name": "friction_angle_deg",
+        "label": "friction angle",
+        "type": "number",
+        "unit": "deg",
+        "range": [
+          0,
+          60
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "slope_angle_deg",
+        "label": "slope angle",
+        "type": "number",
+        "unit": "deg",
+        "range": [
+          0,
+          90
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cohesion_kpa",
+        "label": "cohesion",
+        "type": "number",
+        "unit": "kPa",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "unit_weight_kn_m3",
+        "label": "soil unit weight",
+        "type": "number",
+        "unit": "kN/m3",
+        "range": [
+          5,
+          30
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "depth_m",
+        "label": "depth",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          500
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "factor_of_safety",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "frictional_term",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "cohesive_term",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "slope_fos_simple"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Slope factor of safety"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_earthwork.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

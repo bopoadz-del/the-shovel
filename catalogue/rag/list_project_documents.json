@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:list_project_documents",
+  "kind": "rag",
+  "facts": {
+    "name": "Project document list",
+    "described_as": "List this project's document register: each document's filename, type, and size. Use this when the user asks WHAT documents/files the project has. To search INSIDE document content use search_project_documents.",
+    "inputs": [
+      {
+        "name": "limit",
+        "label": "number of documents",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          200
+        ],
+        "required": false,
+        "basis": "",
+        "described_as": "Max documents to return (default 100, newest first)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "list_project_documents",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": [],
+    "question_kinds": []
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.grader_volume_rate",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Grader output in volume from its area rate and the layer thickness",
+    "described_as": "Grader volume rate (m3/hr) = grader area rate (m2/hr) x compacted layer thickness (m), used to size graders against a volume target. WORKED EXAMPLES (course fl…",
+    "inputs": [
+      {
+        "name": "grader_area_rate",
+        "label": "Grader spreading/levelling rate per hour",
+        "type": "number",
+        "unit": "meter**2/hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "layer_thickness",
+        "label": "Compacted layer thickness",
+        "type": "number",
+        "unit": "meter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3/hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.grader_volume_rate"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Grader output in volume from its area rate and the layer thickness",
+      "entry": "earthworks.grader_volume_rate",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.grader_volume_rate",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}
