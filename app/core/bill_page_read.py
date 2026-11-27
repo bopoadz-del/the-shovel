@@ -346,9 +346,13 @@ class BillSpan:
     inclusive page range, and the printed bill total (``None`` = not printed)."""
 
     label: str
-    first_page: int
-    last_page: int
+    first_page: int | None
+    last_page: int | None
     printed_total: float | None = None
+    #: Pages not read outside the range that the bill could still reach (up to
+    #: the next page another bill names, or the end of the document). The bill
+    #: cannot be checked while one of them is unread, so it is NOT READ.
+    pages_unread_reach: tuple[int, ...] = ()
 
 
 _NOT_MONEY = frozenset({REF_LABEL, LINE_TYPE_LABEL})
@@ -385,8 +389,9 @@ def bill_states(
     placed: set[int] = set()
     missing = set(pages_not_read)
     for span in spans:
+        ranged = span.first_page is not None and span.last_page is not None
         members = [i for i, r in enumerate(rows)
-                   if span.first_page <= r.source_page <= span.last_page]
+                   if ranged and span.first_page <= r.source_page <= span.last_page]
         placed.update(members)
         items_sum = 0.0
         summed = without = flagged = items = priced = 0
@@ -403,7 +408,9 @@ def bill_states(
                 continue
             summed += 1
             items_sum += amount
-        not_read = sorted(p for p in missing if span.first_page <= p <= span.last_page)
+        not_read = sorted(p for p in missing
+                          if (ranged and span.first_page <= p <= span.last_page)
+                          or p in span.pages_unread_reach)
         printed = span.printed_total
         diff = None if printed is None else items_sum - printed
         if not_read:
@@ -416,7 +423,8 @@ def bill_states(
             state = STATE_FAILED
         else:
             state = STATE_RECONCILED
-        out.append({"label": span.label, "pages": [span.first_page, span.last_page],
+        out.append({"label": span.label,
+                    "pages": [span.first_page, span.last_page] if ranged else None,
                     "rows": len(members), "rows_summed": summed,
                     "rows_without_amount": without, "rows_flagged": flagged,
                     "item_rows_priced": priced,
@@ -462,14 +470,27 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
     naming two bills, a bill whose range holds another bill's page, and a bill
     the summary lists twice with different totals are reported, not resolved.
     Bills are compared without case, spacing or punctuation; the label kept is
-    the first one the reads print."""
+    the first one the reads print.
+
+    A page not read is never charged to the document: the summary prints each
+    bill's total, not its pages, so a bill's last read page is not proof of its
+    edge. Every unread page a bill could reach (outside its range, up to the
+    nearest page another bill or a split page names, or the document's end) is
+    kept on its span (``pages_unread_reach``), so the bill is NOT READ, not
+    FAILED. A bill the summary lists that no read page names gets a span with
+    no range when some page was not read, reaching every unread page outside
+    the other bills' ranges; with every page read it is only listed."""
     out = SpanRead()
     label: dict[str, str] = {}
     members: dict[str, list[int]] = {}
     totals: dict[str, set[float]] = {}
+    unread: list[int] = []
     for key, lines in pages.items():
         name = _text(key)
-        if not name.isdecimal() or not isinstance(lines, list):
+        if not name.isdecimal():
+            continue
+        if not isinstance(lines, list):
+            unread.append(int(name))
             continue
         page = int(name)
         named: set[str] = set()
@@ -493,18 +514,33 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
             members.setdefault(next(iter(named)), []).append(page)
     out.pages_split.sort()
     ranges = {b: (min(ps), max(ps)) for b, ps in members.items()}
-    for bill, (first, last) in sorted(ranges.items(), key=lambda kv: kv[1]):
-        inside = any(first <= p <= last for other, ps in members.items()
-                     if other != bill for p in ps)
-        if inside or any(first <= p <= last for p in out.pages_split):
-            out.bills_interleaved.append(label[bill])
-            continue
+
+    def printed_of(bill: str) -> float | None:
         found = totals.get(bill, set())
         if len(found) > 1:
             out.totals_conflicting.append(label[bill])
-        printed = next(iter(found)) if len(found) == 1 else None
-        out.spans.append(BillSpan(label[bill], first, last, printed))
+        return next(iter(found)) if len(found) == 1 else None
+
+    for bill, (first, last) in sorted(ranges.items(), key=lambda kv: kv[1]):
+        others = [p for other, ps in members.items() if other != bill for p in ps]
+        inside = any(first <= p <= last for p in others)
+        if inside or any(first <= p <= last for p in out.pages_split):
+            out.bills_interleaved.append(label[bill])
+            continue
+        fences = others + out.pages_split
+        low = max((p for p in fences if p < first), default=None)
+        high = min((p for p in fences if p > last), default=None)
+        reach = tuple(sorted(
+            p for p in unread
+            if (p < first and (low is None or p > low))
+            or (p > last and (high is None or p < high))))
+        out.spans.append(BillSpan(label[bill], first, last, printed_of(bill), reach))
     out.summary_without_pages = sorted(label[b] for b in totals if b not in members)
+    loose = tuple(sorted(p for p in unread
+                         if not any(a <= p <= z for a, z in ranges.values())))
+    if loose:
+        for bill in sorted((b for b in totals if b not in members), key=lambda b: label[b]):
+            out.spans.append(BillSpan(label[bill], None, None, printed_of(bill), loose))
     return out
 
 

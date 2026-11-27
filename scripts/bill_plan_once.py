@@ -413,6 +413,8 @@ def state_counts(plan: Mapping[str, Any]) -> dict[str, Any]:
     as a code token), rows under no bill. Empty for a plan without states."""
     states = plan.get("bill_states")
     if not isinstance(states, Mapping):
+        if "pages_not_read" in plan:  # a skip because no page gave lines
+            return {"pages_not_read": len(plan.get("pages_not_read") or [])}
         return {}
     counts: dict[str, int] = {}
     for bill in states.get("bills") or []:

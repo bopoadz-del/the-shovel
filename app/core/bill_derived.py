@@ -272,6 +272,10 @@ def _prepare(
     else:
         got_rows, got_not_read, raw = rows_of_reads(page_reads)
         rows, not_read = list(got_rows), sorted(got_not_read)
+    if not rows and not_read:  # a reader that failed is never a page of no rows
+        return {"derived": False, "reason": SKIP_PAGES_NOT_READ,
+                "pages_not_read": not_read, "pages": [first, stop],
+                "pages_in_file": total, "bill_verdict": verdict.reason, **sources}
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
                 "bill_verdict": verdict.reason, **sources}

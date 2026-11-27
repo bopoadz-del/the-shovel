@@ -90,6 +90,15 @@ def test_heading_run_is_the_path_under_the_bill_label(label):
     assert rows[2].section == "Fill"
 
 
+@pytest.mark.parametrize("blank", ["", None])
+def test_heading_without_words_adds_nothing_to_the_path(blank):
+    pages = {"1": [_head("Earth"), {"type": "heading", "description": blank},
+                   _item("A", 1, 2, 2)]}
+    assert bpr.rows_from_page_reads(pages, bill_label="Bill 3").rows[0].path == (
+        "Bill 3", "Earth")
+    assert bpr.rows_from_page_reads(pages).rows[0].path == ("Earth",)
+
+
 @pytest.mark.parametrize("label", ["", "   "])
 def test_no_bill_label_gives_heading_path_only(label):
     rows = bpr.rows_from_page_reads({"1": [_head("H"), _item("A", 1, 1, 1)]},
@@ -384,6 +393,15 @@ def test_long_reply_is_cut_in_the_not_read_entry(first, second, want):
     assert [len(r) for r in got["replies"]] == want
 
 
+@pytest.mark.parametrize("error", [RuntimeError("key unset"), RuntimeError("502")])
+def test_provider_error_on_every_attempt_is_not_read(error):
+    ask = _Ask(error, error)
+    got = bpr.model_page_reader(ask, lambda i: b"x")(_pr(1))
+    assert got == {bpr.NOT_READ_KEY: True, "attempts": 2,
+                   "replies": ["RuntimeError", "RuntimeError"]}
+    assert len(ask.calls) == 2
+
+
 @pytest.mark.parametrize("attempts", [1, 3])
 def test_attempts_is_the_number_of_calls(attempts):
     ask = _Ask(*([""] * 5))
@@ -562,12 +580,13 @@ def test_summary_bill_with_no_pages_is_listed(listed):
     assert got.spans == [bpr.BillSpan("A", 2, 2)]
 
 
-@pytest.mark.parametrize("pages", [
-    {"cover": [_line("A")], "2": [_line("B")]},
-    {"1": {"not_read": True}, "2": [_line("B")], "3": ["not a line"]},
+@pytest.mark.parametrize("pages, reach", [
+    ({"cover": [_line("A")], "2": [_line("B")]}, ()),
+    # the not-read page 1 places nothing, but bill B could reach it
+    ({"1": {"not_read": True}, "2": [_line("B")], "3": ["not a line"]}, (1,)),
 ])
-def test_keys_that_are_not_pages_and_reads_that_are_not_lists_place_nothing(pages):
-    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("B", 2, 2)]
+def test_keys_that_are_not_pages_and_reads_that_are_not_lists_place_nothing(pages, reach):
+    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("B", 2, 2, None, reach)]
 
 
 @pytest.mark.parametrize("bill", [None, "", " - "])
@@ -642,3 +661,66 @@ def test_model_bill_read_states_use_the_latest_reads_only(first, second):
     out = states(got_rows, not_read)
     assert [b["state"] for b in out["bills"]] == ["RECONCILED" if second == 30 else "FAILED"]
     assert out["bills"][0]["printed_total"] == second
+
+
+@pytest.mark.parametrize("unread, want_reach", [
+    ({"3": None}, (3,)),            # last page of the bill
+    ({"1": None}, (1,)),            # first page of the bill
+    ({"1": None, "3": None}, (1, 3)),
+])
+def test_unread_page_at_a_bill_edge_is_in_its_reach(unread, want_reach):
+    pages = {"2": [_line("A", amount=1)], **unread,
+             "4": [_line("A", kind="summary", amount=1)]}
+    assert bpr.spans_from_page_reads(pages).spans == [
+        bpr.BillSpan("A", 2, 2, 1.0, want_reach)]
+
+
+@pytest.mark.parametrize("unread", ["3", "4"])
+def test_unread_page_between_two_bills_is_in_both_reaches_and_no_further(unread):
+    pages = {"1": [_line("A", amount=1)], "2": [_line("A", amount=1)],
+             unread: None, "5": [_line("B", amount=1)], "7": None}
+    got = bpr.spans_from_page_reads(pages).spans
+    assert got == [bpr.BillSpan("A", 1, 2, None, (int(unread),)),
+                   bpr.BillSpan("B", 5, 5, None, (int(unread), 7))]
+
+
+@pytest.mark.parametrize("fence", [
+    {"3": [_line("B", amount=1)]},
+    {"3": [_line("B", amount=1), _line("C", amount=1)]},   # a split page
+])
+def test_unread_page_beyond_another_bills_page_is_not_in_the_reach(fence):
+    pages = {"1": [_line("A", amount=1)], **fence, "4": None}
+    a = bpr.spans_from_page_reads(pages).spans[0]
+    assert (a.label, a.pages_unread_reach) == ("A", ())
+
+
+@pytest.mark.parametrize("pages", [
+    {"1": [_line("A", amount=1)], "2": [_line("A", amount=1)]},
+    {"1": [_line("A", amount=1)], "2": [{"type": "heading", "description": "h"}]},
+])
+def test_every_page_read_gives_no_reach(pages):
+    assert bpr.spans_from_page_reads(pages).spans[0].pages_unread_reach == ()
+
+
+@pytest.mark.parametrize("unread", [["2"], ["2", "3"]])
+def test_summary_bill_with_no_read_page_reaches_the_unread_pages(unread):
+    pages = {"1": [_line("A", amount=4)], **{p: None for p in unread},
+             "9": [_line("A", kind="summary", amount=4), _line("B", kind="summary", amount=7)]}
+    got = bpr.spans_from_page_reads(pages)
+    loose = tuple(int(p) for p in unread)
+    assert got.spans == [bpr.BillSpan("A", 1, 1, 4.0, loose),
+                         bpr.BillSpan("B", None, None, 7.0, loose)]
+    assert got.summary_without_pages == ["B"]
+    out = bpr.bill_states([], [int(p) for p in unread], spans=got.spans, tolerance=0.0)
+    b = out["bills"][1]
+    assert (b["state"], b["pages"], b["pages_not_read"]) == (
+        bpr.STATE_NOT_READ, None, list(loose))
+
+
+@pytest.mark.parametrize("inside", ["2", "3"])
+def test_summary_bill_gets_no_span_when_the_only_unread_page_is_inside_another_bill(inside):
+    pages = {"1": [_line("A", amount=1)], inside: None, "4": [_line("A", amount=1)],
+             "9": [_line("B", kind="summary", amount=7)]}
+    got = bpr.spans_from_page_reads(pages)
+    assert [s.label for s in got.spans] == ["A"]
+    assert got.summary_without_pages == ["B"]
