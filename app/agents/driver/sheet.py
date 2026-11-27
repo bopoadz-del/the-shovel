@@ -21,7 +21,11 @@ Who writes what -- the point of the sheet:
   missing input whose step has its result (``close_answered``), so what is
   left in ``missing`` is always waiting on a step that has not run;
 * a plan input names a given (``g1``) or an earlier step (``s1``); code
-  resolves the reference (``resolve_inputs``), so a value is never re-typed.
+  resolves the reference (``resolve_inputs``), so a value is never re-typed;
+* a result is code's arithmetic on numbers the model put on the sheet (the
+  givens, a number written in the plan), so each result carries the numbers
+  it rests on (``rests_on``) for the exit check to hold against what the
+  user and the tools gave.
 
 ``run_step`` runs a plan step whose entry is a registered formula
 (``formula:<name>``): code resolves its inputs from the sheet, holds them to
@@ -164,6 +168,12 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
             if not isinstance(item, dict) or not str(item.get("input") or "").strip():
                 problems.append("a missing item must name the input it needs")
                 continue
+            if not _STEP_ID.match(str(item.get("for") or "")):
+                # Without its step nothing can tell when the input stops
+                # being missing: the step's result is what closes it.
+                problems.append(f"missing input {str(item['input'])!r} must say which plan step it is "
+                                "for (for: s1, s2, ...)")
+                continue
             key = (str(item.get("for") or ""), str(item["input"]))
             if any((m["for"], m["input"]) == key for m in missing):
                 continue
@@ -297,8 +307,9 @@ def is_done(sheet: Dict[str, Any]) -> bool:
 def close_answered(sheet: Dict[str, Any]) -> Dict[str, Any]:
     """The sheet with every missing input whose step has its result taken
     off: the step ran, so what it was waiting for is no longer missing (a
-    fact code reads from the steps, not a judgment). An item tied to no
-    step, or to a step without a result, stays as the model wrote it."""
+    fact code reads from the steps, not a judgment). An item for a step
+    without a result stays as the model wrote it (every item names its
+    step: ``apply_update`` refuses one that does not)."""
     out = copy.deepcopy(sheet)
     ran = {st.get("id") for st in out.get("steps") or []
            if st.get("status") == "done" and st.get("result")}
@@ -323,8 +334,40 @@ def code_results(sheet: Any) -> List[Dict[str, Any]]:
             continue
         rows.append({"step": str(st.get("id") or ""), "entry": str(st.get("entry") or ""),
                      "name": str(result.get("name") or ""), "value": value,
-                     "unit": str(result.get("unit") or "")})
+                     "unit": str(result.get("unit") or ""),
+                     "rests_on": rests_on(sheet, str(st.get("id") or ""))})
     return rows
+
+
+def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
+    """The numbers a step's result rests on that code did not compute: the
+    value of every given it reads and every number written in the plan
+    itself, followed back through the earlier steps it reads. The model
+    wrote each of them, so a result is only as sourced as these are; who
+    reads this list checks each one against what the user and the tools
+    gave. Read from the plan's own inputs and nothing else."""
+    plan = {p.get("id"): p for p in sheet.get("plan") or [] if isinstance(p, dict)}
+    givens = {g.get("id"): g for g in sheet.get("givens") or [] if isinstance(g, dict)}
+    found: List[float] = []
+    seen: set = set()
+    frontier = [step_id]
+    while frontier:
+        sid = frontier.pop()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        for ref in ((plan.get(sid) or {}).get("inputs") or {}).values():
+            if isinstance(ref, str) and _STEP_ID.match(ref):
+                frontier.append(ref)
+            elif isinstance(ref, str) and _GIVEN_ID.match(ref):
+                number = _number((givens.get(ref) or {}).get("value"))
+                if number is not None:
+                    found.append(number)
+            elif not isinstance(ref, bool):
+                number = _number(ref)
+                if number is not None:
+                    found.append(number)
+    return found
 
 
 def mark_asked(sheet: Dict[str, Any]) -> Dict[str, Any]:

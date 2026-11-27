@@ -1709,6 +1709,7 @@ def figure_provenance(
         # A platform workflow's own result is a source too: the figures its
         # answer carries (an EVM's CV and EAC, a cash flow's month rows) were
         # produced by the run, not by the model.
+        sheets: list[dict[str, Any]] = []
         for rec in ev.records:
             if rec.kind != "tool_run":
                 continue
@@ -1722,17 +1723,32 @@ def figure_provenance(
                 if nums:
                     calc_entries.append((nums, {"source": pt.SOURCE_CALCULATOR,
                                                 "formula": str(payload["workflow"]), "inputs": {}}))
-            # A working sheet handed back by a tool run carries the results
-            # code wrote on it (a step run by the formula registry): each is a
-            # figure from code, credited with its value and unit as written,
-            # the same way as a calculator's result.
             if isinstance(payload, dict) and isinstance(payload.get("sheet"), dict):
-                from app.agents.driver import sheet as working_sheet
+                sheets.append(payload["sheet"])
+        # A working sheet handed back by a tool run carries the results code
+        # wrote on it (a step run by the formula registry). The step is code's
+        # arithmetic, but on numbers the model put on the sheet, so a result
+        # is a figure from code only when every number it rests on was given
+        # by the user (any turn), read from a retrieved passage, or produced
+        # by a calculator or workflow run. Otherwise it is the model's own
+        # number passed through a formula, and it gets no credit.
+        if sheets:
+            from app.agents.driver import sheet as working_sheet
 
-                for row in working_sheet.code_results(payload["sheet"]):
-                    calc_entries.append(({row["value"]}, {
-                        "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
-                        "step": row["step"], "unit": row["unit"]}))
+            given_pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _nums(rec.text))
+            for nums, _meta in calc_entries:
+                given_pool |= _rescaled(nums)
+            passages = [_nums(r.text) for r in retrievals]
+
+            def _given_to_us(number: float) -> bool:
+                return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
+
+            for sheet_payload in sheets:
+                for row in working_sheet.code_results(sheet_payload):
+                    if all(_given_to_us(n) for n in row["rests_on"]):
+                        calc_entries.append(({row["value"]}, {
+                            "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
+                            "step": row["step"], "unit": row["unit"]}))
         calc_pool: set[float] = set()
         for nums, _meta in calc_entries:
             calc_pool |= nums

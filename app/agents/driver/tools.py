@@ -226,8 +226,9 @@ def sheet_schemas() -> List[Dict[str, Any]]:
                                                     "(optional when the formula has one main output)"}},
         "required": ["id", "entry", "inputs"]}
     missing = {"type": "object", "properties": {
-        "for": {"type": "string"}, "input": {"type": "string"}, "label": {"type": "string"}},
-        "required": ["input"]}
+        "for": {"type": "string", "description": "the plan step id (s1, s2, ...) that needs this input"},
+        "input": {"type": "string"}, "label": {"type": "string"}},
+        "required": ["for", "input"]}
     return [
         {"type": "function", "function": {
             "name": SHEET_UPDATE,

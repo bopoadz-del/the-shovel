@@ -481,13 +481,13 @@ def _replan_after_finding(s, a, b):
 
 @pytest.mark.parametrize("a,b", [(55, 77), (12.5, 3)])
 def test_a_step_that_runs_closes_the_missing_input_it_was_for(a, b):
-    s = _waiting_for([{"for": "s1", "input": "b"}, {"for": "s2", "input": "rate"}, {"input": "loose"}], a, b)
-    assert len(ws.unasked(s)) == 3  # planning alone closes nothing
+    s = _waiting_for([{"for": "s1", "input": "b"}, {"for": "s2", "input": "rate"}], a, b)
+    assert len(ws.unasked(s)) == 2  # planning alone closes nothing
     s = ws.run_step(s, "s1", "c1")
     assert s["steps"][0]["result"]["value"] == a + b and s["done"] is True
-    # s1 has its result: its item is closed; s2 (no result) and the item
-    # tied to no step stay as the model wrote them.
-    assert [(m["for"], m["input"]) for m in s["missing"]] == [("s2", "rate"), ("", "loose")]
+    # s1 has its result: its item is closed; s2 (no result) stays as the
+    # model wrote it. (An item naming no step is refused at the update.)
+    assert [(m["for"], m["input"]) for m in s["missing"]] == [("s2", "rate")]
 
 
 @pytest.mark.parametrize("a,b", [(55, 77), (12.5, 3)])
@@ -519,7 +519,7 @@ def test_code_results_lists_every_result_code_wrote(a, b, op, expected, unit):
                      {"id": "s2", "entry": "formula:no_such_entry", "inputs": {"a": "g1"}}])
     s = ws.run_step(ws.run_step(s, "s1", "c1"), "s2", "c2")
     assert ws.code_results(s) == [{"step": "s1", "entry": "formula:arithmetic_step", "name": "result",
-                                   "value": expected, "unit": unit}]
+                                   "value": expected, "unit": unit, "rests_on": [float(a), float(b)]}]
 
 
 @pytest.mark.parametrize("sheet", [
@@ -543,3 +543,25 @@ def test_a_missing_input_written_for_a_step_that_already_ran_is_closed(a, b):
     s, _ = ws.apply_update(s, {"givens": [{"id": "g2", "value": b + 1, "unit": "m"}],
                                "missing": [{"for": "s1", "input": "b"}]})
     assert [m["for"] for m in s["missing"]] == ["s1"] and s["done"] is False
+
+
+@pytest.mark.parametrize("item", [{"input": "b"}, {"input": "rate", "for": ""}, {"input": "rate", "for": "g1"}])
+def test_a_missing_item_must_name_its_plan_step(item):
+    start = ws.new_sheet("t1", "q")
+    out, problems = ws.apply_update(start, {"missing": [item]})
+    assert out == start
+    assert problems and "must say which plan step it is for" in problems[0]
+
+
+@pytest.mark.parametrize("a,b", [(20, 3), (7.5, 40)])
+def test_a_result_lists_every_number_it_rests_on_through_earlier_steps(a, b):
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": a, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                  "inputs": {"operator": "multiply", "a": "g1", "b": b, "flag": True}},
+                 {"id": "s2", "entry": "formula:arithmetic_step",
+                  "inputs": {"operator": "add", "a": "s1", "b": "g1"}}]})
+    assert problems == []
+    assert sorted(ws.rests_on(work, "s1")) == sorted([float(a), float(b)])
+    assert sorted(ws.rests_on(work, "s2")) == sorted([float(a), float(b), float(a)])
+    assert ws.rests_on(work, "s9") == []

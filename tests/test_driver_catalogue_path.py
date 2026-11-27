@@ -606,7 +606,7 @@ def test_a_turn_with_nothing_missing_or_cut_by_the_ceiling_marks_nothing_asked(m
     assert trace_store.records(_today(), f"na-1-{needed}")[0]["ended"] == "answer"
     monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "1")
     _scripted(monkeypatch, [
-        {"content": "", "tool_calls": [_call("sheet_update", {"missing": [{"input": needed}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("sheet_update", {"missing": [{"for": "s1", "input": needed}]}, "c1")]},
         {"content": "Stopped."},
     ])
     _run(user_message="q", conversation_id=f"na-2-{needed}", sheet_mode=True)
@@ -822,7 +822,8 @@ def test_a_figure_code_wrote_on_the_sheet_is_shown_and_listed_in_the_trace(monke
         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
         {"content": reply},
     ])
-    events = _run(user_message="work it out", conversation_id=conv, sheet_mode=True)
+    # The user's own message carries both givens: the result rests on them.
+    events = _run(user_message=f"work it out from {a} {ua} and {b}", conversation_id=conv, sheet_mode=True)
     shown = _text(events)
     assert figure in shown and "incomplete" not in shown
     row = trace_store.records(_today(), conv)[0]
@@ -873,7 +874,7 @@ def test_a_turn_whose_missing_step_ran_ends_as_an_answer_and_carries_no_asked_in
     pid = _owned_conversation(conv, "ran-u")
     who = {"conversation_id": conv, "user_id": "ran-u", "project_id": pid, "sheet_mode": True}
     _scripted(monkeypatch, _found_then_ran(a, b))
-    shown = _text(_run(user_message="first", **who))
+    shown = _text(_run(user_message=f"add {a} m and {b} m", **who))
     assert f"{a + b} m" in shown
     row = trace_store.records(_today(), conv)[0]
     assert row["ended"] == "answer" and row["sheet"]["done"] is True and row["sheet"]["missing"] == []
@@ -895,3 +896,83 @@ def test_an_input_for_a_step_without_a_result_is_still_asked_when_another_step_r
     row = trace_store.records(_today(), conv)[0]
     assert row["ended"] == "asked_input"
     assert row["sheet"]["missing"] == [{"for": "s2", "input": "rate", "label": "rate", "asked": True}]
+
+
+# --- a result is credited only when every number under it was given to us -------
+
+@pytest.mark.parametrize("value,unit", [(4321, "m3"), (987.5, "m2")])
+def test_a_number_the_model_wrote_in_the_plan_is_not_made_a_code_figure_by_a_step(monkeypatch, value, unit):
+    """The model types a number as a plan input and adds zero: the step ran,
+    but its result rests on a number nobody gave, so it gets no credit."""
+    conv = f"own-plan-{value}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": value, "b": 0, "a_unit": unit, "b_unit": unit}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The quantity is {value} {unit}."},
+    ])
+    shown = _text(_run(user_message="how much is there?", conversation_id=conv, sheet_mode=True))
+    assert f"{value} {unit}" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert row["sheet"]["steps"][0]["status"] == "done"  # the step did run
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("value,unit", [(4321, "m3"), (987.5, "m2")])
+def test_a_given_nobody_gave_is_not_made_a_code_figure_by_a_step(monkeypatch, value, unit):
+    """The same through a given the model wrote with source "user": the
+    user's message does not carry it, so the result gets no credit."""
+    conv = f"own-given-{value}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": value, "unit": unit, "source": "user"},
+                       {"id": "g2", "value": 2, "unit": "-", "source": "user"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The quantity is {value * 2:g} {unit}."},
+    ])
+    shown = _text(_run(user_message="double it, 2 times", conversation_id=conv, sheet_mode=True))
+    assert f"{value * 2:g} {unit}" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12, 30)])
+def test_a_chain_resting_on_one_number_nobody_gave_is_not_credited_at_any_step(monkeypatch, a, b):
+    """s2 reads s1; s1 reads a given the user wrote and a number the model
+    wrote. Neither result is a figure from code."""
+    conv = f"own-chain-{a}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": a, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": b, "b_unit": "m"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "s1", "b": "g1"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s2"}, "c3")]},
+        {"content": f"The total is {a + b + a} m."},
+    ])
+    shown = _text(_run(user_message=f"the run is {a} m", conversation_id=conv, sheet_mode=True))
+    assert f"{a + b + a} m" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert not [f for f in row["figures"] if f.get("step") in ("s1", "s2")]
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12, 30)])
+def test_a_missing_input_that_names_no_step_is_refused_and_the_turn_ends_as_an_answer(monkeypatch, a, b):
+    conv = f"nofor-{a}"
+    pid = _owned_conversation(conv, "nofor-u")
+    who = {"conversation_id": conv, "user_id": "nofor-u", "project_id": pid, "sheet_mode": True}
+    replies = _found_then_ran(a, b)
+    replies[0] = {"content": "", "tool_calls": [_call("sheet_update", {
+        "missing": [{"input": "b", "label": "second"}]}, "c1")]}
+    seen = _scripted(monkeypatch, replies)
+    shown = _text(_run(user_message=f"add {a} m and {b} m", **who))
+    assert f"{a + b} m" in shown
+    refused = [m["content"] for m in seen[1]["messages"] if m["role"] == "tool"][-1]
+    assert "must say which plan step it is for" in refused
+    row = trace_store.records(_today(), conv)[0]
+    assert row["ended"] == "answer" and row["sheet"]["done"] is True and row["sheet"]["missing"] == []
