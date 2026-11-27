@@ -155,11 +155,13 @@ def rows_from_page_reads(
                 continue
             after_row = True
             out.rows.append(_row(line, page, top + tuple(headings), kind))
-    check_sum_lines(out.rows)
+    check_sum_lines(out.rows, out.pages_not_read)
     return out
 
 
-def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
+def check_sum_lines(
+    rows: Sequence[g.BillRow], pages_not_read: Sequence[int] = (),
+) -> list[g.BillRow]:
     """Flag every sum line that adds up to none of the runs it can close.
 
     Rows are walked page by page in page order, in their order on the page.
@@ -184,8 +186,22 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
                           item naming another bill, items naming no bill
                           included; offered to a line whose bill is the
                           stretch's or unknown on either side, and closed by a
-                          line that names a bill and agrees with it
+                          line that names a bill and agrees with it. Every
+                          other sum line with an amount (named or not) opens
+                          one more stretch after it, kept beside the longer
+                          ones: a section can run over a page break and close
+                          on the next page whether or not its sum line names
+                          its bill
     ====================  ==================================================
+
+    A run across pages starts after a page: the bill run after the page of
+    the last item before the bill's first item, a stretch after the page of
+    the sum line that opened it or of the other bill's last item. When a page
+    that was not read (``pages_not_read``) lies after that page and before the
+    line's own page, the run is not offered, and if no run that is offered
+    agrees the line gets no verdict: the rows it may close were not read, and
+    a page the platform could not read is never charged to the document's
+    figure. The bill holding that page is NOT READ by :func:`bill_states`.
 
     The bill and stretch runs are counted from the pages read, so they are
     not offered on a page that prints a brought-forward amount above the
@@ -204,12 +220,17 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     the page itself holds nothing to add up. A row that already carries a
     check keeps it. Returns the rows flagged here."""
     flagged: list[g.BillRow] = []
+    unread = sorted(set(pages_not_read))
     keys = _sections(rows)
     by_page: dict[int, list[int]] = {}
     for i, row in enumerate(rows):
         by_page.setdefault(row.source_page, []).append(i)
     bill_items: dict[str, float] = {}
-    stretch, stretch_bill = 0.0, ""
+    bill_start: dict[str, int] = {}
+    # Each stretch is [its amount, the page it starts after].
+    stretches: list[list[float]] = [[0.0, -1]]
+    stretch_bill = ""
+    last_item_page = -1
     for page in sorted(by_page):
         on_page = 0.0
         carried_in = False
@@ -234,11 +255,16 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
                     bill = _row_bill(row)
                     if bill:
                         named.add(bill)
-                        bill_items[bill] = bill_items.get(bill, 0.0) + amount
+                        if bill not in bill_items:
+                            bill_items[bill] = 0.0
+                            bill_start[bill] = last_item_page
+                        bill_items[bill] += amount
                         if stretch_bill and bill != stretch_bill:
-                            stretch = 0.0
+                            stretches = [[0.0, last_item_page]]
                         stretch_bill = bill
-                    stretch += amount
+                    for run in stretches:
+                        run[0] += amount
+                    last_item_page = page
                 continue
             if not _ends_section(row):
                 continue
@@ -246,19 +272,35 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
             single = next(iter(named)) if len(named) == 1 else ""
             bill = own if own in bill_items else (single or own)
             runs = [section, on_page]
+            withheld = False
             if bill in bill_items and not carried_in:
-                runs.append(bill_items[bill])
+                if _unread_between(unread, bill_start[bill], page):
+                    withheld = True
+                else:
+                    runs.append(bill_items[bill])
             if not carried_in and (not bill or not stretch_bill or bill == stretch_bill):
-                runs.append(stretch)
+                for total, start in stretches:
+                    if _unread_between(unread, int(start), page):
+                        withheld = True
+                    else:
+                        runs.append(total)
             place = agg._last_place(text)
-            if items and not row.check and not any(
+            if items and not row.check and not withheld and not any(
                     agg._same_figure(amount, run, place) for run in runs):
                 row.check = CHECK_SUM_LINE
                 flagged.append(row)
-            if own and agg._same_figure(amount, stretch, place):
-                stretch, stretch_bill = 0.0, ""
+            if own and any(agg._same_figure(amount, total, place) for total, _ in stretches):
+                stretches, stretch_bill = [[0.0, page]], ""
+            else:
+                stretches.append([0.0, page])
     return flagged
 
+
+def _unread_between(unread: Sequence[int], after: int, page: int) -> bool:
+    """True when a page not read lies after page ``after`` and before
+    ``page``: a run across pages that starts after ``after`` may hold rows of
+    it."""
+    return any(after < p < page for p in unread)
 
 def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -> g.BillRow:
     fields = {"description": _text(line.get("description")),

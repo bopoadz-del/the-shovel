@@ -1447,3 +1447,151 @@ def test_line_naming_its_bill_longer_than_its_items_takes_the_section_bill_run(a
     assert _flags(pages) == []
     pages["3"][-1] = _sum_line("total", a + b + 10, "B works")
     assert _flags(pages) == [(3, str(a + b + 10))]
+
+
+# --- a page not read is never charged to the document's sum line -------------
+
+def _public_states(pages):
+    """The public path for reads keyed by page number from one; a read that is
+    not a list of lines is a page not read."""
+    reads = {int(k) - 1: v for k, v in pages.items()}
+    rows_of, states_of = bpr.model_bill_read(lambda pr: reads[pr.index], tolerance=0)
+    rows, not_read, _raw = rows_of([SimpleNamespace(index=i) for i in sorted(reads)])
+    return rows, states_of(rows, not_read)["bills"]
+
+
+def _unflagged_rows(pages):
+    """The rows of the reads with the sum-line checks the read made taken
+    off, for a direct call of ``check_sum_lines``."""
+    rows = _rows(pages)
+    for r in rows:
+        if r.check == bpr.CHECK_SUM_LINE:
+            r.check = ""
+    return rows
+
+
+def _summary(bill, total):
+    return [{"type": "summary", "bill": bill, "description": "bill", "amount": total}]
+
+
+@pytest.mark.parametrize("p2, p3, p4", [((50, 6), (19,), (100,)), ((400, 25), (75, 5), (1000,))])
+def test_unread_page_inside_a_bill_does_not_flag_its_right_total(p2, p3, p4):
+    """Bill 7 on pages 2-4 with a right total on page 4: page 3 read gives no
+    flag and RECONCILED; page 3 not read gives no flag either (the rows the
+    total closes were not all read) and the bill is NOT READ."""
+    total = sum(p2) + sum(p3) + sum(p4)
+    page = lambda n, amounts: [_billed("7", f"R{n}{k}", a) for k, a in enumerate(amounts)]
+    pages = {"1": _summary("7", total), "2": page(2, p2), "3": page(3, p3),
+             "4": page(4, p4) + [_sum_line("total", total, "7")]}
+    rows, bills = _public_states(pages)
+    assert [r for r in rows if r.check] == []
+    assert (bills[0]["state"], bills[0]["rows_flagged"]) == (bpr.STATE_RECONCILED, 0)
+    pages["3"] = "garbled"
+    rows, bills = _public_states(pages)
+    assert [r for r in rows if r.check] == []
+    assert (bills[0]["state"], bills[0]["rows_flagged"], bills[0]["pages_not_read"]) == (
+        bpr.STATE_NOT_READ, 0, [3])
+
+
+@pytest.mark.parametrize("a, b", [(6, 4), (60, 17)])
+def test_unread_page_after_the_line_or_before_its_run_still_lets_it_be_flagged(a, b):
+    """A wrong total is flagged when the only unread page comes after it, or
+    before the page where another bill's total closed and its own bill began:
+    no row any of its runs holds is missing."""
+    after = {"2": [_billed("7", "X", a), _billed("7", "Y", b), _sum_line("total", a + b + 9, "7")]}
+    for unread in ([3], []):
+        got = bpr.check_sum_lines(_unflagged_rows(after), unread)
+        assert [(r.source_page, r.fields["total"]) for r in got] == [(2, str(a + b + 9))]
+    before = {"3": [_billed("6", "X", a), _sum_line("total", a, "6")],
+              "4": [_billed("7", "Y", b), _sum_line("carried", a + b + 9)]}
+    got = bpr.check_sum_lines(_unflagged_rows(before), [2])
+    assert [(r.source_page, r.fields["total"]) for r in got] == [(4, str(a + b + 9))]
+    before["4"][-1] = _sum_line("carried", b)
+    assert bpr.check_sum_lines(_unflagged_rows(before), [2]) == []
+
+
+@pytest.mark.parametrize("a, b", [(6, 4), (60, 17)])
+def test_unread_page_between_the_run_start_and_the_line_withholds_the_verdict(a, b):
+    """Items on page 2, page 3 not read, a total on page 4 that matches no run
+    read: no verdict. The same total with page 3 read and empty is flagged."""
+    pages = {"2": [_billed("7", "X", a)], "4": [_billed("7", "Y", b), _sum_line("total", a + b + 9, "7")]}
+    assert bpr.check_sum_lines(_unflagged_rows(pages), [3]) == []
+    got = bpr.check_sum_lines(_unflagged_rows(pages), [])
+    assert [(r.source_page, r.fields["total"]) for r in got] == [(4, str(a + b + 9))]
+
+
+# --- a section closed on the page after the one it starts on -----------------
+
+_SPLIT_SECTIONS = [
+    # p2 items, p3 items before / after section 1's subtotal, p4 items
+    ((10, 20), (5,), (7,), (8,)),
+    ((100, 250), (40,), (60,), (30,)),
+]
+
+
+def _split_section_pages(p2, p3a, p3b, p4, sub_bill, second=None):
+    total = sum(p2) + sum(p3a) + sum(p3b) + sum(p4)
+    one = sum(p2) + sum(p3a)
+    two = second if second is not None else sum(p3b) + sum(p4)
+    bl = lambda n, amounts: [_billed("7", f"R{n}{k}", a) for k, a in enumerate(amounts)]
+    return {"1": _summary("7", total), "2": bl(2, p2),
+            "3": bl(3, p3a) + [_sum_line("subtotal", one, sub_bill)] + bl(30, p3b),
+            "4": bl(4, p4) + [_sum_line("subtotal", two, sub_bill), _sum_line("total", total, "7")]}
+
+
+@pytest.mark.parametrize("sub_bill", [None, "7"])
+@pytest.mark.parametrize("p2, p3a, p3b, p4", _SPLIT_SECTIONS)
+def test_section_running_over_a_page_break_is_checked_named_or_not(p2, p3a, p3b, p4, sub_bill):
+    """Section totals that name no bill and close a section begun on the page
+    before agree with that section: no flag, the bill is RECONCILED, exactly
+    as when they name the bill."""
+    rows, bills = _public_states(_split_section_pages(p2, p3a, p3b, p4, sub_bill))
+    assert [r for r in rows if r.check] == []
+    assert (bills[0]["state"], bills[0]["rows_flagged"]) == (bpr.STATE_RECONCILED, 0)
+
+
+@pytest.mark.parametrize("sub_bill", [None, "7"])
+@pytest.mark.parametrize("p2, p3a, p3b, p4", _SPLIT_SECTIONS)
+def test_section_over_a_page_break_with_a_wrong_total_is_flagged(p2, p3a, p3b, p4, sub_bill):
+    """The same pages with the second section total one more than its section
+    (and than any other run): flagged, and the bill is FAILED."""
+    wrong = sum(p3b) + sum(p4) + 3
+    rows, bills = _public_states(_split_section_pages(p2, p3a, p3b, p4, sub_bill, wrong))
+    assert [(r.source_page, r.fields["total"]) for r in rows if r.check] == [(4, str(wrong))]
+    assert (bills[0]["state"], bills[0]["rows_flagged"]) == (bpr.STATE_FAILED, 1)
+
+
+@pytest.mark.parametrize("a, b", [(4, 5), (40, 17)])
+def test_unnamed_page_total_keeps_the_stretch_for_the_bill_total(a, b):
+    """Items naming no bill, an unnamed carried line on page 2 that agrees,
+    then a total naming the bill on page 3: the stretch still runs from page 2,
+    so a + b is not flagged and a + b + 10 is."""
+    pages = {"2": [_item("A", 1, a, a), _sum_line("carried", a)],
+             "3": [_item("C", 1, b, b), _sum_line("total", a + b, "B")]}
+    assert _flags(pages) == []
+    pages["3"][-1] = _sum_line("total", a + b + 10, "B")
+    assert _flags(pages) == [(3, str(a + b + 10))]
+
+
+@pytest.mark.parametrize("a, b, wrong", [(4, 5, 12), (40, 5, 48)])
+def test_unnamed_items_before_the_first_named_item_stay_in_its_stretch(a, b, wrong):
+    """An item naming no bill on page 1, then bill 7's item and a total naming
+    7 on page 2: a + b agrees with the stretch, a wrong total is flagged."""
+    pages = {"1": [_item("A", 1, a, a)],
+             "2": [_billed("7", "B", b), _sum_line("total", a + b, "7")]}
+    assert _flags(pages) == []
+    pages["2"][-1] = _sum_line("total", wrong, "7")
+    assert _flags(pages) == [(2, str(wrong))]
+
+
+@pytest.mark.parametrize("a, b", [(4, 5), (40, 5)])
+def test_unnamed_flag_on_a_page_the_bill_only_reaches_counts_against_it(a, b):
+    """Unnamed items and an unnamed wrong total on a page outside every range
+    that bill 7 reaches: one flagged row, NOT CHECKED; a right total, none."""
+    spans = [bpr.BillSpan("7", None, None, a + b, pages_unplaced_reach=(3,))]
+    pages = {"3": [_item("X", 1, a, a), _item("Y", 1, b, b), _sum_line("total", 99)]}
+    got = bpr.bill_states(_rows(pages), [], spans=spans, tolerance=0)["bills"][0]
+    assert (got["rows_flagged"], got["state"]) == (1, bpr.STATE_NOT_CHECKED)
+    pages["3"][-1] = _sum_line("total", a + b)
+    got = bpr.bill_states(_rows(pages), [], spans=spans, tolerance=0)["bills"][0]
+    assert (got["rows_flagged"], got["state"]) == (0, bpr.STATE_NOT_CHECKED)
