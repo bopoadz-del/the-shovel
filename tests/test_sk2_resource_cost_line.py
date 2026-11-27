@@ -694,3 +694,15 @@ def test_counted_parts_read_a_noun_in_a_place(value, parts):
     assert _counted_parts(value) == parts
     if parts is not None:
         assert _stated_parts(value) is None   # the stated reading is unchanged
+
+
+@pytest.mark.parametrize("unit,mark", [
+    ("each", "nr"), ("ea", "nr"), ("pcs", "nr"), ("nr", "nr"),
+    ("m3", None),       # a unit of another kind is not a count mark
+    ("blocks", None),   # a counted noun is read elsewhere, not as a mark
+    ("zz", None),
+])
+def test_count_mark_reads_a_written_count_unit(unit, mark):
+    from app.lib.formula_registry import _count_mark
+
+    assert _count_mark(unit) == mark
