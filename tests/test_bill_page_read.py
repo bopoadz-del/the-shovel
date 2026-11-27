@@ -1595,3 +1595,28 @@ def test_unnamed_flag_on_a_page_the_bill_only_reaches_counts_against_it(a, b):
     pages["3"][-1] = _sum_line("total", a + b)
     got = bpr.bill_states(_rows(pages), [], spans=spans, tolerance=0)["bills"][0]
     assert (got["rows_flagged"], got["state"]) == (0, bpr.STATE_NOT_CHECKED)
+
+
+@pytest.mark.parametrize("a, b, c", [(6, 4, 3), (60, 17, 8)])
+def test_unread_page_inside_the_bill_run_withholds_even_after_a_stretch_closed(a, b, c):
+    """Bill 7's item on page 2, page 3 not read, then on page 4 a named carried
+    line that closes the stretch and one more item: a bill total matching no
+    run read gets no verdict (the bill run spans page 3); with page 3 read and
+    empty it is flagged."""
+    pages = {"2": [_billed("7", "X", a)],
+             "4": [_billed("7", "Y", b), _sum_line("carried", b, "7"), _billed("7", "Z", c),
+                   _sum_line("total", a + b + c + 9, "7")]}
+    assert bpr.check_sum_lines(_unflagged_rows(pages), [3]) == []
+    got = bpr.check_sum_lines(_unflagged_rows(pages), [])
+    assert [(r.source_page, r.fields["total"]) for r in got] == [(4, str(a + b + c + 9))]
+
+
+@pytest.mark.parametrize("a, b", [(6, 4), (60, 17)])
+def test_unread_page_inside_a_stretch_of_unnamed_items_withholds_the_verdict(a, b):
+    """Items naming no bill (so no bill run) on pages 2 and 4, page 3 not read,
+    a total naming the bill that matches no run read: no verdict; with page 3
+    read and empty it is flagged."""
+    pages = {"2": [_item("X", 1, a, a)], "4": [_item("Y", 1, b, b), _sum_line("total", a + b + 9, "B")]}
+    assert bpr.check_sum_lines(_unflagged_rows(pages), [3]) == []
+    got = bpr.check_sum_lines(_unflagged_rows(pages), [])
+    assert [(r.source_page, r.fields["total"]) for r in got] == [(4, str(a + b + 9))]
