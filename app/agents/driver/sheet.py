@@ -409,9 +409,7 @@ def written_numbers(literal: Any) -> List[float]:
     "-7"), a ``{"value": ..., "unit": ...}`` object, a list of any of
     these. Text that does not begin with a number (an operator, a named
     option) and a flag carry none."""
-    if isinstance(literal, bool) or literal is None:
-        return []
-    if isinstance(literal, (int, float)):
+    if isinstance(literal, (int, float)):  # a flag is no number: _number refuses it
         number = _number(literal)
         return [] if number is None else [number]
     if isinstance(literal, str):
