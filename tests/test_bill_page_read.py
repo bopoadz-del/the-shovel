@@ -1633,3 +1633,77 @@ def test_named_line_closing_only_a_section_leaves_the_bill_stretch_open(a, b, c)
     assert _flags(pages) == []
     pages["3"][-1] = _sum_line("total", a + b + c + 10, "7")
     assert _flags(pages) == [(3, str(a + b + c + 10))]
+
+
+# --- where a run across pages starts, at the page next to an unread one ------
+
+def _sum_flags(pages, unread):
+    return [(r.source_page, r.fields["total"])
+            for r in bpr.check_sum_lines(_unflagged_rows(pages), unread)]
+
+
+@pytest.mark.parametrize("a, b, c", [(40, 30, 16), (400, 75, 9)])
+def test_unread_page_right_after_the_run_start_page_withholds_the_verdict(a, b, c):
+    """Bill 6 on page 2, page 3 not read, bill 7 on page 4, then an item and a
+    wrong total naming 7 on page 5: the bill run and the stretch both start
+    after page 2, so page 3 (the very next page) withholds the verdict and
+    both bills are NOT READ; with no page missing the total is flagged and
+    bill 7 is FAILED."""
+    wrong = b + c + 18
+    pages = {"1": _summary("6", a) + _summary("7", b + c),
+             "2": [_billed("6", "X", a)], "4": [_billed("7", "Y", b)],
+             "5": [_billed("7", "Z", c), _sum_line("total", wrong, "7")]}
+    assert _sum_flags(pages, [3]) == []
+    assert _sum_flags(pages, []) == [(5, str(wrong))]
+    rows, bills = _public_states({**pages, "3": "garbled"})
+    assert [r for r in rows if r.check] == []
+    assert [(x["label"], x["state"]) for x in bills] == [
+        ("6", bpr.STATE_NOT_READ), ("7", bpr.STATE_NOT_READ)]
+    rows, bills = _public_states(pages)
+    assert [(r.source_page, r.fields["total"]) for r in rows if r.check] == [(5, str(wrong))]
+    assert [(x["label"], x["state"]) for x in bills] == [
+        ("6", bpr.STATE_RECONCILED), ("7", bpr.STATE_FAILED)]
+
+
+@pytest.mark.parametrize("a, b, c", [(40, 30, 16), (400, 75, 9)])
+def test_bill_run_starts_after_the_last_item_before_the_bill_not_at_its_first_item(a, b, c):
+    """Bill 6 on page 2, page 3 not read, bill 7's item and a carried line
+    naming 7 that closes the stretch on page 4, then an item and a wrong total
+    naming 7 on page 5: the bill run spans page 3, so no verdict; with page 3
+    read and empty the total is flagged."""
+    wrong = b + c + 18
+    pages = {"2": [_billed("6", "X", a), _billed("6", "W", b)],
+             "4": [_billed("7", "Y", b), _sum_line("carried", b, "7")],
+             "5": [_billed("7", "Z", c), _sum_line("total", wrong, "7")]}
+    assert _sum_flags(pages, [3]) == []
+    assert _sum_flags(pages, []) == [(5, str(wrong))]
+
+
+@pytest.mark.parametrize("a, b, c", [(40, 30, 16), (400, 75, 9)])
+def test_unread_page_before_the_other_bill_does_not_withhold_the_bill_total(a, b, c):
+    """Page 1 not read, bill 6 on page 2 with no closing total, bill 7 on
+    pages 3-4, the summary on page 5: page 1 lies before bill 7's runs, so a
+    wrong bill 7 total is flagged and bill 7 FAILED, a right one RECONCILED;
+    bill 6 is NOT READ either way."""
+    right = b + c
+    for total, flags, state in ((right + 18, [(4, str(right + 18))], bpr.STATE_FAILED),
+                                (right, [], bpr.STATE_RECONCILED)):
+        pages = {"1": "garbled", "2": [_billed("6", "X", a)],
+                 "3": [_billed("7", "Y", b)],
+                 "4": [_billed("7", "Z", c), _sum_line("total", total, "7")],
+                 "5": _summary("6", a) + _summary("7", right)}
+        rows, bills = _public_states(pages)
+        assert [(r.source_page, r.fields["total"]) for r in rows if r.check] == flags
+        assert {x["label"]: x["state"] for x in bills} == {"6": bpr.STATE_NOT_READ, "7": state}
+
+
+@pytest.mark.parametrize("a, b, c", [(40, 30, 16), (400, 75, 9)])
+def test_stretch_reset_by_another_bills_item_starts_after_the_previous_items_page(a, b, c):
+    """Bill 6 on page 2, page 3 not read, bill 7's item on page 4, then an
+    unnamed item and an unnamed wrong total on page 5: the stretch spans page
+    3, so no verdict; with page 3 read and empty the total is flagged."""
+    wrong = b + c + 18
+    pages = {"2": [_billed("6", "X", a)], "4": [_billed("7", "Y", b)],
+             "5": [_item("Z", 1, c, c), _sum_line("total", wrong)]}
+    assert _sum_flags(pages, [3]) == []
+    assert _sum_flags(pages, []) == [(5, str(wrong))]
