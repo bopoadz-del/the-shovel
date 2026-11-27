@@ -308,7 +308,10 @@ def review(project_id: str, name: Any, decision: Any, version: Any,
     read (``version_of``, listed with the note): the note is marked and the
     decision recorded, with the content it was made on, in one transaction.
     When the note was written again since, nothing is marked or recorded and
-    ``MemoryConflict`` says so. The note's content is never changed."""
+    ``MemoryConflict`` says so. Keeping a discarded note needs a place under
+    the count limit, as writing it again would; at the limit nothing is
+    marked or recorded and ``MemoryRefused`` says so. The note's content is
+    never changed."""
     if not project_id:
         raise MemoryRefused("a review needs a project")
     if not isinstance(decision, str) or decision not in DECISIONS:
@@ -326,6 +329,7 @@ def review(project_id: str, name: Any, decision: Any, version: Any,
             if version_of(row) != version:
                 raise MemoryConflict(f"note {stem!r} was written again after it was opened; "
                                      "reload and decide on the version shown")
+            back_in_sight = decision == "keep" and row.review == DISCARDED
             record = LlmMemoryReview(project_id=project_id, name=stem, decision=decision,
                                      data=row.data, note_written_at=row.written_at,
                                      note_written_by_turn=row.written_by_turn,
@@ -344,6 +348,16 @@ def review(project_id: str, name: Any, decision: Any, version: Any,
             if not marked:
                 raise MemoryConflict(f"note {stem!r} was written again while the decision was "
                                      "being made; reload and decide on the version shown")
+            if back_in_sight:
+                # Keeping a discarded note puts it back in the model's sight,
+                # so it takes a place under the limit like a new note: the
+                # same lock and count as ``write``, with this note counted.
+                _one_new_note_at_a_time(s, project_id)
+                count = _notes_in_sight(s, project_id)
+                if count > max_docs():
+                    raise MemoryRefused(f"keeping {stem!r} would put {count} notes in the model's "
+                                       f"sight; the limit is {max_docs()}. Discard another note "
+                                       "first, then keep this one")
             s.add(record)
     return {"name": stem, "decision": decision, "review": DECISIONS[decision],
             "decided_at": at, "decided_by": by or ""}

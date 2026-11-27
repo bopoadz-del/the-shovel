@@ -62,6 +62,7 @@ let store = {}
 let posts = []
 let refuse = false
 let gates = {}
+let full = null
 const DECIDER = 'u-3f9a12bc'
 
 function reset() {
@@ -78,6 +79,7 @@ function reset() {
   posts = []
   refuse = false
   gates = {}
+  full = null
 }
 
 // The model writes the note again on the server: new content, new version.
@@ -104,6 +106,7 @@ globalThis.fetch = async (url, init = {}) => {
     posts.push({ project: m[1], name: m[2], body })
     const note = store[m[1]].notes.find((n) => n.name === m[2])
     if (body.version !== note.version) return json({ detail: 'written again after it was opened' }, 409)
+    if (full && body.decision === 'keep' && note.review === 'discarded') return json({ detail: full }, 422)
     note.review = body.decision === 'keep' ? 'kept' : 'discarded'
     store[m[1]].reviews.push({ name: m[2], decision: body.decision, data: note.data,
       note_written_at: note.written_at, decided_at: '2026-11-27T01:00:00+00:00', decided_by: DECIDER })
@@ -316,3 +319,22 @@ test('a turn reads as message and conversation title, or as little as is known',
   assert.equal(turnWords({ conversation: null, message: null }), '')
   assert.equal(turnWords(undefined), '')
 })
+
+for (const c of CASES) {
+  test(`a Keep on a discarded note of ${c.project} refused at the limit says why and leaves it discarded`,
+    async () => {
+      reset()
+      const target = c.notes[0]
+      const v = await mount(c.project)
+      try {
+        await v.click(v.button(target.name, 'Discard'))
+        full = `keeping '${target.name}' would put ${c.notes.length + 1} notes in the model's sight`
+        await v.click(v.button(target.name, 'Keep'))
+        assert.deepEqual(posts.map((x) => x.body.decision), ['discard', 'keep'])
+        assert.ok(v.container.querySelector('[role="alert"]').textContent.includes(full))
+        assert.ok(!v.container.querySelector('[role="alert"]').textContent.includes('again'))
+        assert.equal(v.note(target.name).getAttribute('data-review'), 'discarded')
+        assert.deepEqual(store[c.project].reviews.map((r) => r.decision), ['discard'])
+      } finally { v.unmount() }
+    })
+}

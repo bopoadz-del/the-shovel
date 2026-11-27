@@ -454,3 +454,106 @@ def test_a_blank_conversation_title_is_no_title(title, shown):
     with SessionLocal() as s:
         assert llm_memory.turn_label(s, pid, f"{conv_id}#2") == {"conversation": shown, "message": 2}
         assert llm_memory.turn_label(s, "another", f"{conv_id}#2") == {"conversation": None, "message": 2}
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_the_owners_keep_on_a_discarded_note_needs_a_place_under_the_count_limit(
+        client, monkeypatch, limit):
+    """Through the chat and admin routes: the model fills the project, the
+    owner discards n0, the model writes a new note into the freed place; the
+    owner's Keep on n0 would put limit + 1 notes in the model's sight, so it
+    is refused (422), nothing is marked or recorded, and the model still sees
+    exactly ``limit`` notes. Must not fire: Keep on a note in sight at the
+    limit, and Keep on n0 once a place is free (exactly at the limit)."""
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", str(limit))
+    h = _user(client, "keepcap")
+    pid = _project(client, h, "Calibrate keep cap")
+    for i in range(limit):
+        _write(client, monkeypatch, h, pid, f"n{i}", {"i": i})
+    with _Admin():
+        assert _decide(client, pid, "n0", "discard").status_code == 200
+    _write(client, monkeypatch, h, pid, "extra", {"x": limit})
+    with _Admin():
+        refused = _decide(client, pid, "n0", "keep")
+        assert refused.status_code == 422, refused.text
+        assert f"the limit is {limit}" in refused.json()["detail"]
+        notes = _admin_notes(client, pid)
+        assert notes["n0"]["review"] == "discarded"
+        assert [e["decision"] for e in client.get(f"/v1/admin/projects/{pid}/memory/reviews")
+                .json()["reviews"]] == ["discard"]
+        # Must not fire: a note already in sight is kept at the limit.
+        assert _decide(client, pid, "extra", "keep").status_code == 200
+    listed, _ = _run_one(client, monkeypatch, h, pid, "list_memory", {})
+    seen = sorted(n["name"] for n in listed["result"]["notes"])
+    assert len(seen) == limit and "n0" not in seen
+    # Must not fire: once a place is free, Keep brings n0 back (count == limit).
+    with _Admin():
+        assert _decide(client, pid, "extra", "discard").status_code == 200
+        assert _decide(client, pid, "n0", "keep").status_code == 200
+        assert _admin_notes(client, pid)["n0"]["review"] == "kept"
+    read, _ = _run_one(client, monkeypatch, h, pid, "read_memory", {"name": "n0"})
+    assert read["ok"] is True and read["result"]["data"] == {"i": 0}
+    assert len(llm_memory.listing(pid)) == limit
+
+
+@pytest.mark.parametrize("pid_a,pid_b", [("cal-lk-a", "cal-lk-b"), ("cal-lk-c", "cal-lk-d")])
+def test_only_a_keep_that_brings_a_note_back_takes_the_new_note_lock(monkeypatch, pid_a, pid_b):
+    """The Keep on a discarded note takes the same per-project lock as a new
+    note (so its count is the count it is made against on Postgres); a Keep
+    on a note in sight and a Discard take no lock."""
+    taken = []
+    real = llm_memory._one_new_note_at_a_time
+    monkeypatch.setattr(llm_memory, "_one_new_note_at_a_time",
+                        lambda s, project_id: (taken.append(project_id), real(s, project_id)))
+    for pid in (pid_a, pid_b):
+        pid = f"{pid}-{uuid.uuid4().hex[:6]}"
+        llm_memory.write(pid, "paths", json.dumps({"p": pid}), "c#1")
+        taken.clear()
+        llm_memory.review(pid, "paths", "keep", _ver(pid, "paths"))
+        llm_memory.review(pid, "paths", "discard", _ver(pid, "paths"))
+        assert taken == []
+        llm_memory.review(pid, "paths", "keep", _ver(pid, "paths"))
+        assert taken == [pid]
+
+
+@pytest.mark.parametrize("decision", ["keep", "discard"])
+def test_a_rewrite_with_the_same_time_and_turn_but_new_content_leaves_no_mark(monkeypatch, decision):
+    """The model rewrites the note in the same second and turn, with other
+    content, between the owner's read and the mark: only the content tells
+    the two versions apart, and the mark does not land."""
+    monkeypatch.setattr(llm_memory, "_now", lambda: "2026-11-27T09:00:00+00:00")
+    pid = f"cal-same-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "paths", json.dumps({"v": "A"}), "c#4")
+    ver = _ver(pid, "paths")
+    real = llm_memory.LlmMemoryReview
+
+    def write_first(**kw):
+        llm_memory.write(pid, "paths", json.dumps({"v": "B", "by": decision}), "c#4")
+        return real(**kw)
+
+    monkeypatch.setattr(llm_memory, "LlmMemoryReview", write_first)
+    with pytest.raises(llm_memory.MemoryConflict):
+        llm_memory.review(pid, "paths", decision, ver, by="o")
+    monkeypatch.setattr(llm_memory, "LlmMemoryReview", real)
+    row = llm_memory.listing(pid, with_data=True, with_review=True)[0]
+    assert (row["data"], row["review"]) == ({"v": "B", "by": decision}, "")
+    assert llm_memory.reviews(pid) == []
+
+
+@pytest.mark.parametrize("changed", ["turn", "time"])
+def test_the_same_content_rewritten_in_another_turn_or_time_is_a_new_version(monkeypatch, changed):
+    """Same content, only the turn (or only the time) differs: a new version,
+    so a decision on the old one is refused and nothing is recorded."""
+    clock = {"now": "2026-11-27T09:00:00+00:00"}
+    monkeypatch.setattr(llm_memory, "_now", lambda: clock["now"])
+    pid = f"cal-v-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "paths", json.dumps({"same": changed}), "c#1")
+    old = _ver(pid, "paths")
+    if changed == "time":
+        clock["now"] = "2026-11-27T09:00:05+00:00"
+    llm_memory.write(pid, "paths", json.dumps({"same": changed}), "c#2" if changed == "turn" else "c#1")
+    assert _ver(pid, "paths") != old
+    with pytest.raises(llm_memory.MemoryConflict):
+        llm_memory.review(pid, "paths", "discard", old)
+    assert llm_memory.reviews(pid) == []
+    assert llm_memory.listing(pid, with_review=True)[0]["review"] == ""
