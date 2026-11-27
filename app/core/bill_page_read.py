@@ -95,6 +95,21 @@ def _figure(value: Any) -> tuple[str, bool]:
     return text, g.parse_number(text) is not None
 
 
+def read_lines(entry: Any) -> list[Mapping[str, Any]] | None:
+    """A page's lines when ``entry`` is a read of the page, else ``None``.
+
+    A read is a non-empty list of line objects. Anything else (a not-read
+    entry, an empty list, a list holding text, ``null`` or a nested list) is
+    a page NOT READ. Every reader of the page reads (rows, bill spans, the
+    reply parser and the saved reads) asks this one question, so a page is
+    never read for one of them and not read for another."""
+    if not isinstance(entry, list) or not entry:
+        return None
+    if not all(isinstance(line, Mapping) for line in entry):
+        return None
+    return entry
+
+
 def rows_from_page_reads(
     pages: Mapping[Any, Any], bill_label: str = "",
 ) -> PageReadRows:
@@ -111,9 +126,9 @@ def rows_from_page_reads(
     top = (bill_label.strip(),) if bill_label.strip() else ()
     headings: list[str] = []
     after_row = True
-    for page, lines in keyed:
-        if (not isinstance(lines, list) or not lines
-                or not all(isinstance(line, Mapping) for line in lines)):
+    for page, entry in keyed:
+        lines = read_lines(entry)
+        if lines is None:
             out.pages_not_read.append(page)
             continue
         for line in lines:
@@ -231,7 +246,8 @@ def lines_of_reply(text: Any) -> list[Any] | None:
 
     The reply is a JSON object with a ``lines`` list, optionally inside a code
     fence. An empty reply, a reply that is not JSON, a JSON value without a
-    ``lines`` list, or an empty list all give ``None``: the page was not read,
+    ``lines`` list, an empty list, or a list that holds anything but line
+    objects (:func:`read_lines`) all give ``None``: the page was not read,
     which is never the same as "a page with no rows"."""
     if not isinstance(text, str):
         return None
@@ -245,10 +261,7 @@ def lines_of_reply(text: Any) -> list[Any] | None:
     except ValueError as exc:
         # not JSON: no lines; the caller keeps the reply text as why
         data = {"not_json": type(exc).__name__}
-    lines = data.get("lines") if isinstance(data, dict) else None
-    if not isinstance(lines, list) or not lines:
-        return None
-    return lines
+    return read_lines(data.get("lines") if isinstance(data, dict) else None)
 
 
 #: The raw-output entry of a page the model gave no lines for, after every
@@ -489,14 +502,13 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
         name = _text(key)
         if not name.isdecimal():
             continue
-        if not isinstance(lines, list):
+        read = read_lines(lines)
+        if read is None:
             unread.append(int(name))
             continue
         page = int(name)
         named: set[str] = set()
-        for line in lines:
-            if not isinstance(line, Mapping):
-                continue
+        for line in read:
             bill = _bill_key(line.get(BILL_KEY))
             if not bill:
                 continue
@@ -551,16 +563,19 @@ SAVED_READ_NAME = "model_page_{index:05d}.json"
 def saved_page_reader(read_page: Callable[[Any], Any], work_dir: str) -> Callable[[Any], Any]:
     """``read_page`` that keeps each page's lines in ``work_dir`` and gives the
     saved lines back on a later run, so the plan and its execute see the same
-    reads and the same plan hash. Only a list of lines is saved: a not-read
-    entry is returned as it is and the page is asked again on the next run."""
+    reads and the same plan hash. Only a read (:func:`read_lines`) is saved: a
+    not-read entry is returned as it is and the page is asked again on the
+    next run, and a saved file that is not a read is asked again too."""
 
     def read(page_read: Any) -> Any:
         path = os.path.join(work_dir, SAVED_READ_NAME.format(index=page_read.index))
         if os.path.exists(path):
             with open(path, encoding="utf-8") as fh:
-                return json.load(fh)
+                saved = json.load(fh)
+            if read_lines(saved) is not None:
+                return saved
         got = read_page(page_read)
-        if isinstance(got, list):
+        if read_lines(got) is not None:
             os.makedirs(work_dir, exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:

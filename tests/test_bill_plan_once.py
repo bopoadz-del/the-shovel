@@ -542,6 +542,9 @@ def test_saved_page_reader_saves_lines_and_gives_them_back(tmp_path, first, seco
 @pytest.mark.parametrize("not_read", [
     {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": ["", "x"]},
     None,
+    # a list that holds no line object is not a read either: never saved
+    ["page too faint to read"],
+    [None],
 ])
 def test_saved_page_reader_asks_a_page_not_read_again(tmp_path, not_read):
     asked: list[int] = []
@@ -690,6 +693,68 @@ def test_bill_with_its_first_middle_or_last_page_not_read_is_not_read(
     saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
     (bill,) = saved["bill_states"]["bills"]
     assert bill["pages_not_read"] == [missing + 1] and bill["items_sum"] == 20
+
+
+@pytest.mark.parametrize("junk", ['["page too faint to read"]', "[null]", "[[]]"])
+@pytest.mark.parametrize("edge", [0, 2])
+def test_junk_reply_on_a_bills_edge_page_is_not_read_and_asked_again(
+        tmp_path, monkeypatch, junk, edge):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    good = _bill_a_three_pages(1)
+    good[1] = [_line("item", "Bill A", "10", quantity="1", rate="10", ref="1")]
+    asked: list[int] = []
+
+    def model_read(doc, wd, tol):
+        def ask_for(index):
+            def ask(messages):
+                asked.append(index)
+                if index == edge:
+                    return '{"lines": ' + junk + '}'
+                return json.dumps({"lines": good[index]})
+            return ask
+
+        def page(p):
+            return bpr.model_page_reader(ask_for(p.index), lambda i: b"png")(p)
+        return bpr.model_bill_read(bpr.saved_page_reader(page, wd), tolerance=tol)
+
+    for _run in range(2):
+        lines: list[str] = []
+        deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL,
+                     model_read=model_read)
+        assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+        rep = _summary(lines)
+        assert rep["pages_not_read"] == 1
+        assert rep["bill_state_counts"] == {"not_read": 1}
+        saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
+        (bill,) = saved["bill_states"]["bills"]
+        assert bill["pages_not_read"] == [edge + 1] and bill["items_sum"] == 20
+    # the junk page is never saved: each run asks it again (twice per run,
+    # PAGE_READ_ATTEMPTS), the read pages only once
+    attempts = bpr.PAGE_READ_ATTEMPTS
+    assert asked.count(edge) == 2 * attempts
+    assert sorted(set(asked) - {edge}) == sorted({0, 1, 2, 3} - {edge})
+    assert all(asked.count(i) == 1 for i in set(asked) - {edge})
+    assert not (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=edge)).exists()
+
+
+@pytest.mark.parametrize("junk", [["page too faint"], [None]])
+@pytest.mark.parametrize("good", [[{"type": "item", "amount": "5"}],
+                                  [{"type": "item", "amount": "8"}]])
+def test_saved_file_that_is_not_a_read_is_asked_again(tmp_path, junk, good):
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    (wd / bpr.SAVED_READ_NAME.format(index=2)).write_text(json.dumps(junk), encoding="utf-8")
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return good
+
+    read = bpr.saved_page_reader(inner, str(wd))
+    assert read(_Page(2)) == good and read(_Page(2)) == good
+    assert asked == [2]
 
 
 @pytest.mark.parametrize("printed, want", [("30", {"reconciled": 1}), ("31", {"failed": 1})])

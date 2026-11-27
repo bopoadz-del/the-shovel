@@ -583,7 +583,8 @@ def test_summary_bill_with_no_pages_is_listed(listed):
 @pytest.mark.parametrize("pages, reach", [
     ({"cover": [_line("A")], "2": [_line("B")]}, ()),
     # the not-read page 1 places nothing, but bill B could reach it
-    ({"1": {"not_read": True}, "2": [_line("B")], "3": ["not a line"]}, (1,)),
+    # a list holding no line object is a page NOT READ too: B could reach it
+    ({"1": {"not_read": True}, "2": [_line("B")], "3": ["not a line"]}, (1, 3)),
 ])
 def test_keys_that_are_not_pages_and_reads_that_are_not_lists_place_nothing(pages, reach):
     assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("B", 2, 2, None, reach)]
@@ -724,3 +725,50 @@ def test_summary_bill_gets_no_span_when_the_only_unread_page_is_inside_another_b
     got = bpr.spans_from_page_reads(pages)
     assert [s.label for s in got.spans] == ["A"]
     assert got.summary_without_pages == ["B"]
+
+
+
+@pytest.mark.parametrize("entry", [
+    {"not_read": True}, None, [], ["page too faint to read"], [None], [[]],
+    [{"type": "item"}, "and some text"],
+])
+def test_read_lines_says_not_read_for_anything_but_line_objects(entry):
+    assert bpr.read_lines(entry) is None
+
+
+@pytest.mark.parametrize("entry", [
+    [{"type": "item", "amount": "5"}],
+    [{"type": "heading", "description": "x"}, {"type": "item", "amount": "7"}],
+])
+def test_read_lines_gives_a_read_back_as_it_is(entry):
+    assert bpr.read_lines(entry) is entry
+
+
+@pytest.mark.parametrize("lines", ['["page too faint to read"]', "[null]", "[[]]"])
+def test_reply_whose_lines_are_not_line_objects_gives_no_lines(lines):
+    assert bpr.lines_of_reply('{"lines": ' + lines + '}') is None
+
+
+@pytest.mark.parametrize("junk", [["page too faint"], [None], [[]]])
+@pytest.mark.parametrize("edge", ["1", "3"])
+def test_junk_read_on_a_bills_edge_page_is_in_its_reach(junk, edge):
+    pages = {"1": [_line("A", amount=1)], "2": [_line("A", amount=1)],
+             "3": [_line("A", amount=1)], "4": [_line("A", kind="summary", amount=3)]}
+    pages[edge] = junk
+    (span,) = bpr.spans_from_page_reads(pages).spans
+    assert span.pages_unread_reach == (int(edge),)
+    rows = bpr.rows_from_page_reads(pages)
+    assert rows.pages_not_read == [int(edge)]
+
+
+@pytest.mark.parametrize("offset", [0, 10])
+def test_each_bill_reaches_only_the_unread_pages_next_to_it(offset):
+    # A, unread, B, unread, C, unread, D, unread: a bill reaches the unread page
+    # on each side up to the next bill, never every unread page on that side
+    pages = {}
+    for i, bill in enumerate("ABCD"):
+        pages[str(offset + 2 * i + 1)] = [_line(bill, amount=1)]
+        pages[str(offset + 2 * i + 2)] = {"not_read": True}
+    got = {s.label: s.pages_unread_reach for s in bpr.spans_from_page_reads(pages).spans}
+    o = offset
+    assert got == {"A": (o + 2,), "B": (o + 2, o + 4), "C": (o + 4, o + 6), "D": (o + 6, o + 8)}
