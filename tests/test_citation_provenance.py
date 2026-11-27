@@ -445,6 +445,8 @@ def test_inline_separators_on_a_non_table_line_survive_the_strip():
     (55.0, {55.0, 2.0}, [], True),                  # the user wrote it
     (20.0, set(), [[10.0, 20.0]], True),            # a retrieved passage carries it
     (987.5, set(), [], False),
+    (-43.0, {43.0}, [], True),                      # read from text without its sign
+    (-20.0, set(), [[10.0, 20.0]], True),
 ])
 def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number, pool, passages, expected):
     from app.agents.citation_provenance import _given_to_us

@@ -1010,3 +1010,79 @@ def test_a_given_the_user_wrote_in_an_earlier_turn_still_backs_a_result_in_the_n
     assert f"{a} m" in shown and f"{a * b:g} m*m" in shown
     quoted = [f for f in trace_store.records(_today(), conv)[-1]["figures"] if f.get("figure") == f"{a} m"]
     assert quoted and quoted[0]["source"] == "user_input"
+
+
+@pytest.mark.parametrize("length,width,depth,volume", [(43, 10, 2, 860), (12.5, 8, 3, 300)])
+def test_numbers_written_in_the_plan_with_their_unit_are_not_made_a_code_figure(monkeypatch, length, width,
+                                                                               depth, volume):
+    """The model writes the quantities as text with a unit ("43 m"): the
+    formula reads them, and so does the check."""
+    conv = f"own-text-{length}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                      "inputs": {"length_m": f"{length} m", "width_m": f"{width} m",
+                                 "depth_m": f"{depth} m"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The excavation is {volume} m3."},
+    ])
+    shown = _text(_run(user_message="how much is there?", conversation_id=conv, sheet_mode=True))
+    assert f"{volume} m3" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("value,unit", [(4321, "m3"), (987.5, "m2")])
+def test_a_number_written_in_the_plan_as_a_value_object_is_not_made_a_code_figure(monkeypatch, value, unit):
+    conv = f"own-object-{value}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": {"value": value, "unit": unit},
+                                 "b": {"value": 0, "unit": unit}}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The quantity is {value} {unit}."},
+    ])
+    shown = _text(_run(user_message="how much is there?", conversation_id=conv, sheet_mode=True))
+    assert f"{value} {unit}" not in shown
+    assert not [f for f in trace_store.records(_today(), conv)[0]["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("level,rise,new", [(-43, 10, "-33"), (-7, 2.5, "-4.5")])
+def test_a_negative_number_the_user_wrote_is_a_given_and_its_result_is_shown(monkeypatch, level, rise, new):
+    conv = f"neg-{rise}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The new level is {new} m."},
+    ])
+    shown = _text(_run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    assert f"{new} m" in shown and "incomplete" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["user", "user"]
+
+
+@pytest.mark.parametrize("a,b", [(55, 2), (120, 35)])
+def test_a_carried_given_keeps_its_credit_when_no_history_is_sent(monkeypatch, a, b):
+    """Turn 2 arrives with no history at all: the given written in turn 1 was
+    checked then, so the result resting on it is still shown."""
+    conv = f"nohist-{a}"
+    pid = _owned_conversation(conv, "nh-u")
+    who = {"conversation_id": conv, "user_id": "nh-u", "project_id": pid, "sheet_mode": True}
+    _scripted(monkeypatch, [{"content": "", "tool_calls": [_call("sheet_update", {
+        "givens": [{"id": "g1", "value": a, "unit": "m"}]}, "c1")]}, {"content": "Noted."}])
+    _run(user_message=f"The wall is {a} m long.", **who)
+    trace_store.forget_held()
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g2", "value": b, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The total length is {a + b} m."}])
+    shown = _text(_run(user_message=f"Add the {b} m return. What is the total?", history=[], **who))
+    assert f"{a + b} m" in shown and "incomplete" not in shown

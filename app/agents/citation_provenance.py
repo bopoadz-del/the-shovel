@@ -1741,7 +1741,7 @@ def figure_provenance(
             # front of this check) is the user's figure when the answer
             # quotes it.
             for sheet_payload in sheets:
-                user_vals |= set(working_sheet.user_givens(sheet_payload))
+                user_vals |= {abs(v) for v in working_sheet.user_givens(sheet_payload)}
 
             for sheet_payload in sheets:
                 for row in working_sheet.code_results(sheet_payload):
@@ -1860,9 +1860,9 @@ def given_check(messages: list[dict[str, Any]] | None, *, tool_passages: bool = 
     produced, _ = _given_pools(ev, [set(c.result_numbers) for c in _calculator_credits(ev)])
 
     def check(number: float) -> str:
-        if _match(number, users):
+        if _given_to_us(number, users, []):
             return "user"
-        if _match(number, produced):
+        if _given_to_us(number, produced, []):
             return "calculator"
         return "passage" if _given_to_us(number, set(), passages) else ""
 
@@ -1874,7 +1874,8 @@ def _given_to_us(number: float, given_pool: set[float], passages: list[list[floa
     (the users' messages and the calculator and workflow results, rescaled)
     or in one of the retrieved ``passages``. A number found in neither is the
     model's own."""
-    return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
+    size = abs(number)  # the pools hold magnitudes: a number is read from text without its sign
+    return _match(size, given_pool) or any(_match(size, nums) for nums in passages)
 
 
 def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:

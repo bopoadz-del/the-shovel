@@ -315,9 +315,10 @@ def test_run_step_converts_a_written_unit_to_the_declared_one(dims_mm):
     assert step["result"]["name"] == "bank_volume_m3"
 
 
-def test_run_step_without_an_output_and_no_main_output_is_failed():
+@pytest.mark.parametrize("side", [2, 3.5])
+def test_run_step_without_an_output_and_no_main_output_is_failed(side):
     keys = ("length_m", "width_m", "depth_m")
-    givens = [{"id": f"g{i + 1}", "value": 2, "unit": "m"} for i in range(3)]
+    givens = [{"id": f"g{i + 1}", "value": side, "unit": "m"} for i in range(3)]
     s = _sheet_with(givens, [{"id": "s1", "entry": "formula:excavation_volume",
                               "inputs": {k: f"g{i + 1}" for i, k in enumerate(keys)}}])
     s = ws.run_step(s, "s1", "c1")
@@ -615,3 +616,22 @@ def test_user_givens_are_the_givens_code_marked_as_the_users_own(by, kept):
     assert marked["givens"][0].get("checked") == by and marked["givens"][1].get("checked") is None
     assert ws.user_givens(marked) == kept
     assert ws.user_givens(None) == [] and ws.user_givens({"givens": ["g1"]}) == []
+
+
+@pytest.mark.parametrize("literal,expected", [
+    (43, [43.0]), (12.5, [12.5]), ("43 m", [43.0]), ("12.5m", [12.5]), ("-7", [-7.0]), (" -7.5 m", [-7.5]),
+    ("1,250 m3", [1250.0]), ({"value": 4321, "unit": "m3"}, [4321.0]), ({"value": "987.5 m2"}, [987.5]),
+    ([3, "4 m", {"value": 5}], [3.0, 4.0, 5.0]),
+    ("add", []), ("c30", []), ("m 43", []), (True, []), (None, []), ("", []), ({"unit": "m"}, []),
+])
+def test_written_numbers_reads_a_number_in_every_shape_a_formula_would(literal, expected):
+    assert ws.written_numbers(literal) == expected
+
+
+@pytest.mark.parametrize("a,b", [("43 m", {"value": 10, "unit": "m"}), ("12.5 m", {"value": "8 m"})])
+def test_a_result_rests_on_numbers_written_in_the_plan_as_text_or_as_objects(a, b):
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": a, "b": b}}]})
+    assert problems == []
+    assert sorted(ws.rests_on(work, "s1")) == sorted(ws.written_numbers(a) + ws.written_numbers(b))
+    assert len(ws.rests_on(work, "s1")) == 2

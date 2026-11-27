@@ -395,11 +395,36 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
                 number = _number(given.get("value"))
                 if number is not None and not given.get("checked"):
                     found.append(number)
-            else:  # a literal: a number written in the plan (text and flags are no number)
-                number = _number(ref)
-                if number is not None:
-                    found.append(number)
+            else:
+                found.extend(written_numbers(ref))
     return found
+
+
+_LEADING_NUMBER = re.compile(r"^\s*([-+]?\d[\d,]*(?:\.\d+)?)")
+
+
+def written_numbers(literal: Any) -> List[float]:
+    """Every number a plan literal carries, in whatever shape the formula
+    would read it: a bare number, a quantity written as text ("43 m",
+    "-7"), a ``{"value": ..., "unit": ...}`` object, a list of any of
+    these. Text that does not begin with a number (an operator, a named
+    option) and a flag carry none."""
+    if isinstance(literal, bool) or literal is None:
+        return []
+    if isinstance(literal, (int, float)):
+        number = _number(literal)
+        return [] if number is None else [number]
+    if isinstance(literal, str):
+        number = _number(literal)
+        if number is None:
+            lead = _LEADING_NUMBER.match(literal)
+            number = _number(lead.group(1).replace(",", "")) if lead else None
+        return [] if number is None else [number]
+    if isinstance(literal, dict):
+        return [n for value in literal.values() for n in written_numbers(value)]
+    if isinstance(literal, (list, tuple)):
+        return [n for value in literal for n in written_numbers(value)]
+    return []
 
 
 def mark_asked(sheet: Dict[str, Any]) -> Dict[str, Any]:
