@@ -36,6 +36,8 @@ import {
   belongsToProjectList,
   readSessionDocuments,
   sessionDocumentsView,
+  uploadNotice,
+  uploadSessionFor,
   withSessionId,
   type SessionDocumentsState,
 } from '../chat/sessionDocuments'
@@ -366,8 +368,9 @@ function friendlyErrorMessage(raw: string): string {
 
 interface DocumentsPanelProps {
   projectId: string
-  /** The open chat session (W2): an upload is recorded on it and listed
-   *  under "This session" only, never in the project's documents. */
+  /** The open chat session (W2): "+ Upload file" records an upload on it,
+   *  listed under "This session" only, never in the project's documents;
+   *  "+ Add to project" files the upload as a project document. */
   sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
@@ -404,7 +407,10 @@ export function DocumentsPanel({
   const replaceInputRef = useRef<HTMLInputElement>(null)
   const replaceTarget = useRef<string | null>(null)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'project' | 'session',
+  ) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploadError(null)
@@ -412,24 +418,24 @@ export function DocumentsPanel({
     try {
       const form = new FormData()
       form.append('file', file)
-      withSessionId(form, sessionId)
+      withSessionId(form, uploadSessionFor(target, sessionId))
       const resp = await apiPostForm<{ document: DocumentRecord }>(
         `/v1/projects/${projectId}/documents`,
         form,
       )
       onDocumentAdded(resp.document)
-      // Tell a non-admin AT upload time that the file was stored but not
-      // indexed, instead of leaving it to the sidebar label only.
-      const notIndexed = resp.document.panel_status?.detail
-      if (notIndexed) {
-        setUploadError(notIndexed)
+      // Say AT upload time what the server says about a file it stored but
+      // search does not hold, instead of leaving it to the sidebar label only.
+      const notice = uploadNotice(resp.document)
+      if (notice) {
+        setUploadError(notice)
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
     } finally {
       setUploading(false)
       // Reset the input so the same file can be re-uploaded if needed
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      e.target.value = ''
     }
   }
 
@@ -598,9 +604,17 @@ export function DocumentsPanel({
           type="file"
           id="doc-file-input"
           className="docs-upload__input"
-          onChange={(e) => void handleFileChange(e)}
+          onChange={(e) => void handleFileChange(e, 'session')}
           disabled={uploading}
           aria-label="Choose file to upload"
+        />
+        <input
+          type="file"
+          id="doc-project-file-input"
+          className="docs-upload__input"
+          onChange={(e) => void handleFileChange(e, 'project')}
+          disabled={uploading}
+          aria-label="Choose file to add to the project"
         />
         <label
           htmlFor="doc-file-input"
@@ -608,6 +622,14 @@ export function DocumentsPanel({
           aria-busy={uploading}
         >
           {uploading ? 'Uploading…' : '+ Upload file'}
+        </label>
+        <label
+          htmlFor="doc-project-file-input"
+          className={`docs-upload__btn btn btn--ghost${uploading ? ' btn--disabled' : ''}`}
+          aria-busy={uploading}
+          title="Add a document to the project's files (not only this chat)"
+        >
+          + Add to project
         </label>
         {uploadError && (
           <p className="docs-upload__error" role="alert">{uploadError}</p>
