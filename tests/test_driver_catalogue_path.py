@@ -1295,7 +1295,6 @@ def _level_script(monkeypatch, level, rise, reply, inputs=None, rise_unit="m"):
                       "inputs": inputs or {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
         {"content": reply},
-        {"content": reply},      # asked again when the step stayed open: the same reply
     ])
 
 
