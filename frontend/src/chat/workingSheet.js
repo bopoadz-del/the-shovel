@@ -15,7 +15,9 @@
 //     with citation_provenance.given_check): who gave that quantity in the
 //     turn. A given with no mark is shown as not checked;
 //   * plan inputs -- references the model wrote; the value shown is resolved
-//     here from the sheet, the same way resolve_inputs does. Internal ids
+//     here from the sheet, the same way resolve_inputs does. A literal the
+//     model wrote in the plan is shown as text in each shape the backend
+//     accepts (literalQuantity), never as a raw object. Internal ids
 //     (g1, s1) are not shown: a given is named by what it is, a step by its
 //     place in the plan.
 
@@ -109,7 +111,46 @@ function inputView(sheet, name, ref) {
     }
     return { name: label, from, missing: true }
   }
-  return { name: label, from: '', value: ref, unit: '' }
+  return { name: label, from: '', ...literalQuantity(ref) }
+}
+
+/** A unit as shown: "-" (no unit) and blank are not shown. */
+export function unitWords(unit) {
+  const u = String(unit ?? '').trim()
+  return u === '-' ? '' : u
+}
+
+/** A value and its unit as one piece of text ("42 m3", "1.05"). */
+export function quantityText(value, unit) {
+  return [literalText(value), unitWords(unit)].filter(Boolean).join(' ')
+}
+
+/** A value the model wrote into the plan, as text, in every shape the
+ *  backend accepts for one (sheet.written_quantities / _formula_values): a
+ *  number, text ("2.5 m3", an operator), a {value, unit} object, a list of
+ *  any of these, or another object of named values. Never a raw object. */
+function literalText(v) {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'number') return showNumber(v)
+  if (typeof v === 'boolean') return v ? 'yes' : 'no'
+  if (Array.isArray(v)) return v.map(literalText).filter(Boolean).join(', ')
+  if (isObject(v)) {
+    if ('value' in v) return quantityText(v.value, v.unit)
+    return Object.entries(v)
+      .map(([k, x]) => [words(k), literalText(x)].filter(Boolean).join(' '))
+      .filter(Boolean)
+      .join(', ')
+  }
+  return String(v)
+}
+
+/** A plan literal as {value, unit}: a {value, unit} object keeps its number
+ *  and unit apart; every other shape is its text with no unit. */
+export function literalQuantity(ref) {
+  if (isObject(ref) && 'value' in ref && !isObject(ref.value) && !Array.isArray(ref.value)) {
+    return { value: ref.value, unit: String(ref.unit ?? '') }
+  }
+  return { value: typeof ref === 'number' ? ref : literalText(ref), unit: '' }
 }
 
 /** The whole view: givens with code's check, plan steps in plan order with

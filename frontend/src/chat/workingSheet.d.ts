@@ -24,3 +24,6 @@ export declare function entryWords(entry: unknown): string
 export declare function workingView(sheet: unknown): SheetView | null
 export declare function endingWords(ended: unknown): string
 export declare function showNumber(v: unknown): string
+export declare function unitWords(unit: unknown): string
+export declare function quantityText(value: unknown, unit: unknown): string
+export declare function literalQuantity(ref: unknown): { value: unknown; unit: string }

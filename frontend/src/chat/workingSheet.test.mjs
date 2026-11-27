@@ -3,14 +3,26 @@
 // events of the catalogue path (tests/fixtures/show_working, re-run and
 // compared by tests/test_driver_catalogue_path.py::
 // test_the_panel_fixtures_are_real_end_events): a three-step chain that
-// finished, and a chain that stopped on a missing input. The rest build
+// finished, and a chain that stopped on a missing input; a third has plan
+// literals written as {value, unit} objects. The rest build
 // their own sheets, two inputs each. Nothing here names a formula or a
 // project.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { checkedWord, endingWords, entryWords, givenSource, readSheet, showNumber, workingView } from './workingSheet.js'
+import {
+  checkedWord,
+  endingWords,
+  entryWords,
+  givenSource,
+  literalQuantity,
+  quantityText,
+  readSheet,
+  showNumber,
+  unitWords,
+  workingView,
+} from './workingSheet.js'
 
 const FIXTURES = new URL('../../../tests/fixtures/show_working/', import.meta.url)
 const recorded = (name) => JSON.parse(readFileSync(new URL(name, FIXTURES), 'utf8'))
@@ -180,4 +192,71 @@ test('small helpers on two inputs each', () => {
   assert.equal(endingWords('asked_input'), 'asked you for an input')
   assert.equal(endingWords('ceiling'), 'stopped at the round limit')
   assert.equal(endingWords('other'), '')
+})
+
+// An input line as the panel prints it (ShowWorking.tsx inputLine).
+const inputText = (i) => (i.missing ? 'not available yet' : quantityText(i.value, i.unit))
+
+test('real end event with {value, unit} literals in the plan: each shown as its number and unit', () => {
+  const turn = recorded('plan_literals.json')
+  const v = workingView(turn.sheet)
+  const b = v.steps.map((s) => s.inputs.find((i) => i.name === 'b'))
+  assert.deepEqual(b.map(inputText), ['1.05', '2.5 m3'])
+  assert.deepEqual(v.steps.map((s) => quantityText(s.result.value, s.result.unit)), ['42 m3', '44.5 m3'])
+  const shown = v.steps.flatMap((s) => s.inputs.map(inputText)).join(' | ')
+  assert.ok(!shown.includes('[object'), shown)
+})
+
+// Every shape the backend accepts for a plan literal (sheet.written_quantities,
+// _formula_values), two values each: what the input line shows.
+const SHAPES = [
+  ['a number', 3, '3'],
+  ['a number', 0.1 + 0.2, '0.3'],
+  ['text with a unit', '2.5 m3', '2.5 m3'],
+  ['text with no number', 'multiply', 'multiply'],
+  ['a {value, unit} object', { value: 1.05, unit: '-' }, '1.05'],
+  ['a {value, unit} object', { value: 12, unit: 'm' }, '12 m'],
+  ['a {value} object with no unit', { value: 7 }, '7'],
+  ['a list', [1, 2], '1, 2'],
+  ['a list of mixed shapes', [{ value: 2, unit: 'm' }, 'each'], '2 m, each'],
+  ['an object of named values', { unit_rate: 5, currency: 'AED' }, 'unit rate 5, currency AED'],
+  ['an object of named quantities', { length: { value: 3, unit: 'm' } }, 'length 3 m'],
+  ['a {value} object holding an object', { value: { value: 4, unit: 'kg' } }, '4 kg'],
+  ['a flag', true, 'yes'],
+  ['a flag', false, 'no'],
+]
+
+for (const [shape, literal, want] of SHAPES) {
+  test(`a plan literal written as ${shape} (${JSON.stringify(literal)}) is shown as "${want}"`, () => {
+    const sheet = {
+      givens: [{ id: 'g1', what: 'x', value: 1, unit: 'm' }],
+      plan: [{ id: 's1', entry: 'formula:arithmetic_step', inputs: { a: 'g1', b: literal } }],
+    }
+    const b = workingView(sheet).steps[0].inputs[1]
+    assert.equal(b.from, '')
+    assert.equal(inputText(b), want)
+  })
+}
+
+test('literalQuantity keeps a {value, unit} number and its unit apart, on two objects', () => {
+  assert.deepEqual(literalQuantity({ value: 1.05, unit: '-' }), { value: 1.05, unit: '-' })
+  assert.deepEqual(literalQuantity({ value: 40, unit: 'm3' }), { value: 40, unit: 'm3' })
+  assert.deepEqual(literalQuantity(9), { value: 9, unit: '' })
+  assert.deepEqual(literalQuantity([{ value: 2, unit: 'm' }]), { value: '2 m', unit: '' })
+})
+
+test('an empty or absent literal shows nothing, never a raw value', () => {
+  for (const literal of [null, undefined, [], {}]) {
+    assert.equal(inputText(literalQuantity(literal)), '')
+  }
+})
+
+test('unitWords and quantityText: "-" and blank are no unit, two inputs each', () => {
+  assert.equal(unitWords('-'), '')
+  assert.equal(unitWords(' '), '')
+  assert.equal(unitWords('m2'), 'm2')
+  assert.equal(unitWords(' kg '), 'kg')
+  assert.equal(quantityText(42, 'm3'), '42 m3')
+  assert.equal(quantityText(1.05, '-'), '1.05')
+  assert.equal(quantityText('', 'm'), 'm')
 })

@@ -1416,7 +1416,7 @@ def test_a_bare_number_of_the_plan_in_the_unit_the_user_gave_it_in_is_credited(m
     assert [f.get("step") for f in row["figures"]] == ["s1"]
 
 # --- the recorded end events the answer's panel is tested on ----------------
-# tests/fixtures/show_working holds two real SSE 'end' events of this path;
+# tests/fixtures/show_working holds real SSE 'end' events of this path;
 # the panel's node and browser tests read them. Each is re-run here through
 # loop.stream with the same scripted model and must come out the same, so
 # the panel is never tested on a hand-made end event.
@@ -1456,6 +1456,18 @@ _RECORDED_TURNS = {
          {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
          {"content": "What is the pit plan area?"}],
         "ws-rec-2", ["user", None]),
+    "plan_literals.json": (
+        "the trench holds 40 m3 of spoil; multiply by 1.05 for bulking and add the 2.5 m3 from the pit",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "trench spoil", "value": 40, "unit": "m3", "source": "user"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": {"value": 1.05, "unit": "-"}}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "s1", "b": {"value": 2.5, "unit": "m3"}}}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s2"}, "c3")]},
+         {"content": "The loose spoil is 44.5 m3."}],
+        "ws-rec-3", ["user"]),
 }
 
 

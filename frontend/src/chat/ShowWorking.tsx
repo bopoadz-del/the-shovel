@@ -7,7 +7,7 @@
  * inputs (value and unit, resolved from the sheet), its result or that it
  * has none, and the inputs still missing. No figure is shown for a step that
  * did not run to a result; no internal id or backend message is shown. */
-import { endingWords, showNumber, workingView, type SheetInputView } from './workingSheet'
+import { endingWords, quantityText, workingView, type SheetInputView } from './workingSheet'
 import './ShowWorking.css'
 
 interface Props {
@@ -16,13 +16,8 @@ interface Props {
   ended?: string
 }
 
-function unitWords(unit: unknown): string {
-  const u = String(unit ?? '').trim()
-  return u === '-' ? '' : u
-}
-
 function quantity(value: unknown, unit: unknown): string {
-  return [showNumber(value), unitWords(unit)].filter(Boolean).join(' ')
+  return quantityText(value, unit)
 }
 
 function inputLine(input: SheetInputView): string {
