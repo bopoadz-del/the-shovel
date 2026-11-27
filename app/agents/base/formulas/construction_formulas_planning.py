@@ -274,8 +274,6 @@ def parse_compound_unit(token: Any) -> Optional[Unit]:
     a part is not a unit, belongs to a family that does not multiply out
     (or needs context), or the brackets do not close."""
     pieces = _COMPOUND_TOKEN.findall(str(token or ""))
-    if not pieces or "".join(pieces) != re.sub(r"\s+", "", str(token or "")):
-        return None
     pos = 0
 
     def term() -> Optional[Tuple[Tuple[int, ...], float]]:
