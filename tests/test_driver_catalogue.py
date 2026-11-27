@@ -143,6 +143,8 @@ def test_declared_fields_fill_the_entry_and_each_missing_one_is_a_gap(registered
     ("an example as text", "must be a sequence of dicts"),
     (_example(), "must be a sequence of dicts"),  # one dict, not a sequence of them
     (["an example as text"], "an example must be a dict"),
+    ((_example(invented=1),), "must say invented: True"),  # truthy is not True
+    ((_example(invented="yes"),), "must say invented: True"),
 ])
 def test_an_example_that_is_not_invented_and_whole_is_refused(examples, why):
     with pytest.raises(ValueError, match=why):
@@ -837,3 +839,54 @@ def test_a_one_sided_range_keeps_its_one_bound(param, want):
 def test_examples_that_are_not_a_sequence_are_refused_at_declaration(examples):
     with pytest.raises(ValueError, match="examples must be a sequence"):
         fr.declared_examples("formula", "zz", examples)
+
+
+@pytest.mark.parametrize("name_chars, count", [(3, 150), (7, 1200)])
+def test_cap_names_fits_the_limit_when_the_count_has_several_digits(name_chars, count):
+    # Every limit across a span is met, including those that leave the
+    # result within a few characters of it with a multi-digit count.
+    names = [f"{i:0{name_chars}d}"[-name_chars:] for i in range(count)]
+    base = len(json.dumps({"unknown": [], "unknown_more": count}))
+    for limit in range(base, base + 200):
+        result = {"unknown": list(names)}
+        catalogue._cap_names(result, "unknown", limit)
+        assert len(json.dumps(result)) <= limit, limit
+        assert len(result["unknown"]) + result.get("unknown_more", 0) == count
+
+
+@pytest.mark.parametrize("first, then", [("Area of a bay.", "Area of a bay, gross."),
+                                         ("Volume of a pit.", "Volume of a pit, net of blinding.")])
+def test_a_formula_re_declared_under_its_name_is_a_new_state(registered, first, then):
+    import inspect
+
+    def make(description):
+        def fn(**kw):
+            return {}
+        fn.__name__ = "zz_cat_redeclared"
+        fn.__signature__ = inspect.Signature([inspect.Parameter("a", inspect.Parameter.KEYWORD_ONLY,
+                                                                annotation=float)])
+        fr.formula(owner="base", description=description, display_name="Redeclared",
+                   inputs={"a": "m"}, outputs={"b": "m"})(fn)
+    registered["formula"].append("zz_cat_redeclared")
+    make(first)
+    assert {e["id"]: e for e in catalogue.entries()}["formula:zz_cat_redeclared"]["for"] == first
+    fr._REGISTRY.pop("zz_cat_redeclared")  # the registry refuses a second declaration
+    make(then)  # no cache clear: the state key alone must see the new spec
+    assert {e["id"]: e for e in catalogue.entries()}["formula:zz_cat_redeclared"]["for"] == then
+
+
+@pytest.mark.parametrize("first, then", [("use for sums", "use for totals"), ("before a bill", "after a bill")])
+def test_a_tool_spec_replaced_under_its_name_is_a_new_state(registered, first, then):
+    import dataclasses
+
+    async def handle(call):
+        return {"ok": True}
+
+    tool_registry.tool("zz_cat_replaced", owner="base", display_name="Replaced tool",
+                       params={"q": Param(label="q", kind="text", required=True)},
+                       when_to_use=first)(handle)
+    registered["tool"].append("zz_cat_replaced")
+    assert {e["id"]: e for e in catalogue.entries()}["tool:zz_cat_replaced"]["when_to_use"] == first
+    spec = tool_registry._TOOLS["zz_cat_replaced"]
+    tool_registry._TOOLS["zz_cat_replaced"] = dataclasses.replace(spec, when_to_use=then)
+    assert {e["id"]: e for e in catalogue.entries()}["tool:zz_cat_replaced"]["when_to_use"] == then
