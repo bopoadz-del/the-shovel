@@ -149,7 +149,8 @@ def test_dewatering_uplift_check_extract_from_ask_text():
         ),
     })
     assert inner["fos"] == pytest.approx(0.380, abs=0.001)
-    assert inner["min_floors_for_stop"] == 32
+    # course FOS 1.2: ceil((23*1.2 - 2*2.5) / (0.3*2.5)) = ceil(30.13) = 31
+    assert inner["min_floors_for_stop"] == 31
 
 
 def test_dewatering_uplift_check_construction_calc_alias_shapes():

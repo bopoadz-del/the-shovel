@@ -84,6 +84,8 @@ CREATE TABLE project_facts (
     source_document TEXT,
     confidence      DOUBLE PRECISION,
     updated_at      TEXT NOT NULL,
+    verified_by     TEXT,
+    verified_at     TEXT,
     UNIQUE (project_id, key)
 );
 
@@ -140,6 +142,8 @@ CREATE TABLE agent_facts (
     key             TEXT NOT NULL,
     value           TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
+    verified_by     TEXT,
+    verified_at     TEXT,
     UNIQUE (agent_name, project_id, key)
 );
 
