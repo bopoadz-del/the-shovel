@@ -166,3 +166,107 @@ def test_amounts_declare_they_are_totals_to_date(name):
 def test_rate_and_earlier_certificates_have_no_default(name):
     params = fr.parameters(fr.get("interim_payment_to_date"))
     assert params[name].required, name
+
+
+def _nil_cases(seed: int):
+    # earlier certificates equal to the net to date, on 2-dp figures with
+    # cents, so a float difference that is not exactly zero would show
+    rng = random.Random(seed)
+    out = []
+    for _ in range(400):
+        work = rng.randint(5_000_000, 900_000_000) / 100.0
+        mos = rng.choice([0.0, rng.randint(100_000, 40_000_000) / 100.0])
+        rate = rng.choice([2.5, 5, 7.5, 10])
+        ret = round(work * rate / 100.0, 2)
+        prev = round(work + mos - ret, 2)
+        out.append((work, mos, rate, prev))
+    return out
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_a_nil_due_on_figures_with_cents_is_nil_not_a_deduction(seed):
+    for work, mos, rate, prev in _nil_cases(seed):
+        r = interim_payment_to_date(work, rate, prev, materials_on_site=mos)
+        assert r["amount_due"] == 0, (work, mos, rate, prev)
+        assert str(r["amount_due"]) == "0.0"
+        assert "note" not in r
+        assert "-0.00" not in r["working"][3]
+
+
+@pytest.mark.parametrize("work,mos,rate", [
+    (590_475.60, 152_192.49, 7.5), (3_687_518.80, 0.0, 2.5),
+])
+def test_a_nil_due_through_the_public_path(work, mos, rate):
+    from app.lib import construction_formulas as cf
+    prev = round(work + mos - round(work * rate / 100.0, 2), 2)
+    env = cf.run_calculation("interim_payment_to_date", {
+        "work_value_to_date": work, "materials_on_site": mos,
+        "retention_percent": rate, "previously_certified": prev})
+    res = env["result"]
+    assert res["amount_due"] == 0
+    assert "note" not in res
+    assert res["working"][3].endswith("= 0.00")
+
+
+@pytest.mark.parametrize("work,rate,limit,at_rate", [
+    (1_000_000, 5, 40_000, "50,000.00"), (240_000, 5, 6_000, "12,000.00"),
+])
+def test_a_capped_retention_shows_the_at_rate_figure_before_the_limit(
+        work, rate, limit, at_rate):
+    line = interim_payment_to_date(work, rate, 0, retention_limit=limit)["working"][1]
+    assert f"= {at_rate}, held at the retention limit {limit:,.2f}" in line
+
+
+@pytest.mark.parametrize("prev", [0, 25_000])
+def test_the_earlier_certificates_are_reported_as_given(prev):
+    r = interim_payment_to_date(400_000, 5, prev)
+    assert r["previously_certified"] == prev
+    assert r["amount_due"] == pytest.approx(380_000 - prev)
+
+
+@pytest.mark.parametrize("work", [100_000, 7_250_000])
+def test_a_rate_of_exactly_100_is_accepted_and_nets_nil(work):
+    r = interim_payment_to_date(work, 100, 0)
+    assert "error" not in r
+    assert r["retention_to_date"] == work
+    assert r["net_to_date"] == 0
+
+
+@pytest.mark.parametrize("work", [100_000, 7_250_000])
+def test_a_rate_of_exactly_0_is_accepted_and_holds_nothing(work):
+    r = interim_payment_to_date(work, 0, 0)
+    assert "error" not in r
+    assert r["retention_to_date"] == 0
+    assert r["amount_due"] == work
+
+
+@pytest.mark.parametrize("work,rate", [(100_000, 5), (2_400_000, 10)])
+def test_a_retention_limit_of_exactly_0_holds_nothing(work, rate):
+    r = interim_payment_to_date(work, rate, 0, retention_limit=0)
+    assert "error" not in r
+    assert r["retention_to_date"] == 0
+    assert r["retention_limit_reached"] is True
+    assert r["amount_due"] == work
+
+
+@pytest.mark.parametrize("work,prev,deduction", [
+    (100_000, 150_000, "60,000.00"), (2_000_000, 1_950_000, "150,000.00"),
+])
+def test_the_deduction_note_states_the_positive_amount(work, prev, deduction):
+    note = interim_payment_to_date(work, 10, prev)["note"]
+    assert f"deduction of {deduction}." in note
+    assert f"-{deduction}" not in note
+
+
+@pytest.mark.parametrize("work,mos,gross", [
+    (100_000.37, 0.26, 100_000.63), (52_410.18, 1_999.91, 54_410.09),
+])
+def test_gross_keeps_the_cents(work, mos, gross):
+    r = interim_payment_to_date(work, 0, 0, materials_on_site=mos)
+    assert r["gross_to_date"] == gross
+    assert f"= {gross:,.2f}" in r["working"][0]
+
+
+@pytest.mark.parametrize("work,rate", [(100_000, 5), (900_000, 10)])
+def test_the_result_names_its_standard(work, rate):
+    assert interim_payment_to_date(work, rate, 0)["standard"] == "FIDIC Clause 14.3"

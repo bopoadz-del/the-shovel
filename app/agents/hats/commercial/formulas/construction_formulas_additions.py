@@ -10,6 +10,10 @@ def _money(x: float) -> str:
     return f"{x:,.2f}"
 
 
+def _cents(x: float) -> float:
+    return round(x, 2)
+
+
 @formula(
     owner='commercial',
     display_name='Interim payment to date',
@@ -70,11 +74,15 @@ def interim_payment_to_date(
     if retention_limit is not None and float(retention_limit) < 0:
         return {"error": "retention_limit must be >= 0."}
 
+    # Amounts are money: retention and the net are taken to the cent before
+    # the next step uses them, so the working adds up as printed, and earlier
+    # certificates equal to the net to the cent give a due of exactly nil,
+    # not a float residue read as a deduction.
     gross = work + mos
-    retention_at_rate = work * rate / 100.0
+    retention_at_rate = _cents(work * rate / 100.0)
     capped = retention_limit is not None and retention_at_rate > float(retention_limit)
-    retention = float(retention_limit) if capped else retention_at_rate
-    net = gross - retention
+    retention = _cents(float(retention_limit)) if capped else retention_at_rate
+    net = _cents(gross - retention)
     due = net - prev
 
     working = [
