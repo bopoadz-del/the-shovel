@@ -37,9 +37,13 @@ def is_specimen_size(param: Any) -> bool:
 
 
 def _in_range(param: Any, number: float) -> bool:
+    """Inside the declared range. A range declared to begin above its lower
+    bound (``above_lo``) does not include that bound."""
     lo = getattr(param, "lo", None)
     hi = getattr(param, "hi", None)
-    return (lo is None or number >= lo) and (hi is None or number <= hi)
+    if lo is not None and (number <= lo if getattr(param, "above_lo", False) else number < lo):
+        return False
+    return hi is None or number <= hi
 
 
 def _numbers(value: Any) -> list:
@@ -64,8 +68,10 @@ def out_of_range_result(param: Any, value: Any) -> Dict[str, Any]:
     lo = getattr(param, "lo", None)
     hi = getattr(param, "hi", None)
     unit_bit = f" {unit}" if unit and unit not in ("-", "") else ""
+    above = bool(getattr(param, "above_lo", False))
+    span = (f"more than {lo:g} and at most {hi:g}" if above else f"between {lo:g} and {hi:g}")
     question = (
-        f"{label} must be between {lo:g} and {hi:g}{unit_bit}. "
+        f"{label} must be {span}{unit_bit}. "
         f"Please confirm the {label}."
     )
     return {
@@ -76,6 +82,7 @@ def out_of_range_result(param: Any, value: Any) -> Dict[str, Any]:
         "value": value,
         "lo": lo,
         "hi": hi,
+        "above_lo": above,
         "unit": unit,
         "needs_confirmation": True,
     }

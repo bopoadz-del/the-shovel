@@ -10,6 +10,7 @@ import math
 import pytest
 
 from app.agents.driver import tools as driver_tools
+from app.agents.hats.qaqc import validation as qaqc_validation
 from app.blocks import _knowledge
 from app.lib import formula_registry as fr
 from app.lib import source_labels
@@ -120,3 +121,37 @@ def test_a_knowledge_figure_above_the_bound_is_read(tmp_path, monkeypatch, state
     constant = fr.Constant.from_knowledge("x.lim", "thresholds.v", "m",
                                           within=fr.Param("ratio", 0.0, 5.0, label="invented input", above_lo=True))
     assert constant.resolve().value == stated
+
+
+# The QA/QC calculators are held to their declared ranges by their own check
+# (app.agents.hats.qaqc.validation): it reads the same declaration.
+
+@pytest.mark.parametrize("lo, hi, value, refused", [
+    (0, 5, 0, True),                       # the bound itself
+    (0, 5, -1, True),
+    (0, 5, 0.5, False),
+    (0, 5, 5, False),
+    (0, 5, 5.5, True),
+    (2.5, 40, 2.5, True), (2.5, 40, 2.6, False),
+])
+def test_the_qaqc_range_check_reads_the_same_declaration(lo, hi, value, refused):
+    spec = _spec(lo, hi, True, unit="ratio")
+    assert qaqc_validation._in_range(spec, value) is (not refused)
+    assert qaqc_validation._in_range(spec, value) is fr._in_range(spec, value)
+    out = qaqc_validation.first_out_of_range({"span": spec}, {"span": value})
+    assert (out is not None) is refused
+    if refused:
+        assert out["question"] == f"span must be more than {lo:g} and at most {hi:g} ratio. Please confirm the span."
+        assert out["above_lo"] is True and out["status"] == "out_of_range"
+
+
+@pytest.mark.parametrize("lo, hi, value, refused", [(0, 5, 0, False), (0, 5, -1, True), (2.5, 40, 2.5, False),
+                                                    (2.5, 40, 41, True)])
+def test_the_qaqc_range_check_keeps_an_ordinary_range_inclusive(lo, hi, value, refused):
+    spec = _spec(lo, hi, False, unit="ratio")
+    assert qaqc_validation._in_range(spec, value) is (not refused)
+    out = qaqc_validation.out_of_range_result(spec, value)
+    assert out["question"] == f"span must be between {lo:g} and {hi:g} ratio. Please confirm the span."
+    assert out["above_lo"] is False
+    assert (qaqc_validation.first_out_of_range({"span": spec}, {"span": value}) is not None) is refused
+
