@@ -35,7 +35,7 @@ No word of any line is read: types come from the model, checks from cells.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -156,3 +156,21 @@ def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -
         check=check,
         path=path,
     )
+
+
+def rows_of_model_reads(
+    read_page: Callable[[Any], Any], bill_label: str = "",
+) -> Callable[[Sequence[Any]], tuple[list[g.BillRow], list[int]]]:
+    """A ``bill_derived.RowsOfReads`` from a per-page model reader.
+
+    ``read_page`` gets one ``bill_classify.PageRead`` (0-based ``index``) and
+    returns the model's lines for that page (or anything else, which is NOT
+    READ). The rows and the 1-based pages not read are what
+    :func:`rows_from_page_reads` gives for those pages."""
+
+    def rows_of(page_reads: Sequence[Any]) -> tuple[list[g.BillRow], list[int]]:
+        pages = {str(r.index + 1): read_page(r) for r in page_reads}
+        got = rows_from_page_reads(pages, bill_label)
+        return got.rows, got.pages_not_read
+
+    return rows_of

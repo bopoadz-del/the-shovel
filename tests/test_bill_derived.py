@@ -586,3 +586,135 @@ def test_page_count_reads_the_pdf(tmp_path, pages):
     doc.save(str(path))
     doc.close()
     assert bd._page_count(str(path)) == pages
+
+
+# -- rows from a model's read of the pages (bill_page_read) -------------------
+
+
+def _blank_pages():
+    """A page_source with no words: the rows come from the model reader only."""
+    def page_source(path, indices):
+        (index,) = indices
+        return [bc.PageRead(index, bc.SOURCE_OCR, ())]
+    return page_source
+
+
+def _line(ref: str, q: float, r: float, amount: float | None = None) -> dict[str, Any]:
+    return {"type": "item", "ref": ref, "description": f"work {ref}", "unit": "m3",
+            "quantity": q, "rate": r, "amount": q * r if amount is None else amount}
+
+
+_READS_A = {
+    0: [{"type": "heading", "description": "Part one"}, _line("A", 10, 5), _line("B", 3, 7)],
+    1: [_line("C", 2, 50), {"type": "collection", "description": "to collection",
+                            "amount": 50 + 21 + 100}],
+    2: [{"type": "heading", "description": "Part two"}, _line("D", 4, 4, amount=17)],
+}
+_READS_B = {
+    0: [_line("1", 1, 1000)],
+    1: [{"type": "heading", "description": "Sub"}, _line("2", 6, 6), _line("3", 8, 0.5)],
+    2: [_line("4", 9, 9)],
+}
+
+
+def _model_reader(reads: dict[int, Any], seen: list[int] | None = None):
+    from app.core import bill_page_read as bpr
+
+    def read_page(page_read):
+        if seen is not None:
+            seen.append(page_read.index)
+        return reads.get(page_read.index)
+    return bpr.rows_of_model_reads(read_page)
+
+
+@pytest.mark.parametrize("reads, want_rows, want_flagged", [
+    (_READS_A, 5, 1),
+    (_READS_B, 4, 0),
+])
+def test_model_reads_become_the_derived_copy(tmp_path, monkeypatch, reads, want_rows,
+                                             want_flagged):
+    import openpyxl
+
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    seen: list[int] = []
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads, seen), **kw)
+    assert plan["rows"] == want_rows
+    assert plan["unreconciled"] == want_flagged
+    assert plan["pages_not_read"] == []
+    assert docs.added == []
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               rows_of_reads=_model_reader(reads, seen), **kw)
+    assert out["derived"] is True
+    assert (out["rows"], out["rows_flagged"]) == (want_rows, want_flagged)
+    assert sorted(seen) == [0, 0, 1, 1, 2, 2]  # each page read once per step
+    (row,) = docs.added
+    assert row["metadata"]["derived_from"] == "src1"
+
+    want_amounts = [ln["amount"] for p in sorted(reads) for ln in reads[p]
+                    if ln["type"] != "heading"]
+    wb = openpyxl.load_workbook(row["file_path"], data_only=True)
+    cells = [c for ws in wb.worksheets for r in ws.iter_rows(values_only=True) for c in r]
+    assert cells.count("item") == sum(ln["type"] == "item" for p in reads for ln in reads[p])
+    chunks = doc_index._spreadsheet_row_chunks(row["file_path"], row["original_name"], ".xlsx")
+    assert len(chunks) == want_rows
+    assert _amount_sum(chunks) == pytest.approx(sum(want_amounts))
+
+
+@pytest.mark.parametrize("unread_page, bad_read", [(1, None), (2, "not json lines")])
+def test_page_not_read_is_planned_and_never_written(tmp_path, monkeypatch, unread_page,
+                                                    bad_read):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    reads = {**_READS_B, unread_page: bad_read}
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads), **kw)
+    assert plan["pages_not_read"] == [unread_page + 1]
+    assert plan["rows"] == 4 - sum(ln["type"] != "heading" for ln in _READS_B[unread_page])
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               rows_of_reads=_model_reader(reads), **kw)
+    assert out == {"derived": False, "reason": bd.SKIP_PAGES_NOT_READ,
+                   "pages_not_read": [unread_page + 1]}
+    assert docs.added == [] and docs.indexed == []
+
+
+@pytest.mark.parametrize("unread_page", [0, 2])
+def test_plan_hash_changes_when_a_page_not_read_is_read_later(tmp_path, monkeypatch,
+                                                               unread_page):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    partial = {**_READS_A, unread_page: None}
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(partial), **kw)
+    full = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(_READS_A), **kw)
+    assert plan["plan_hash"] != full["plan_hash"]
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               rows_of_reads=_model_reader(_READS_A), **kw)
+    assert out["reason"] == bd.SKIP_PLAN_MISMATCH
+    assert docs.added == []
+
+
+@pytest.mark.parametrize("build", [_bill_a, _bill_b])
+def test_geometry_reader_reports_no_page_not_read(tmp_path, monkeypatch, build):
+    words, _want, _flagged = build()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    plan, out = _plan_then_derive(words)
+    assert plan["pages_not_read"] == []
+    assert out["derived"] is True
+
+
+@pytest.mark.parametrize("bad_read", [None, []])
+def test_page_not_read_is_in_the_plan_hash_even_when_the_rows_are_the_same(
+        tmp_path, monkeypatch, bad_read):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    unread = {**_READS_B, 2: bad_read}
+    read_no_rows = {**_READS_B, 2: [{"type": "heading", "description": "end"}]}
+    a = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(unread), **kw)
+    b = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(read_no_rows), **kw)
+    assert a["rows"] == b["rows"] == 3
+    assert (a["pages_not_read"], b["pages_not_read"]) == ([3], [])
+    assert a["plan_hash"] != b["plan_hash"]
