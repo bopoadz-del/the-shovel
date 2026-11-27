@@ -67,6 +67,47 @@ def test_plan_reference_to_unknown_id_is_refused():
     assert problems2 == [] and out2["plan"][0]["inputs"] == {"a": "g1"}
 
 
+@pytest.mark.parametrize("literal", [
+    float("nan"),
+    float("inf"),
+    -float("inf"),
+    {"value": float("inf"), "unit": "-"},
+    [2.0, float("nan")],
+    {"length": {"value": float("-inf"), "unit": "m"}},
+])
+def test_a_plan_literal_that_is_not_finite_is_refused_and_the_sheet_unchanged(literal):
+    s = _sheet_with([{"id": "g1", "value": 2, "unit": "m"}])
+    out, problems = ws.apply_update(s, {"plan": [
+        {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"a": "g1", "b": literal}}]})
+    assert problems == ["plan step s1 input b holds a number that is not finite "
+                        "(NaN or infinity); write the figure itself"]
+    assert out is s and out["plan"] == []
+
+
+@pytest.mark.parametrize("literal", [
+    1.05, -3, 0.0, 10 ** 400, "inf", "2.5 m3",
+    {"value": 1e308, "unit": "m"}, [1, {"value": 2, "unit": "m"}], True,
+])
+def test_a_finite_or_text_plan_literal_is_kept_as_written(literal):
+    # the edge: the largest finite float, a huge int and the WORD "inf" are
+    # not non-finite numbers; only a float that is NaN or infinite is refused
+    s = _sheet_with([{"id": "g1", "value": 2, "unit": "m"}])
+    out, problems = ws.apply_update(s, {"plan": [
+        {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"a": "g1", "b": literal}}]})
+    assert problems == []
+    assert out["plan"][0]["inputs"]["b"] == literal
+
+
+def test_a_non_finite_literal_refuses_the_whole_update_beside_a_good_step():
+    s = _sheet_with([{"id": "g1", "value": 2, "unit": "m"}])
+    out, problems = ws.apply_update(s, {"plan": [
+        {"id": "s1", "entry": "e", "inputs": {"a": "g1", "b": 3}},
+        {"id": "s2", "entry": "e", "inputs": {"a": "s1", "factor": float("nan")}}]})
+    assert problems == ["plan step s2 input factor holds a number that is not finite "
+                        "(NaN or infinity); write the figure itself"]
+    assert out is s
+
+
 def test_plan_step_may_not_refer_to_itself():
     s = ws.new_sheet("t", "q")
     _, problems = ws.apply_update(s, {"plan": [{"id": "s1", "entry": "e", "inputs": {"a": "s1"}}]})

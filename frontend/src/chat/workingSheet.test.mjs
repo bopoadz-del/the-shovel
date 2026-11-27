@@ -262,3 +262,40 @@ test('unitWords and quantityText: "-" and blank are no unit, two inputs each', (
   assert.equal(quantityText(1.05, '-'), '1.05')
   assert.equal(quantityText('', 'm'), 'm')
 })
+
+// Grade of b93fac12, test debt: each claim below had a mutant that survived.
+test('showNumber keeps every significant digit of a figure, on two figures', () => {
+  assert.equal(showNumber(1234567.891), '1234567.891')
+  assert.equal(showNumber(98765.4321), '98765.4321')
+})
+
+test('a given that is not an object is dropped from the view, on two sheets', () => {
+  const valid = (id, what) => ({ id, what, value: 2, unit: 'm', checked: 'user' })
+  for (const [junk, g] of [
+    [[null, 'x', 3], valid('g1', 'depth')],
+    [[[1], false, undefined], valid('g4', 'width')],
+  ]) {
+    const v = workingView({ givens: [...junk, g] })
+    assert.deepEqual(v.givens.map((x) => x.what), [g.what])
+    assert.equal(v.unchecked, 0)
+  }
+})
+
+test('a given with no words of its own is "a given", never its internal id, on two givens', () => {
+  for (const [id, what] of [['g7', ''], ['g12', ' _ ']]) {
+    const v = workingView({ givens: [{ id, what, value: 1, unit: 'm' }] })
+    assert.equal(v.givens[0].what, 'a given')
+    assert.ok(!shownWords(v).includes(id), shownWords(v))
+  }
+})
+
+test('a {value, unit} object whose value is a list is shown as text, never a raw list, on two lists', () => {
+  assert.deepEqual(literalQuantity({ value: [1, 2], unit: 'm' }), { value: '1, 2 m', unit: '' })
+  assert.deepEqual(literalQuantity({ value: ['3', 4], unit: 'kg' }), { value: '3, 4 kg', unit: '' })
+})
+
+test('the sheet is done only when the backend wrote done: true', () => {
+  const sheet = (done) => ({ givens: [{ id: 'g1', what: 'x', value: 1, unit: 'm' }], done })
+  assert.equal(workingView(sheet(true)).done, true)
+  for (const done of ['yes', 1, 'true', {}]) assert.equal(workingView(sheet(done)).done, false)
+})

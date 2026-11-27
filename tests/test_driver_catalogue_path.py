@@ -149,6 +149,60 @@ def test_a_sheet_turn_plans_runs_in_code_and_records_the_trace(monkeypatch, tota
     assert end["sheet"] == row["sheet"] and end["ended"] == row["ended"] == "answer"
 
 
+def _strict_json(frame):
+    """Parse as the browser's JSON.parse does: NaN / Infinity are not JSON."""
+    def refuse(constant):
+        raise ValueError(f"not JSON: {constant}")
+    return json.loads(frame, parse_constant=refuse)
+
+
+@pytest.mark.parametrize("bad,good,total", [
+    (float("nan"), 1.05, 42.0),
+    ({"value": float("inf"), "unit": "-"}, {"value": 1.1, "unit": "-"}, 44.0),
+])
+def test_a_non_finite_plan_literal_is_refused_to_the_model_and_the_end_frame_stays_json(monkeypatch, bad, good,
+                                                                                         total):
+    def update(b):  # a refused update leaves the sheet unchanged, so the retry is whole
+        return {"givens": [{"id": "g1", "what": "spoil", "value": 40, "unit": "m3", "source": "user"}],
+                "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                          "inputs": {"operator": "multiply", "a": "g1", "b": b}}]}
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", update(bad), "c1")]},
+        {"content": "", "tool_calls": [_call("sheet_update", update(good), "c2")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c3")]},
+        {"content": "Done."},
+    ])
+    events = _run(user_message="spoil 40 m3 times a factor", conversation_id=f"ws-nf-{total:g}",
+                  project_id=None, sheet_mode=True)
+    # The model reads the refusal as its tool result, and can correct it.
+    refused = [m["content"] for m in seen[1]["messages"] if m["role"] == "tool"]
+    assert any("not finite" in c for c in refused), refused
+    assert _sheet_in(seen[1]["messages"])["plan"] == []  # the bad step never reached the sheet
+    end = [e for e in events if e.get("type") == "end"][0]
+    # Serialized as the route serializes a frame (app/routers/agents.py), the
+    # end frame parses as strict JSON and carries the corrected plan.
+    frame = _strict_json(json.dumps(end, default=str))
+    assert frame["sheet"]["plan"][0]["inputs"]["b"] == good
+    assert frame["sheet"]["steps"][0]["result"]["value"] == pytest.approx(total)
+
+
+@pytest.mark.parametrize("b,total", [(1.05, 42.0), ({"value": 2.5, "unit": "-"}, 100.0)])
+def test_a_finite_plan_literal_is_not_refused_and_the_end_frame_is_json(monkeypatch, b, total):
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "spoil", "value": 40, "unit": "m3", "source": "user"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": b}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": "Done."},
+    ])
+    events = _run(user_message="spoil 40 m3 times a factor", conversation_id=f"ws-fin-{total:g}",
+                  project_id=None, sheet_mode=True)
+    assert not any("not finite" in m["content"] for m in seen[1]["messages"] if m["role"] == "tool")
+    end = _strict_json(json.dumps([e for e in events if e.get("type") == "end"][0], default=str))
+    assert end["sheet"]["steps"][0]["result"]["value"] == pytest.approx(total)
+
+
 @pytest.mark.parametrize("reply", ["A plain answer.", "Another reply here."])
 def test_without_the_setting_no_sheet_and_no_record(monkeypatch, reply):
     seen = _scripted(monkeypatch, [{"content": reply}])
