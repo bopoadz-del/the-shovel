@@ -1600,11 +1600,11 @@ def test_unnamed_flag_on_a_page_the_bill_only_reaches_counts_against_it(a, b):
 @pytest.mark.parametrize("a, b, c", [(6, 4, 3), (60, 17, 8)])
 def test_unread_page_inside_the_bill_run_withholds_even_after_a_stretch_closed(a, b, c):
     """Bill 7's item on page 2, page 3 not read, then on page 4 a named carried
-    line that closes the stretch and one more item: a bill total matching no
-    run read gets no verdict (the bill run spans page 3); with page 3 read and
-    empty it is flagged."""
+    line equal to the whole stretch (which closes it) and one more item: a bill
+    total matching no run read gets no verdict (the bill run spans page 3);
+    with page 3 read and empty it is flagged."""
     pages = {"2": [_billed("7", "X", a)],
-             "4": [_billed("7", "Y", b), _sum_line("carried", b, "7"), _billed("7", "Z", c),
+             "4": [_billed("7", "Y", b), _sum_line("carried", a + b, "7"), _billed("7", "Z", c),
                    _sum_line("total", a + b + c + 9, "7")]}
     assert bpr.check_sum_lines(_unflagged_rows(pages), [3]) == []
     got = bpr.check_sum_lines(_unflagged_rows(pages), [])
@@ -1620,3 +1620,16 @@ def test_unread_page_inside_a_stretch_of_unnamed_items_withholds_the_verdict(a, 
     assert bpr.check_sum_lines(_unflagged_rows(pages), [3]) == []
     got = bpr.check_sum_lines(_unflagged_rows(pages), [])
     assert [(r.source_page, r.fields["total"]) for r in got] == [(4, str(a + b + 9))]
+
+
+@pytest.mark.parametrize("a, b, c", [(6, 4, 3), (60, 17, 8)])
+def test_named_line_closing_only_a_section_leaves_the_bill_stretch_open(a, b, c):
+    """Items naming no bill: an unnamed subtotal, then a carried line naming
+    the bill that closes only the section after it, then a bill total: the
+    whole a + b + c is not flagged, a + b + c + 10 is."""
+    pages = {"2": [_item("X", 1, a, a), _sum_line("subtotal", a), _item("Y", 1, b, b),
+                   _sum_line("carried", b, "7")],
+             "3": [_item("Z", 1, c, c), _sum_line("total", a + b + c, "7")]}
+    assert _flags(pages) == []
+    pages["3"][-1] = _sum_line("total", a + b + c + 10, "7")
+    assert _flags(pages) == [(3, str(a + b + c + 10))]

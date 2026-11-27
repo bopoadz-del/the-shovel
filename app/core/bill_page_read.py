@@ -186,12 +186,14 @@ def check_sum_lines(
                           item naming another bill, items naming no bill
                           included; offered to a line whose bill is the
                           stretch's or unknown on either side, and closed by a
-                          line that names a bill and agrees with it. Every
-                          other sum line with an amount (named or not) opens
-                          one more stretch after it, kept beside the longer
-                          ones: a section can run over a page break and close
-                          on the next page whether or not its sum line names
-                          its bill
+                          line that names a bill and agrees with the longest
+                          of them (the whole run since the last such line).
+                          Every other sum line with an amount (named or not)
+                          opens one more stretch after it, kept beside the
+                          longer ones: a section can run over a page break and
+                          close on the next page whether or not its sum line
+                          names its bill, and a named line that closes only a
+                          section or a page leaves the bill's stretch open
     ====================  ==================================================
 
     A run across pages starts after a page: the bill run after the page of
@@ -289,7 +291,7 @@ def check_sum_lines(
                     agg._same_figure(amount, run, place) for run in runs):
                 row.check = CHECK_SUM_LINE
                 flagged.append(row)
-            if own and any(agg._same_figure(amount, total, place) for total, _ in stretches):
+            if own and agg._same_figure(amount, stretches[0][0], place):
                 stretches, stretch_bill = [[0.0, page]], ""
             else:
                 stretches.append([0.0, page])
