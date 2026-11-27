@@ -245,3 +245,32 @@ def test_init_db_adds_the_mark_columns_a_table_lacks(monkeypatch, tmp_path, pres
     assert "llm_memory_review" in sa.inspect(eng).get_table_names()
     assert llm_memory.listing("p", with_review=True)[0]["review"] == ""
     assert llm_memory.read("p", "old")["data"] == {"a": 1}
+
+
+@pytest.mark.parametrize("name,data", NOTES)
+def test_the_review_route_functions_mark_record_and_refuse(name, data):
+    """The two admin route functions called directly: a decision returns the
+    mark it left; the record lists it; a bad decision and an unknown note
+    raise 422 / 404; a non-admin is refused."""
+    from fastapi import HTTPException
+
+    from app.routers.admin import (MemoryReviewBody, admin_project_memory_reviews,
+                                   admin_review_project_memory)
+    pid = f"cal-route-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, name, json.dumps(data), "c#2")
+    admin = {"user_id": "boss", "role": "admin"}
+    done = admin_review_project_memory(pid, name, MemoryReviewBody(decision="discard"), auth=admin)
+    assert (done["name"], done["review"], done["decided_by"]) == (_stem(name), "discarded", "boss")
+    log = admin_project_memory_reviews(pid, auth=admin)
+    assert log["project_id"] == pid and log["count"] == 1
+    assert log["reviews"][0]["data"] == data
+    for decision, target, status in (("drop", name, 422), ("keep", "absent-note", 404)):
+        with pytest.raises(HTTPException) as refused:
+            admin_review_project_memory(pid, target, MemoryReviewBody(decision=decision), auth=admin)
+        assert refused.value.status_code == status
+    for call in (lambda a: admin_review_project_memory(pid, name, MemoryReviewBody(decision="keep"), auth=a),
+                 lambda a: admin_project_memory_reviews(pid, auth=a)):
+        with pytest.raises(HTTPException) as refused:
+            call({"user_id": "u", "role": "user"})
+        assert refused.value.status_code == 403
+    assert admin_project_memory_reviews(pid, auth=admin)["count"] == 1
