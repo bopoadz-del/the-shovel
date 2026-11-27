@@ -524,6 +524,16 @@ def test_knowledge_summary_is_the_heading_and_first_prose(text, want):
     assert catalogue._knowledge_summary(text) == want
 
 
+@pytest.mark.parametrize("text,want", [
+    ("#hashtag\n## Real\nProse.", ("Real", "Prose.")),                  # no space: not a heading
+    ("####### seven\n## Using C#\nBody.", ("Using C#", "Body.")),       # seven hashes; "#" kept
+    ("```\n# in code\n```\n# Shown ##\n\nAfter.", ("Shown", "After.")),  # fenced; closing run
+    ("#\n## ##\nOnly prose.", ("", "Only prose.")),                     # headings with no text
+])
+def test_knowledge_summary_title_is_the_first_real_heading(text, want):
+    assert catalogue._knowledge_summary(text) == want
+
+
 @pytest.mark.parametrize("files", [{"zz_one.md": "# One\n\nAbout one."},
                                    {"zz_a.md": "# A\n\nAbout a.", "zz_b.md": "no heading", "x.txt": "skip"}])
 def test_knowledge_entries_read_each_markdown_file(monkeypatch, tmp_path, files):

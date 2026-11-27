@@ -374,3 +374,56 @@ def test_guard_accepts_boolean_combination():
 
 def test_guard_accepts_subscript_on_context():
     assert _safe_guard_eval("context['x'] == 1", context={"x": 1}) is True
+
+
+# --- what evaluate() computes, stated once -------------------------------------------
+
+_REFUSALS = [
+    ({"id": "zz.f_one", "type": "formula", "expression": "2 * L",
+      "variables": {"L": {"unit": "meter"}}, "thresholds": {"unit": "meter"}}, None, 6.0),
+    ({"id": "zz.f_two", "type": "formula", "expression": "L + q",
+      "variables": {"L": {"unit": "meter"}, "q": {"unit": "meter"}}}, None, 5.0),
+    ({"id": "zz.w", "type": "workflow", "expression": "L + q"},
+     "use validate_transition for workflows", None),
+    ({"id": "zz.t", "type": "threshold", "expression": "L - q", "variables": {"L": {}, "q": {}}},
+     "evaluate() only supports type=formula (got 'threshold')", None),
+    ({"id": "zz.r", "type": "rule", "variables": {"L": {}}},
+     "evaluate() only supports type=formula (got 'rule')", None),
+    ({"id": "zz.untyped", "expression": "L"}, "evaluate() only supports type=formula (got None)", None),
+    ({"id": "zz.blank", "type": "formula", "expression": ""}, "entry 'zz.blank' has no expression", None),
+    ({"id": "zz.absent", "type": "formula"}, "entry 'zz.absent' has no expression", None),
+]
+
+
+def _serve(tmp_path, monkeypatch, entries):
+    import json
+
+    path = tmp_path / "kb.json"
+    path.write_text(json.dumps({"schema_version": "1", "kb_version": "t", "entries": entries}),
+                    encoding="utf-8")
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", str(path))
+
+
+@pytest.mark.parametrize("entry,refusal,_result", _REFUSALS)
+def test_evaluation_refusal_says_why_an_entry_is_not_evaluated(entry, refusal, _result):
+    assert kb.evaluation_refusal(entry) == refusal
+
+
+@pytest.mark.parametrize("entry,refusal,result", _REFUSALS)
+def test_evaluate_refuses_exactly_what_evaluation_refusal_names(tmp_path, monkeypatch, entry, refusal, result):
+    _serve(tmp_path, monkeypatch, [entry])
+    if refusal is None:
+        out = kb.evaluate(entry["id"], L=3, q=2)
+        assert out["result"] == result and out["rule_id"] == entry["id"]
+        assert out["unit"] == (entry.get("thresholds") or {}).get("unit")
+    else:
+        with pytest.raises(ValueError) as exc:
+            kb.evaluate(entry["id"], L=3, q=2)
+        assert str(exc.value) == refusal
+
+
+@pytest.mark.parametrize("rule_id", ["zz.not_served", "zz.f_one.typo"])
+def test_evaluate_of_an_unknown_rule_is_a_key_error(tmp_path, monkeypatch, rule_id):
+    _serve(tmp_path, monkeypatch, [_REFUSALS[0][0]])
+    with pytest.raises(KeyError):
+        kb.evaluate(rule_id, L=3)

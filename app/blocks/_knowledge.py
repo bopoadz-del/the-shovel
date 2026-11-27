@@ -203,6 +203,21 @@ def _build_warnings(entry: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+def evaluation_refusal(entry: Dict[str, Any]) -> Optional[str]:
+    """Why :func:`evaluate` does not compute this entry, or ``None`` when it
+    does. The one statement of what is evaluable: ``evaluate`` raises it,
+    and whoever describes an entry (the catalogue) reads it, so an entry is
+    never offered values and a result the evaluation then refuses."""
+    kind = entry.get("type")
+    if kind == "workflow":
+        return "use validate_transition for workflows"
+    if kind != "formula":
+        return f"evaluate() only supports type=formula (got {kind!r})"
+    if not entry.get("expression"):
+        return f"entry {entry.get('id')!r} has no expression"
+    return None
+
+
 def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
     """Evaluate a formula entry.
 
@@ -210,23 +225,20 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
     supplied variable values, and return a numeric result tagged with the
     threshold unit, provenance, credibility tier, and warnings.
 
-    For ``type=workflow``: refuses with ``ValueError`` — callers must use
-    :func:`validate_transition` instead.
+    Any other entry is refused with ``ValueError`` and the reason
+    :func:`evaluation_refusal` gives (a workflow: use
+    :func:`validate_transition` instead).
     """
     entry = get_rule(rule_id)
     if entry is None:
         raise KeyError(f"unknown rule_id: {rule_id}")
-    kind = entry.get("type")
-    if kind == "workflow":
-        raise ValueError("use validate_transition for workflows")
-    if kind != "formula":
-        raise ValueError(f"evaluate() only supports type=formula (got {kind!r})")
+    refusal = evaluation_refusal(entry)
+    if refusal:
+        raise ValueError(refusal)
 
     import sympy
 
-    expr_str = entry.get("expression")
-    if not expr_str:
-        raise ValueError(f"entry {rule_id!r} has no expression")
+    expr_str = entry["expression"]
     # evaluate=False keeps sympy from collapsing the parsed tree before
     # substitution; we run .evalf() once at the end for the final float.
     # The entry's declared variables are symbols, whatever their name: without

@@ -33,7 +33,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.agents.driver.catalogue_knowledge import kb_entries, markdown_sections
+from app.agents.driver.catalogue_knowledge import kb_entries, markdown_headings, markdown_sections
 
 #: Every kind an entry may have, in index order.
 KINDS = ("formula", "tool", "workflow", "skill", "kernel", "knowledge", "document_type")
@@ -235,19 +235,16 @@ def knowledge_dir() -> str:
 
 
 def _knowledge_summary(text: str) -> Tuple[str, str]:
-    """The file's first heading, and its first line of prose."""
-    title, prose = "", ""
+    """The file's first heading (the one ``markdown_sections`` leaves out
+    as the file's name: both read ``markdown_headings``), and its first
+    line of prose."""
+    title = next(iter(markdown_headings(text)), "")
+    prose = ""
     for stripped in (line.strip() for line in text.splitlines() if line.strip()):
-        if stripped.startswith("#"):
-            if not title:
-                title = stripped.lstrip("#").strip()
+        if stripped.startswith(("#", "|", ">", "-", "*", "```")):
             continue
-        if stripped.startswith(("|", ">", "-", "*", "```")) and not prose:
-            continue
-        if not prose:
-            prose = stripped
-        if title and prose:
-            break
+        prose = stripped
+        break
     return title, prose
 
 

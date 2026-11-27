@@ -39,6 +39,43 @@ DELTA = {"id": "zz.delta_check", "domain": "d.four", "type": "rule", "title": "D
          "statement": "Delta is checked.", "checklist": ["a", "b"],
          "provenance": {"source": "s-d"}, "credibility_tier": 2}
 
+# Entries the tool does not evaluate although they hold what an evaluation
+# would read: variables without an expression, an expression on a type that
+# is not a formula, a formula with no expression, a variable that is a list.
+THETA = {"id": "zz.theta_limit", "domain": "d.five", "type": "threshold", "title": "Theta limit",
+         "statement": "Theta stays under a limit.",
+         "variables": {"T_a": {"unit": "degC", "desc": "One side"}, "T_b": {"unit": "degC"}},
+         "thresholds": {"unit": "degC", "max": 20}, "provenance": {"source": "s-t"},
+         "credibility_tier": 2}
+KAPPA = {"id": "zz.kappa_gap", "domain": "d.six", "type": "threshold", "title": "Kappa gap",
+         "statement": "Kappa is a gap.", "expression": "a - b",
+         "variables": {"a": {"unit": "meter"}, "b": {"unit": "meter"}},
+         "thresholds": {"unit": "meter"}, "provenance": {"source": "s-k"}, "credibility_tier": 2}
+LAMDA = {"id": "zz.lamda_blank", "domain": "d.seven", "type": "formula", "title": "Lamda blank",
+         "statement": "Lamda has no expression.", "expression": "",
+         "variables": {"n": {"unit": "", "desc": "Count"}}, "thresholds": {"unit": "meter"},
+         "provenance": {"source": "s-l"}, "credibility_tier": 1}
+SIGMA = {"id": "zz.sigma_steps", "domain": "d.eight", "type": "workflow", "title": "Sigma steps",
+         "statement": "Sigma moves in steps.", "expression": "x + 1",
+         "variables": {"x": {"unit": "meter"}, "layout": ["widths"]},
+         "thresholds": {"unit": "meter"}, "states": ["a", "b"],
+         "provenance": {"source": "s-s"}, "credibility_tier": 3}
+
+
+def _asked(entry, value):
+    """The tool's own answer to the entry's code with a value for every
+    variable the knowledge base entry declares (one value when it declares
+    none, so an evaluation is asked for either way)."""
+    import asyncio
+
+    from app.blocks.construction_advisor import ConstructionAdvisorBlock
+
+    declared = entry.get("variables") if isinstance(entry.get("variables"), dict) else {}
+    values = {k: value for k in declared} or {"x": value}
+    code = ck.kb_entry(entry, "kb.json")["code"]
+    return asyncio.run(ConstructionAdvisorBlock().process(
+        {"query": entry["title"]}, {"rule_id": code["rule_id"], "values": values}))
+
 
 @pytest.fixture
 def kb_file(tmp_path, monkeypatch):
@@ -61,9 +98,43 @@ def kb_file(tmp_path, monkeypatch):
     ("", []),
     ("no heading at all\n#hashtag is not a heading\n", []),
     ("#\n# Real title\n## S\n", ["S"]),
+    ("# T\n## ##\n## S\n", ["S"]),                      # a heading with no text is not a section
+    ("# T\n####### x\n## S\n", ["S"]),                  # seven hashes are not a heading
+    ("# T\n## Using C#\n## F# and C# #\n", ["Using C#", "F# and C#"]),  # only a spaced run closes
+    ("# T\n~~~\n```\n## in\n~~~\n## After\n", ["After"]),         # another fence does not close
+    ("# T\n````\n```\n## in\n````\n## Out\n", ["Out"]),           # nor a shorter one
+    ("# T\n```\n``` py\n## in\n```\n## Out\n", ["Out"]),          # nor one with text after it
+    ("# T\n``` not `a` fence\n## Seen\n", ["Seen"]),      # inline code is not a fence
+    ("# T\n    ## code\n\t## code\n   ## Three spaces\n", ["Three spaces"]),  # four spaces: code
+    ("#hashtag\n## Real\n### Sub\n", ["Sub"]),            # "Real" is the first heading: the name
 ])
 def test_markdown_sections_are_the_headings_after_the_title(text, want):
     assert ck.markdown_sections(text) == want
+
+
+@pytest.mark.parametrize("text,want", [
+    ("# Title\nprose\n## One\n### One.a\n", ["Title", "One", "One.a"]),
+    ("#hashtag\n## Real\n```\n# code\n```\n### Sub #\n", ["Real", "Sub"]),
+    ("no heading\n####### seven\n    # code\n", []),
+    ("", []),
+    (None, []),
+])
+def test_markdown_headings_are_every_heading_with_text_outside_code(text, want):
+    assert ck.markdown_headings(text) == want
+
+
+@pytest.mark.parametrize("text", [
+    "#hashtag\n## Real\n## Next\n",
+    "####### seven\n## Using C#\n### Two\n",
+    "~~~\n# fenced\n```\n~~~\n# Shown\n## S\n",
+    "    # code\n# T #\n## ##\n## S\n",
+    "prose only\n",
+])
+def test_a_file_name_and_its_sections_are_one_reading_of_its_headings(text):
+    # The name is the first heading and the sections are the rest: no heading
+    # is both, and none is dropped as "the title" while another one is the name.
+    title = catalogue._knowledge_summary(text)[0]
+    assert ([title] if title else []) + ck.markdown_sections(text) == ck.markdown_headings(text)
 
 
 @pytest.mark.parametrize("files,want", [
@@ -127,6 +198,62 @@ def test_an_entry_without_an_expression_has_no_output_and_no_inputs(entry, secti
     assert e["source"]["sections"] == sections
 
 
+@pytest.mark.parametrize("entry", [THETA, KAPPA, LAMDA, SIGMA])
+def test_an_entry_the_tool_does_not_evaluate_offers_no_inputs_and_no_output(entry):
+    e = ck.kb_entry(entry, "kb.json")
+    assert e["inputs"] == [] and e["outputs"] == []
+    # What it holds is still named, and its code still finds it.
+    assert "variables" in e["source"]["sections"]
+    assert e["code"] == {"tool": "construction_advisor", "rule_id": entry["id"]}
+    assert e["source"]["type"] == entry["type"]
+
+
+@pytest.mark.parametrize("entries,value", [
+    ([ALPHA, THETA, KAPPA, BETA], 3.0),
+    ([GAMMA, LAMDA, SIGMA, DELTA], 2.5),
+])
+def test_an_entry_offers_inputs_and_an_output_exactly_when_the_tool_evaluates_it(kb_file, entries, value):
+    kb_file(entries)
+    evaluated = 0
+    for entry in entries:
+        e = ck.kb_entry(entry, "kb.json")
+        answer = _asked(entry, value)
+        # The offer is the tool's behaviour: an output iff an evaluation came
+        # back, a refusal otherwise; inputs iff those values were taken.
+        assert bool(e["outputs"]) == ("evaluation" in answer), (entry["id"], answer)
+        assert bool(e["outputs"]) != ("evaluation_error" in answer), (entry["id"], answer)
+        if e["outputs"]:
+            evaluated += 1
+            assert [i["name"] for i in e["inputs"]] == list(entry["variables"])
+            assert e["outputs"] == [{"name": "result", "unit": answer["evaluation"]["unit"], "main": True}]
+            assert isinstance(answer["evaluation"]["result"], float)
+        else:
+            assert e["inputs"] == []
+    assert 0 < evaluated < len(entries)  # both sides of the rule were exercised
+
+
+@pytest.mark.parametrize("value", [2.0, 7.5])
+def test_no_shipped_kb_entry_offers_what_the_tool_refuses(monkeypatch, value):
+    monkeypatch.delenv("CONSTRUCTION_KB_FILE", raising=False)
+    catalogue._CACHE.clear()
+    built = {e["id"]: e for e in catalogue.entries() if e["kind"] == "knowledge"}
+    offered, refused = 0, 0
+    for kb in _knowledge.load_knowledge():
+        e = built["knowledge:" + kb["id"]]
+        declared = kb.get("variables") if isinstance(kb.get("variables"), dict) else {}
+        if _knowledge.evaluation_refusal(kb) is None:
+            offered += 1
+            assert [i["name"] for i in e["inputs"]] == list(declared)
+            assert e["outputs"] == [{"name": "result", "unit": (kb.get("thresholds") or {}).get("unit") or "",
+                                     "main": True}]
+        else:
+            refused += 1
+            assert e["inputs"] == [] and e["outputs"] == [], kb["id"]
+            with pytest.raises(ValueError):
+                _knowledge.evaluate(kb["id"], **({k: value for k in declared} or {"x": value}))
+    assert offered and refused  # the shipped base has both, so neither side is empty
+
+
 @pytest.mark.parametrize("entry", [ALPHA, GAMMA])
 def test_an_entry_does_not_share_the_knowledge_base_provenance(entry):
     before = entry["provenance"]["source"]
@@ -174,6 +301,56 @@ def test_kb_file_names_the_file_the_tool_reads(kb_file, monkeypatch, name):
         os.path.normcase(os.path.realpath(path))
     monkeypatch.delenv("CONSTRUCTION_KB_FILE")
     assert ck.kb_file() == "app/knowledge/construction_kb.json"
+
+
+@pytest.mark.parametrize("root,served,want", [
+    ("C:\\repo\\the-shovel", "D:\\served\\kb.json", "D:/served/kb.json"),
+    ("E:\\work", "C:\\data\\sub\\..\\other_kb.json", "C:/data/other_kb.json"),
+    ("C:\\repo\\the-shovel", "C:\\repo\\the-shovel\\app\\k\\kb.json", "app/k/kb.json"),
+])
+def test_kb_file_on_another_drive_is_its_full_path(monkeypatch, root, served, want):
+    # Windows path rules on every platform: a file on another drive letter has
+    # no path relative to the repository, so its full path is named, with "/".
+    import ntpath
+    import types
+
+    monkeypatch.setattr(ck, "os", types.SimpleNamespace(path=ntpath, sep=ntpath.sep))
+    monkeypatch.setattr(catalogue, "_ROOT", root)
+    monkeypatch.setattr(_knowledge, "_kb_path", lambda: served)
+    assert ck.kb_file() == want
+
+
+@pytest.mark.parametrize("entries,later", [([ALPHA], 5_000_000_000), ([GAMMA, DELTA], 9_000_000_000)])
+def test_kb_identity_changes_with_a_later_mtime_at_the_same_size(kb_file, entries, later):
+    path = kb_file(entries)
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    a = _knowledge.kb_identity()
+    os.utime(path, ns=(later, later))
+    b = _knowledge.kb_identity()
+    assert a[2] == b[2] and a[1] < b[1] and a != b
+
+
+@pytest.mark.parametrize("one,two", [([ALPHA], [ALPHA, BETA]), ([GAMMA, DELTA], [DELTA])])
+def test_kb_identity_changes_with_another_size_at_the_same_mtime(kb_file, one, two):
+    path = kb_file(one)
+    os.utime(path, ns=(3_000_000_000, 3_000_000_000))
+    a = _knowledge.kb_identity()
+    _kb(pathlib.Path(path), two)
+    os.utime(path, ns=(3_000_000_000, 3_000_000_000))
+    b = _knowledge.kb_identity()
+    assert a[1] == b[1] and a[2] != b[2] and a != b
+
+
+@pytest.mark.parametrize("spelling", [("sub", "..", "kb.json"), ("sub", "deeper", "..", "..", "kb.json")])
+def test_kb_identity_names_the_resolved_path_whatever_the_spelling(kb_file, monkeypatch, tmp_path, spelling):
+    path = kb_file([ALPHA])
+    (tmp_path / "sub" / "deeper").mkdir(parents=True)
+    spelled = os.path.join(str(tmp_path), *spelling)
+    assert spelled != path
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", spelled)
+    identity = _knowledge.kb_identity()
+    assert identity[0] == os.path.realpath(path) and ".." not in identity[0]
+    assert identity[1] is not None
 
 
 # --- the catalogue carries them --------------------------------------------------------
