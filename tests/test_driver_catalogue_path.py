@@ -1611,10 +1611,13 @@ def test_a_bare_number_fed_to_a_price_input_is_money_and_a_price_per_something_b
 
 
 @pytest.mark.parametrize("area,rate,said,credited", [
-    (150, 50, "3 days", True),          # 150 m2 over 50 m2/day: the unit is one the converter cannot compare
-    (150, 50, "3 m2", True),            # ... so the number check stands alone (what that leaves open)
+    (150, 50, "3 days", True),          # 150 m2 over 50 m2/day: the converter multiplies it out to a time
+    (150, 50, "72 hours", True),
+    (150, 50, "3 m2", False),           # ... so a figure in an area is not that result
+    (150, 50, "3 m", False),
     (150, 50, "4 days", False),
     (240, 60, "4 days", True),
+    (240, 60, "4 m2", False),
 ])
 def test_a_quotient_by_a_rate_is_not_read_as_another_quantity(monkeypatch, area, rate, said, credited):
     """m2 divided by m2/day is written "m2/(m2/day)". Written "m2/m2/day"
