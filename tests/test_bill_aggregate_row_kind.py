@@ -586,3 +586,78 @@ def test_bill_page_ranges_reads_the_stored_ranges(meta, expected):
                                   {"bill_states": {"bills": [{"label": "3", "pages": None}]}}])
 def test_bill_page_ranges_is_none_when_nothing_usable_is_stored(meta):
     assert agg.bill_page_ranges(meta) is None
+
+
+# --- selection: a named bill with a stored page range selects by page --------
+
+def _carried(n, prev, a, b, *, first):
+    """Bill ``n`` on pages ``first``..``first+1``; its first page still carries
+    the heading of bill ``prev`` (the heading printed on the page before)."""
+    return [
+        _r(first, "carried item", a, "1", a, path=(f"Bill No. {prev} - Works",)),
+        _r(first + 1, "own item", b, "1", b, path=(f"Bill No. {n} - Works",)),
+    ]
+
+
+@pytest.mark.parametrize("n, prev, a, b", [
+    ("3", "2", "120", "80"),
+    ("8", "7", "1,500", "250"),
+])
+def test_a_named_bill_with_a_range_selects_its_rows_by_page(n, prev, a, b):
+    rows = ([_r(10, "previous item", "9", "1", "9", path=(f"Bill No. {prev} - Works",))]
+            + _carried(n, prev, a, b, first=20))
+    ranges = {prev: (10, 19), n: (20, 21)}
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask=f"Total amount of Bill No. {n}?", ranges=ranges)
+    want = agg.g.parse_number(a) + agg.g.parse_number(b)
+    assert res["sum"] == want
+    assert sorted(e["description"] for e in res["rows"]) == ["carried item", "own item"]
+    # the rows summed are the rows checked
+    assert res["bill_checks"][0]["items_sum"] == want
+    assert res["scope"]["bill_pages"] == {n: [20, 21]}
+    # the bill before keeps only its own page: the carried row is not its row
+    prev_res = agg.aggregate(rows, terms="", measure="amount",
+                             ask=f"Total amount of Bill No. {prev}?", ranges=ranges)
+    assert [e["description"] for e in prev_res["rows"]] == ["previous item"]
+
+
+@pytest.mark.parametrize("first, last, inside", [
+    (20, 20, ["carried item"]),
+    (21, 21, ["own item"]),
+    (22, 30, []),
+])
+def test_page_range_ends_are_inclusive_and_outside_rows_are_left_out(first, last, inside):
+    rows = _carried("3", "2", "120", "80", first=20)
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="Total amount of Bill No. 3?", ranges={"3": (first, last)})
+    assert [e["description"] for e in res["rows"]] == inside
+
+
+@pytest.mark.parametrize("n, other", [("3", "2"), ("8", "7")])
+def test_a_named_bill_without_a_range_still_selects_by_its_path(n, other):
+    rows = _carried(n, other, "120", "80", first=20)
+    # a range is stored for another bill only: bill n falls back to its path
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask=f"Total amount of Bill No. {n}?", ranges={other: (1, 5)})
+    assert [e["description"] for e in res["rows"]] == ["own item"]
+    assert res["scope"]["bill_pages"] == {}
+    assert res["bill_checks"][0]["membership"] == "not_read"
+
+
+@pytest.mark.parametrize("path", [("Bill No. 3 - Works",), ("Bill No. 4 - Works",)])
+def test_a_row_with_no_page_is_not_in_a_ranged_bill(path):
+    rows = [_r(None, "no page", "5", "1", "5", path=path),
+            _r(20, "paged", "7", "1", "7", path=path)]
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="Total amount of Bill No. 3?", ranges={"3": (20, 21)})
+    assert [e["description"] for e in res["rows"]] == ["paged"]
+
+
+@pytest.mark.parametrize("ranges, spans", [
+    (None, ()),
+    ({"3": (20, 21), "9": (1, 2)}, (("3", 20, 21),)),
+])
+def test_ask_scope_keeps_the_range_of_each_named_bill_only(ranges, spans):
+    rows = agg.join_page_continuations(_carried("3", "2", "120", "80", first=20))
+    scope = agg.ask_scope("Total amount of Bill No. 3?", rows, ranges)
+    assert scope.spans == spans

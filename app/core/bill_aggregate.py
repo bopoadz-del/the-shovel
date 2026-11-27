@@ -574,7 +574,8 @@ class AskScope:
     """The scope an ask states, read as numbers and structural cells.
 
     ``size``/``band`` are in metres; ``bills`` are the bill numbers the ask
-    names; ``dimension`` is the measurement the ask asks to total (see
+    names and ``spans`` the stored page range of each of them that has one
+    (:func:`bill_page_ranges`); ``dimension`` is the measurement the ask asks to total (see
     :func:`_ask_dimension`); ``level``/``item``/``either`` are the ask's
     content words graded by where the document prints them (a heading path,
     an item description, or both). Empty dimensions do not scope.
@@ -583,6 +584,7 @@ class AskScope:
     size: tuple[float, float] | None = None
     band: tuple[float, float] | None = None
     bills: frozenset[str] = frozenset()
+    spans: tuple[tuple[str, int, int], ...] = ()
     dimension: str | None = None
     level: frozenset[str] = frozenset()
     item: frozenset[str] = frozenset()
@@ -599,13 +601,26 @@ class AskScope:
         set -- govern the row set."""
         return bool(self.size or self.band or self.bills or self.dimension)
 
+    def in_bills(self, row: SheetRow) -> bool:
+        """Whether the row is in one of the bills the ask names. A bill with a
+        stored page range holds the rows whose first page lies in it, the same
+        rule :func:`bill_checks` applies, so a heading carried down from the
+        bill before never moves a row. A bill with no stored range falls back
+        to the row's own path (:func:`row_bills`); its check then says
+        ``not_read``."""
+        ranged = {bill for bill, _first, _last in self.spans}
+        if row.pages and any(first <= row.pages[0] <= last
+                             for _bill, first, last in self.spans):
+            return True
+        return bool(row_bills(row) & (self.bills - ranged))
+
     def admits(self, row: SheetRow, measure: str = MEASURE_QUANTITY) -> bool:
         """Whether the row is inside every scope the ask states."""
         if self.size is not None and _row_size(row) != self.size:
             return False
         if self.band is not None and _row_band(row) != self.band:
             return False
-        if self.bills and not (row_bills(row) & self.bills):
+        if self.bills and not self.in_bills(row):
             return False
         if self.dimension is not None and not _measures(row, self.dimension, measure):
             return False
@@ -834,8 +849,15 @@ def row_bills(row: SheetRow) -> set[str]:
     return found
 
 
-def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
+def ask_scope(
+    ask: str | None,
+    items: Sequence[SheetRow],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> AskScope | None:
     """The scope ``ask`` states over ``items``; ``None`` when it states none.
+
+    ``ranges`` are the bills' stored page ranges (:func:`bill_page_ranges`);
+    a named bill that has one selects its rows by page (:meth:`AskScope.in_bills`).
 
     The ask's words are graded by the cell the document prints them in, so a
     word that names a heading level scopes structurally and a word that names
@@ -870,6 +892,8 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
         size=_dimensions(size) if size else None,
         band=_dimensions(band) if band else None,
         bills=bills,
+        spans=tuple(sorted((bill, *(ranges or {})[bill]) for bill in bills
+                           if bill in (ranges or {}))),
         dimension=_ask_dimension(text),
         level=frozenset((asked & in_paths) - in_desc - nouns),
         item=frozenset((asked & in_desc) - in_paths - nouns),
@@ -919,8 +943,10 @@ def aggregate(
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
 
-    ``ranges`` are the bills' page ranges (:func:`bill_page_ranges`); the
-    ``bill_checks`` of the result place rows by them.
+    ``ranges`` are the bills' page ranges (:func:`bill_page_ranges`); a bill
+    the ask names selects its rows by them, and the ``bill_checks`` of the
+    result place rows by them, so the rows summed and the rows checked are
+    the same rows.
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
@@ -948,7 +974,7 @@ def aggregate(
         raise ValueError(f"measure must be one of {MEASURES}")
     want, where = _terms(terms), _terms(section)
     items = join_page_continuations(rows)
-    scope = ask_scope(ask, items)
+    scope = ask_scope(ask, items, ranges)
     if scope is not None and not scope.states_a_dimension() and (want or where):
         # The ask names no size, band or bill: the model's terms select, and an
         # ask word only selects when the model passed none.
@@ -999,6 +1025,7 @@ def aggregate(
             "size": list(scope.size) if scope.size else None,
             "band": list(scope.band) if scope.band else None,
             "bills": sorted(scope.bills),
+            "bill_pages": {bill: [first, last] for bill, first, last in scope.spans},
             "dimension": scope.dimension,
             "level": sorted(scope.level),
             "item": sorted(scope.item),
