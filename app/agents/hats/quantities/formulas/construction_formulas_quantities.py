@@ -359,8 +359,14 @@ def _qty(x: float) -> str:
     exponent, and every digit up to ten significant figures, so the figures
     printed in a step multiply to the result printed after it. ``:.10g``
     already drops trailing zeros and a bare point, so nothing is stripped."""
-    text = format(Decimal(f"{x:.10g}"), ",f")
-    return "0" if text in ("", "-0") else text
+    return format(Decimal(f"{x:.10g}"), ",f")
+
+
+def _as_shown(x: float) -> float:
+    """The figure a reader sees for ``x`` (``_qty``), as a number: each step
+    of the working computes from the figures printed before it, so the
+    printed steps reconcile however many digits the inputs carry."""
+    return float(Decimal(f"{x:.10g}"))
 
 
 @formula(
@@ -372,7 +378,7 @@ def _qty(x: float) -> str:
                  'when they are supplied; no default markup is ever added.'),
     inputs={
         'quantity': Param('count', 0, 1e12, label='quantity of work'),
-        'consumption_per_unit': Param('count', 0, 1e9,
+        'consumption_per_unit': Param('count/count', 0, 1e9,
                                       label='resource consumed per unit of work'),
         'price_per_resource_unit': Param('currency/count', 0, 1e9,
                                          label='cited price per resource unit'),
@@ -403,14 +409,20 @@ def resource_cost_line(
     if missing:
         return {"error": ", ".join(missing) + " required; no default is assumed.",
                 "missing": missing}
-    q = float(quantity)
-    rate = float(consumption_per_unit)
-    price = float(price_per_resource_unit)
-    optional = [float(v) for v in (waste_percent, markup_percent) if v is not None]
+    # ``+ 0.0`` turns a negative zero into zero, so no figure or result is
+    # ever written "-0".
+    q = float(quantity) + 0.0
+    rate = float(consumption_per_unit) + 0.0
+    price = float(price_per_resource_unit) + 0.0
+    if waste_percent is not None:
+        waste_percent = float(waste_percent) + 0.0
+    if markup_percent is not None:
+        markup_percent = float(markup_percent) + 0.0
+    optional = [v for v in (waste_percent, markup_percent) if v is not None]
     if min([q, rate, price] + optional) < 0:
         return {"error": "quantity, consumption_per_unit, price_per_resource_unit, "
                          "waste_percent and markup_percent must be >= 0."}
-    net = q * rate
+    net = _as_shown(q * rate)
     working = [(f"Net resource = quantity {_qty(q)} x consumption {_qty(rate)} "
                 f"= {_qty(net)}")]
     if waste_percent is None:
@@ -418,10 +430,14 @@ def resource_cost_line(
         gross = net
         working.append("No waste allowance supplied: none applied.")
     else:
-        factor = 1.0 + float(waste_percent) / 100.0
-        gross = net * factor
-        working.append(f"With waste {_qty(float(waste_percent))}% = {_qty(net)} x "
-                       f"{factor:.6g} = {_qty(gross)}")
+        # The factor is written exactly as the percent gives it (1 + w/100
+        # in decimal), so the printed net x printed factor is the printed
+        # gross.
+        exact = 1 + Decimal(repr(waste_percent)) / 100
+        factor = float(exact)
+        gross = _as_shown(float(Decimal(repr(net)) * exact))
+        working.append(f"With waste {_qty(waste_percent)}% = {_qty(net)} x "
+                       f"{exact:f} = {_qty(gross)}")
     cost = gross * price
     working.append(f"Resource cost = {_qty(gross)} x price {_qty(price)} = {cost:,.2f}")
     if markup_percent is None:

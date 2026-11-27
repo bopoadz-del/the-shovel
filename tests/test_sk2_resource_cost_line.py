@@ -165,3 +165,116 @@ def test_a_figure_beyond_ten_digits_or_below_a_ten_thousandth_prints_in_full(q, 
     net = next(w for w in out["working"] if w.startswith("Net resource"))
     a, b, r = _figures(net)
     assert (a, b) == pytest.approx((q, c)) and r == pytest.approx(q * c)
+
+
+
+# --- Units on the rate and the price, every printed step reconciles, and no
+# --- negative zero. Inputs built here; expected values worked by hand.
+
+def _chat(params):
+    import asyncio
+
+    from app.agents.base.tools import handle_construction_calc
+    from app.agents.core.tool_registry import ToolCall
+
+    call = ToolCall(agent=None, name="construction_calc",
+                    args={"calculation": "resource_cost_line", "params": dict(params)},
+                    user_message="Calculate resource_cost_line", history=[])
+    return asyncio.run(handle_construction_calc(call))["result"]
+
+
+@pytest.mark.parametrize("q,rate,price,expect_qty,expect_total", [
+    # 640 m2 x 0.022 m3/m2 = 14.08 m3; x 310 per m3 = 4,364.80
+    (640, "0.022 m3/m2", "310 per m3", 14.08, 4_364.80),
+    # 95 m2 x 1.08 m2/m2 = 102.6 m2; x 42.5 AED/m2 = 4,360.50
+    (95, "1.08 m2/m2", "42.5 AED/m2", 102.6, 4_360.50),
+    # 12 m3 x 35 kg/m3 = 420 kg; x 3.2 per kg = 1,344.00
+    (12, "35 kg/m3", "3.2 per kg", 420.0, 1_344.00),
+    # 50 m2 x 12.5 nr/m2 = 625 nr; bare price 0.8 = 500.00
+    (50, "12.5 nr/m2", 0.8, 625.0, 500.00),
+])
+def test_a_rate_and_price_stated_with_their_units_run_through_the_chat_door(
+        q, rate, price, expect_qty, expect_total):
+    result = _chat({"quantity": q, "consumption_per_unit": rate,
+                    "price_per_resource_unit": price})
+    assert result.get("status") == "success", result
+    body = result["result"]
+    assert body["resource_quantity"] == pytest.approx(expect_qty)
+    assert body["line_total"] == pytest.approx(expect_total)
+    carried = {c["parameter"]: c for c in result.get("conversions") or []}
+    assert carried["consumption_per_unit"]["value_out"] == pytest.approx(
+        expect_qty / q)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("consumption_per_unit", "5 kN/m2"),      # a force is not a counted measure
+    ("consumption_per_unit", "0.022 m3/s"),   # nor is a time in the denominator
+    ("consumption_per_unit", "0.4 m3"),       # one part where two are declared
+    ("price_per_resource_unit", "310 per kN"),
+    ("price_per_resource_unit", "310 kg/m3"),  # not a currency at all
+])
+def test_a_unit_that_is_not_a_counted_measure_is_still_refused(field, value):
+    params = {"quantity": 640, "consumption_per_unit": 0.022,
+              "price_per_resource_unit": 310}
+    params[field] = value
+    result = _chat(params)
+    assert result.get("needs_input") is True, result
+    assert "line_total" not in (result.get("result") or {})
+    # the refusal names the kind of figure wanted, never a bare "count" unit
+    assert " in count" not in result["error"] and "in per count" not in result["error"]
+
+
+@pytest.mark.parametrize("q,c,p,waste", [
+    (1_000_000.0, 1.0, 1_000.0, 3.3333333),
+    (1_000.0, 1.0, 7.0, 7.123456),
+    (3_217.75, 0.0137, 412.9, 2.718281828459),
+    (1_234_567.891, 0.0137, 3.1, 4.4444),
+])
+def test_a_waste_percent_with_many_decimals_still_reconciles(q, c, p, waste):
+    from decimal import Decimal
+
+    out = resource_cost_line(**_base(q, c, p), waste_percent=waste)
+    step = next(w for w in out["working"] if w.startswith("With waste"))
+    _, n, f, g = _figures(step)
+    # the factor is written in full: 1 + waste / 100, every digit
+    assert Decimal(step.split(" x ")[1].split(" =")[0]) == 1 + Decimal(repr(waste)) / 100
+    # exact on the printed figures: printed net x printed factor, written to
+    # ten significant figures, is the printed gross digit for digit
+    import re
+    net_s, f_s, g_s = (t.replace(",", "") for t in
+                       re.findall(r"[\d,]*\.?\d+", step.split("% = ")[1]))
+    assert Decimal(f"{Decimal(net_s) * Decimal(f_s):.10g}") == Decimal(g_s), step
+    assert g == pytest.approx(n * f, rel=1e-9)
+    cost = next(w for w in out["working"] if w.startswith("Resource cost"))
+    g2, price, total = _figures(cost)
+    assert g2 == g and total == pytest.approx(g2 * price, abs=0.005)
+
+
+@pytest.mark.parametrize("zero_field", ["quantity", "consumption_per_unit",
+                                        "price_per_resource_unit"])
+@pytest.mark.parametrize("q,c,p", LINES)
+def test_a_negative_zero_prints_and_returns_zero(zero_field, q, c, p):
+    import math
+
+    args = {**_base(q, c, p), "waste_percent": -0.0, "markup_percent": -0.0}
+    args[zero_field] = -0.0
+    out = resource_cost_line(**args)
+    text = " | ".join(out["working"])
+    assert "-0" not in text, text
+    for key in ("resource_quantity", "resource_cost", "line_total", "markup_amount"):
+        assert math.copysign(1.0, out[key]) == 1.0, (key, out[key])
+    assert out["line_total"] == 0.0
+
+
+@pytest.mark.parametrize("zero_field", ["quantity", "price_per_resource_unit"])
+def test_a_negative_zero_through_the_registry_is_zero(zero_field):
+    import math
+
+    from app.lib.construction_formulas import run_calculation
+
+    args = _base(*LINES[1])
+    args[zero_field] = -0.0
+    res = run_calculation("resource_cost_line", args)
+    body = res.get("result", res)
+    assert math.copysign(1.0, body["line_total"]) == 1.0, res
+    assert "-0" not in " ".join(body["working"])

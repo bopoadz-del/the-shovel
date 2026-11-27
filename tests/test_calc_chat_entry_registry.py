@@ -251,7 +251,12 @@ CASES: Dict[str, Case] = {
         {"quantity": 100, "consumption_per_unit": 2, "price_per_resource_unit": 50,
          "waste_percent": 10, "markup_percent": 10},
         {"resource_quantity": 220.0, "resource_cost": 11_000.0, "line_total": 12_100.0},
-        "consumption_per_unit", None),
+        "consumption_per_unit",
+        # A consumption stated as a ratio of measures and a price per measure:
+        # 640 x 0.022 = 14.08 resource units, x 310 = 4,364.80.
+        ({"quantity": 640, "consumption_per_unit": "0.022 m3/m2",
+          "price_per_resource_unit": "310 per m3"},
+         {"resource_quantity": 14.08, "line_total": 4_364.8})),
     # F = m g (1 + H/d) = 80 * 9.81 * (1 + 1.8/1.2) = 784.8 * 2.5 = 1962 N
     # = 1.96 kN, within the 8 kN limit. No required input.
     "fall_arrest_force": Case(

@@ -202,14 +202,16 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
         labels.append(label)
         if reason == "wrong_unit":
             expected = row.get("expected_dimension")
-            wanted = unit_words(row.get("unit") or "")
+            wanted = _in_unit(row.get("unit") or "")
             sentences.append(
-                f"The {label} is {_with_article(_dimension_words(expected))} in {wanted}, and {value} is "
+                f"The {label} is {_with_article(_dimension_words(expected))}{wanted}, and {value} is "
                 f"{_with_article(_dimension_words(row.get('given_dimension')))}, so it does not convert."
                 if expected else f"The {label} needs a figure in {wanted}, not {value}.")
         elif reason == "unknown_unit":
-            sentences.append(f"I do not recognise the unit in {value}; the {label} is in "
-                             f"{unit_words(row.get('unit') or '')}.")
+            unit = row.get("unit") or ""
+            sentences.append(f"I do not recognise the unit in {value}; the {label} is"
+                             + (f" {_with_article(_dimension_words(_counted_dimension(unit)))}."
+                                if _counted_dimension(unit) else f" in {unit_words(unit)}."))
         elif reason == "out_of_range":
             verb = "are" if row.get("kind") == "series" else "is"
             sentences.append(f"The {label} given ({_shown_quantity(value, row)}) {verb} outside what the "
@@ -243,6 +245,23 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
 
 def _rounded(number: float) -> float:
     return float(f"{number:.6g}")
+
+
+def _counted_dimension(unit: str) -> str:
+    """The dimension of a declared unit that counts something ("count",
+    "count/count", "currency/count"), else empty. A count has no unit of its
+    own to name, so a sentence names its kind instead ("a price per count")."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    parsed = parse_unit(unit) if unit else None
+    if parsed is None or "count" not in parsed.dimension.split("/"):
+        return ""
+    return parsed.dimension
+
+
+def _in_unit(unit: str) -> str:
+    """" in kN/m2" after a dimension's words, or nothing for a counted unit."""
+    return "" if _counted_dimension(unit) else f" in {unit_words(unit)}"
 
 
 def _dimension_words(dimension: Any) -> str:

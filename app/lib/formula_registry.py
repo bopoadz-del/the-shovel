@@ -760,6 +760,20 @@ _DIMENSIONLESS = frozenset({"count", "ratio"})
 _COUNTABLE_MEASURES = frozenset({"length", "area", "volume", "mass"})
 
 
+def _measure_fills_count(declared: Any, written: Any) -> bool:
+    """True when the written unit is the declared one with a countable
+    measure (length, area, volume, mass) standing in each place the declared
+    unit says ``count`` -- and in no other place. Both units must have the
+    same number of parts; a unit equal to the declared one is not a fill."""
+    if declared is None or written is None:
+        return False
+    want, have = declared.dimension.split("/"), written.dimension.split("/")
+    if len(want) != len(have) or want == have:
+        return False
+    return all(w == h or (w == "count" and h in _COUNTABLE_MEASURES)
+               for w, h in zip(want, have))
+
+
 def convert_figure(spec: ParamSpec, number: float, unit: str,
                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One figure written in ``unit``, put into the unit ``spec`` declares by
@@ -770,40 +784,25 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     shown = f"{written_number(number)} {unit}"
     declared, written = parse_unit(spec.unit), parse_unit(unit)
     dimensionless = declared is not None and declared.dimension in _DIMENSIONLESS
-    carries_measure = (
-        declared is not None and declared.dimension == "count"
-        and written is not None and written.dimension in _COUNTABLE_MEASURES
-    )
-    carries_rate_measure = (
-        declared is not None and declared.dimension == "count/time"
-        and written is not None
-        and written.dimension.split("/", 1)[0] in _COUNTABLE_MEASURES
-        and written.dimension.split("/", 1)[-1] == "time"
-    )
-    if carries_rate_measure:
-        # A rate declared "count per day" carries the unit it is per
-        # ("12 m2/crew-day", "12 m3/day"): the number is the rate, the
-        # numerator names what is measured and the denominator is the time.
+    if _measure_fills_count(declared, written):
+        # A declared "count" stands for whatever is counted, so each count
+        # part of the declared unit may be a measure the user states ("1,200
+        # m3" for a count, "12 m2/day" for a count per day, "0.022 m3/m2" for
+        # a count per count, "310 AED/m3" for currency per count). The
+        # number is the figure and the stated unit is carried through.
         return {"value": number,
                 "conversion": {"parameter": spec.name, "value_in": number,
                                "from_unit": unit, "to_unit": unit, "value_out": number,
-                               "note": "rate carries the stated unit"}}
+                               "note": "count carries the stated unit"}}
     if declared is None or (dimensionless and (written is None or written.dimension
-                                                in (declared.dimension, "fraction")
-                                                or carries_measure)):
+                                                in (declared.dimension, "fraction"))):
         # No unit of its own: a count, a ratio, a factor, or a figure in
         # whatever unit its companions use. The written number stands (an
-        # unrecognised word after a count names what is counted); a count
-        # that states a measurable unit ("1,200 m3", "350 m2") carries that
-        # unit through so the answer keeps what was measured. A unit of a
-        # non-measurable kind ("5 kN" for a count) is refused below. A
+        # unrecognised word after a count names what is counted; a measure
+        # was carried above). A unit of a non-measurable kind ("5 kN" for a
+        # count) is refused below. A
         # percentage only becomes a fraction for an input whose range is a
         # fraction.
-        if carries_measure:
-            return {"value": number,
-                    "conversion": {"parameter": spec.name, "value_in": number,
-                                   "from_unit": unit, "to_unit": unit, "value_out": number,
-                                   "note": "count carries the stated unit"}}
         if (written is not None and written.dimension == "fraction"
                 and spec.hi is not None and spec.hi <= 1):
             value = number * written.scale
@@ -819,7 +818,8 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
         # unit that then reads as the declared kind is taken; it begins with
         # currency, so only a currency-per input can match it.
         implied = parse_unit(f"currency {unit}")
-        if implied is not None and implied.dimension == declared.dimension:
+        if implied is not None and (implied.dimension == declared.dimension
+                                    or _measure_fills_count(declared, implied)):
             return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
     if written.dimension == "currency" and declared.dimension == "currency":
