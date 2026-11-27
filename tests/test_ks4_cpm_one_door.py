@@ -462,3 +462,92 @@ def test_a_blank_predecessor_is_no_link(preds, start):
     assert env.get("status") == "success", env
     row = {r["id"]: r for r in env["result"]["activities"]}["B"]
     assert row["early_start"] == start
+
+
+# A value the caller gave that the schedule refuses is asked for again in the
+# input's own words, like a value outside the declared range: never the
+# schema's own error text.
+_SCHEMA_TEXT = ("[type=", "pydantic", "CPMInput", "validation error", "input_value")
+
+
+@pytest.mark.parametrize("given, field, label, shown", [
+    ({"project_start": "next monday"}, "project_start", "project start date", "next monday"),
+    ({"project_start": "2026-13-40"}, "project_start", "project start date", "2026-13-40"),
+    ({"calendar": {"work_weekdays": "Sun-Thu"}}, "calendar", "working calendar", "Sun-Thu"),
+    ({"calendar": {"holidays": "Eid"}}, "calendar", "working calendar", "Eid"),
+    ({"near_critical_band_days": 0}, "near_critical_band_days", "near-critical float band", "0"),
+    ({"near_critical_band_days": 0.0}, "near_critical_band_days", "near-critical float band", "0.0"),
+])
+def test_a_refused_setting_is_asked_for_by_its_label(given, field, label, shown):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(), **given})
+    assert env["status"] == "error"
+    assert env["needs_input"] is True
+    assert env["missing"] == [field]
+    assert label in env["error"] and label in env["question"]
+    assert shown in env["error"].split(" cannot be used")[0]
+    assert not any(t in env["error"] for t in _SCHEMA_TEXT), env["error"]
+
+
+@pytest.mark.parametrize("given, part", [
+    ({"calendar": {"work_weekdays": "Sun-Thu"}}, ": its work weekdays should be a valid list."),
+    ({"project_start": "next monday"}, ": it should be a valid date or datetime."),
+])
+def test_the_refusal_names_the_part_of_the_input_refused(given, part):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(), **given})
+    assert part in env["error"]
+
+
+@pytest.mark.parametrize("given", [
+    {"project_start": "2026-01-05"},
+    {"calendar": {"work_weekdays": [6, 0, 1, 2, 3]}},
+    {"near_critical_band_days": 0.5},
+    {"project_start": "2026-01-05", "calendar": {"holidays": ["2026-01-06"]},
+     "near_critical_band_days": 3},
+])
+def test_a_readable_setting_is_not_refused(given):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(), **given})
+    assert env["status"] == "success", env
+    assert "needs_input" not in env
+
+
+@pytest.mark.parametrize("start, band", [("next monday", 0), ("someday", 0.0)])
+def test_every_refused_setting_is_named(start, band):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
+                                             "project_start": start,
+                                             "near_critical_band_days": band})
+    assert env["missing"] == ["project_start", "near_critical_band_days"]
+    assert start in env["error"] and "near-critical float band" in env["error"]
+
+
+@pytest.mark.parametrize("acts", [
+    [{"id": "A", "duration": 1, "predecessors": [{"predecessor_id": "B", "lag": "x"}]},
+     {"id": "B", "duration": 1}],
+    [{"id": "C", "duration": 2, "predecessors": [{"predecessor_id": "D", "type": "QQ"}]},
+     {"id": "D", "duration": 1}],
+])
+def test_a_refusal_outside_the_settings_is_plain(acts):
+    """A refusal the settings did not cause (a link the kernel passed on as
+    given) still never shows the schema's text."""
+    from app.agents.hats.planning.formulas.construction_formulas_planning import (
+        _settings_refusal,
+    )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as info:
+        CPMInput(activities=acts)
+    out = _settings_refusal(info.value, {})
+    assert out == {"error": "the network cannot be scheduled: an input it was given "
+                            "could not be read.", "error_type": "ValueError"}
+    out2 = _settings_refusal(info.value, {"project_start": "2026-01-05"})
+    assert "needs_input" not in out2
+
+
+@pytest.mark.parametrize("calendar", [
+    {"work_weekdays": "Sun-Thu", "holidays": "Eid"},
+    {"work_weekdays": "weekdays", "holidays": 5},
+])
+def test_an_input_refused_twice_is_asked_for_once(calendar):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
+                                             "calendar": calendar})
+    assert env["missing"] == ["calendar"]
+    assert env["error"].count("cannot be used") == 1

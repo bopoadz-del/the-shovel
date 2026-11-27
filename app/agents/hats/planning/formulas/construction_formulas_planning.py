@@ -111,6 +111,47 @@ def _join_links_to_ids(rows: List[Dict[str, Any]]) -> None:
                 link["predecessor_id"] = same[0]
 
 
+def _settings_refusal(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """A value the caller gave that the network schedule refused, said in
+    the input's own words: the input it came in, the value, and what the
+    input should be. Each refused input is named in ``needs_input`` (given,
+    so also ``required``) and the calculation envelope asks for it again by
+    its label, as it does for a value outside the declared range. The
+    schema's own error text (type codes, class name, link) never reaches
+    the answer."""
+    import json
+
+    from app.lib.source_labels import parameter_label
+
+    fields: List[str] = []
+    reasons: List[str] = []
+    for err in exc.errors():
+        loc = err.get("loc") or ()
+        field = str(loc[0]) if loc else ""
+        if field not in settings or field in fields:
+            continue
+        fields.append(field)
+        msg = str(err.get("msg") or "")
+        # Only the plain clause: "Input should be greater than 0" -> "be
+        # greater than 0"; anything after a comma is the parser's own detail.
+        should = (msg[len("Input should "):].split(",")[0]
+                  if msg.startswith("Input should ") else "")
+        # A refusal inside the input (the calendar's working weekdays) names
+        # the part that was refused.
+        within = ("its " + " ".join(str(part).replace("_", " ") for part in loc[1:])
+                  if len(loc) > 1 else "it")
+        given = settings[field]
+        shown = given if isinstance(given, str) else json.dumps(given, default=str)
+        reasons.append(f"The {parameter_label('cpm_network', field)} given ({shown}) "
+                       f"cannot be used" + (f": {within} should {should}." if should else "."))
+    if not fields:
+        return {"error": "the network cannot be scheduled: an input it was given "
+                         "could not be read.",
+                "error_type": "ValueError"}
+    return {"error": " ".join(reasons), "needs_input": fields, "required": fields,
+            "error_type": "ValueError"}
+
+
 @formula(
     owner='planning',
     display_name='Critical path of an activity network',
@@ -190,8 +231,7 @@ def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
     try:
         network = CPMInput(**settings)
     except ValidationError as exc:
-        return {"error": f"the network cannot be scheduled: {exc}.",
-                "error_type": "ValueError"}
+        return _settings_refusal(exc, settings)
     try:
         out = compute_cpm(network)
     except CircularDependencyError as exc:
