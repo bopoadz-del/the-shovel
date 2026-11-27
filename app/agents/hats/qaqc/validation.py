@@ -41,7 +41,9 @@ def _in_range(param: Any, number: float) -> bool:
     bound (``above_lo``) does not include that bound."""
     lo = getattr(param, "lo", None)
     hi = getattr(param, "hi", None)
-    if lo is not None and (number <= lo if getattr(param, "above_lo", False) else number < lo):
+    # "Is it inside", never "is it outside": NaN compares False to every
+    # bound, so it is inside no range that has one.
+    if lo is not None and not (number > lo if getattr(param, "above_lo", False) else number >= lo):
         return False
     return hi is None or number <= hi
 

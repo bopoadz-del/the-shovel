@@ -155,3 +155,42 @@ def test_the_qaqc_range_check_keeps_an_ordinary_range_inclusive(lo, hi, value, r
     assert out["above_lo"] is False
     assert (qaqc_validation.first_out_of_range({"span": spec}, {"span": value}) is not None) is refused
 
+
+# NaN compares False to every bound: it is inside no range that has one,
+# whichever bound is missing and whether or not the floor itself is accepted.
+
+_NAN = float("nan")
+
+
+@pytest.mark.parametrize("lo, hi, above", [
+    (0, None, False), (0, None, True),        # a floor and no ceiling
+    (None, 5, False),                         # a ceiling and no floor
+    (0, 5, False), (0, 5, True),
+    (2.5, None, True), (-10, None, False),
+])
+def test_a_number_that_is_not_a_number_is_inside_no_range_that_has_a_bound(lo, hi, above):
+    spec = _spec(lo, hi, above, unit="ratio")
+    assert fr._in_range(spec, _NAN) is False
+    assert qaqc_validation._in_range(spec, _NAN) is False
+    if lo is not None and hi is not None:
+        # and it is what the calculator's caller is told: refused, never computed on
+        assert qaqc_validation.first_out_of_range({"span": spec}, {"span": _NAN}) is not None
+
+
+@pytest.mark.parametrize("lo, hi, above, value, inside", [
+    # the same answers main gave for an ordinary range, bound by bound
+    (0, None, False, 0, True), (0, None, False, -0.001, False), (0, None, False, 1e300, True),
+    (0, None, False, float("inf"), True), (0, None, False, float("-inf"), False),
+    (None, 5, False, 5, True), (None, 5, False, 5.001, False), (None, 5, False, float("-inf"), True),
+    (None, None, False, 123.0, True),
+    # and with the floor itself not accepted
+    (0, None, True, 0, False), (0, None, True, 5e-324, True), (0, None, True, float("inf"), True),
+])
+def test_a_range_with_one_bound_missing_checks_the_bound_it_has(lo, hi, above, value, inside):
+    spec = _spec(lo, hi, above, unit="ratio")
+    assert fr._in_range(spec, value) is inside
+    assert qaqc_validation._in_range(spec, value) is inside
+    if not above:
+        # main's own expression for an ordinary range
+        assert inside is ((lo is None or value >= lo) and (hi is None or value <= hi))
+

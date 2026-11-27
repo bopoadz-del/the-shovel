@@ -630,7 +630,9 @@ def _number(value: Any) -> Optional[float]:
 
 
 def _in_range(spec: ParamSpec, number: float) -> bool:
-    if spec.lo is not None and (number <= spec.lo if spec.above_lo else number < spec.lo):
+    # Written as "is it inside", never "is it outside": NaN compares False to
+    # every bound, so it is inside no range that has one.
+    if spec.lo is not None and not (number > spec.lo if spec.above_lo else number >= spec.lo):
         return False
     return spec.hi is None or number <= spec.hi
 
