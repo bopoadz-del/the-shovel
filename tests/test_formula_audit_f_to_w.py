@@ -35,6 +35,7 @@ _AUDIT_SLICE = [
     "generate_doc_number",
     "grout_pressure_calc",
     "guardrail_top_rail_height",
+    "interim_payment_to_date",
     "interior_finishes_takeoff",
     "laser_scan_accuracy",
     "leed_points_estimate",
@@ -1533,6 +1534,37 @@ def test_audit_progress_kpi(planned, actual, total, want_pp, want_ap, want_var, 
     assert r["spi_progress"] == pytest.approx(want_spi)
 
     _err("progress_kpi", planned_cum=60, actual_cum=45, planned_total=0)
+
+
+# ── interim_payment_to_date ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("params,want", [
+    # FIDIC 14.3 from totals to date. Hand: gross = 800,000 + 20,000 = 820,000;
+    # retention 10% of the work = 80,000; net = 740,000; due = 740,000 - 500,000
+    # = 240,000.
+    (dict(work_value_to_date=800_000, retention_percent=10, previously_certified=500_000,
+          materials_on_site=20_000),
+     {"gross_to_date": 820_000.0, "retention_to_date": 80_000.0, "amount_due": 240_000.0}),
+    # Retention held at its limit and earlier certificates above the net: 10% of
+    # 800,000 = 80,000 > limit 30,000, so 30,000; net = 770,000; due = 770,000
+    # - 900,000 = -130,000, stated negative, never clipped.
+    (dict(work_value_to_date=800_000, retention_percent=10, previously_certified=900_000,
+          retention_limit=30_000),
+     {"gross_to_date": 800_000.0, "retention_to_date": 30_000.0, "amount_due": -130_000.0}),
+])
+def test_audit_interim_payment_to_date(params, want):
+    r = _ok("interim_payment_to_date", **params)
+    for key, value in want.items():
+        assert r[key] == pytest.approx(value), key
+
+
+@pytest.mark.parametrize("dropped", ["work_value_to_date", "retention_percent",
+                                     "previously_certified"])
+def test_audit_interim_payment_to_date_asks_for_a_missing_total(dropped):
+    params = dict(work_value_to_date=800_000, retention_percent=10, previously_certified=500_000)
+    params.pop(dropped)
+    env = _err("interim_payment_to_date", expect="needs_input", **params)
+    assert env["missing"] == [dropped]
 
 
 # ── procedure-rule checks in the F-W range ──────────────────────────────────

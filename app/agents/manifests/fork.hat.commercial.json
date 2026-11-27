@@ -99,6 +99,13 @@
         "tier": "strategic"
       },
       {
+        "id": "interim_payment_to_date",
+        "description": "Interim certificate from totals to date: work done plus materials on site, less retention to its limit, less earlier certificates (FIDIC Clause 14.3)",
+        "implemented_by": "app.lib.construction_formulas_additions.interim_payment_to_date",
+        "domain": "commercial",
+        "tier": "operational"
+      },
+      {
         "id": "calculate_interim_payment",
         "description": "Interim payment after retention deduction (FIDIC Red Book Clause 14.3)",
         "implemented_by": "app.lib.construction_formulas_additions.calculate_interim_payment",

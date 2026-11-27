@@ -89,6 +89,16 @@ CASES: Dict[str, Case] = {
     "arithmetic_step": Case(
         {"operator": "divide", "a": 2059200, "b": 3000, "a_unit": "currency", "b_unit": "m2"},
         {"result": 686.4, "result_unit": "currency/m2"}, "b", None),
+    # Totals to date: gross = 1,000,000 work + 50,000 materials = 1,050,000;
+    # retention 5% of the work = 50,000; net = 1,000,000; due = net less the
+    # 600,000 already certified = 400,000. Money and percent carry no
+    # physical unit, so there is no unit case.
+    "interim_payment_to_date": Case(
+        {"work_value_to_date": 1_000_000, "retention_percent": 5,
+         "previously_certified": 600_000, "materials_on_site": 50_000},
+        {"gross_to_date": 1_050_000.0, "retention_to_date": 50_000.0,
+         "net_to_date": 1_000_000.0, "amount_due": 400_000.0},
+        "work_value_to_date", None),
     # Cantilever, UDL: d = wL^4/(8EI). w = 10 kN/m = 10 N/mm, L = 2000 mm,
     # E = 200000 MPa, I = 1e8 mm4 -> 10 * 2000^4 / (8 * 2e5 * 1e8)
     # = 1.6e14 / 1.6e14 = 1.00 mm.

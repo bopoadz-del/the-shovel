@@ -1,0 +1,18 @@
+[
+  {
+    "formula": "interim_payment_to_date",
+    "inputs": {"work_value_to_date": 1000000, "retention_percent": 5,
+               "previously_certified": 600000, "materials_on_site": 50000},
+    "expect": {"gross_to_date": 1050000, "retention_to_date": 50000,
+               "net_to_date": 1000000, "amount_due": 400000},
+    "working": "FIDIC 14.3 on totals to date: (a) work done 1,000,000 plus (e) materials on site 50,000 = 1,050,000 gross; (c) retention 5% of the work done = 50,000; net to date 1,050,000 - 50,000 = 1,000,000; less the 600,000 on earlier certificates = 400,000 due."
+  },
+  {
+    "formula": "interim_payment_to_date",
+    "inputs": {"work_value_to_date": 2000000, "retention_percent": 10,
+               "previously_certified": 1500000, "retention_limit": 150000},
+    "expect": {"gross_to_date": 2000000, "retention_to_date": 150000,
+               "net_to_date": 1850000, "amount_due": 350000},
+    "working": "Retention at rate 10% x 2,000,000 = 200,000 exceeds the 150,000 limit, so 150,000 is held; net 2,000,000 - 150,000 = 1,850,000; less earlier certificates 1,500,000 = 350,000 due."
+  }
+]
