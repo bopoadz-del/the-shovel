@@ -156,6 +156,20 @@ def break_even_point(
 _EXACT_DIGITS = 400
 
 
+_TOO_LARGE_TO_STATE = ("The price is above the variable cost per unit by so little that the "
+                       "break-even quantity for these fixed costs is too large to state. "
+                       "Check the price and the variable cost per unit.")
+
+
+def _stated(out: dict) -> dict:
+    """The result as it may be handed on: every number in it can be written.
+    A figure no float holds is refused in plain words, never returned as an
+    infinite number."""
+    if any(isinstance(v, float) and not math.isfinite(v) for v in out.values()):
+        return {"error": _TOO_LARGE_TO_STATE}
+    return out
+
+
 def _break_even_figures(fixed: float, price: float, var: float, q: float | None) -> dict:
     """The break-even figures and their working, in exact decimal arithmetic
     on the figures as written: a residue would put the break-even a hair above
@@ -185,16 +199,14 @@ def _break_even_figures(fixed: float, price: float, var: float, q: float | None)
                "domain": "no break-even: price <= variable cost per unit"}
         _profit_at_expected(out)
         out["working"] = working
-        return out
+        return _stated(out)
 
     units_d = _as_written(fixed) / contribution_d
     units = float(units_d)
     if not math.isfinite(units):
         # The quantity is defined but beyond any figure that can be written:
         # said plainly, never returned as an infinite number.
-        return {"error": "The price is above the variable cost per unit by so little that the "
-                         "break-even quantity for these fixed costs is too large to state. "
-                         "Check the price and the variable cost per unit."}
+        return {"error": _TOO_LARGE_TO_STATE}
     # The quantity as the working prints it; the revenue is that printed
     # figure times the price, so the step adds up as read.
     units_shown = _as_written(units)
@@ -218,12 +230,21 @@ def _break_even_figures(fixed: float, price: float, var: float, q: float | None)
     _profit_at_expected(out)
     if q is not None:
         if q > 0:
-            margin = float((q_d - units_d) / q_d)
+            # The percentage is worked in the decimal context: a break-even
+            # quantity many times the expected one gives a ratio no float holds.
+            percent = float((q_d - units_d) / q_d * 100)
             out["margin_of_safety_units"] = round(float(q_d - units_d), 4)
-            out["margin_of_safety_percent"] = round(margin * 100.0, 2)
-            working.append(
-                f"Margin of safety = ({_figure(q)} - {_figure(units_shown)}) / {_figure(q)} "
-                f"= {margin:.2%}"
-                + (" (below break-even: a shortfall)" if q_d < units_d else ""))
+            if math.isfinite(percent):
+                out["margin_of_safety_percent"] = round(percent, 2) + 0.0
+                working.append(
+                    f"Margin of safety = ({_figure(q)} - {_figure(units_shown)}) / {_figure(q)} "
+                    f"= {percent:.2f}%"
+                    + (" (below break-even: a shortfall)" if q_d < units_d else ""))
+            else:
+                # Defined, but beyond any percentage that can be written:
+                # said in words, and no percentage is returned.
+                working.append(
+                    f"Margin of safety: the break-even quantity is so many times the expected "
+                    f"{_figure(q)} units that the shortfall cannot be stated as a percentage.")
     out["working"] = working
-    return out
+    return _stated(out)

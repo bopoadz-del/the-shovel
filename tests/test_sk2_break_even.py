@@ -581,3 +581,89 @@ def test_a_size_the_calculator_did_not_return_gets_no_source_line(calc, inputs, 
     out = _gated_calc(calc, inputs, name, answer)
     assert f"Source: {name}" not in out, out
 
+
+# The margin of safety divides by the expected quantity: a break-even quantity
+# many times the expected one is inside the declared ranges and gives a ratio
+# no float holds. Nothing that is not a finite number may leave the calculator.
+
+def _numbers(result):
+    return [v for v in result.values() if isinstance(v, float)]
+
+
+@pytest.mark.parametrize("inputs,units", [
+    # the largest quantity that can be written, against one expected unit
+    ({"fixed_costs": 1e13, "price_per_unit": 1e-295, "variable_cost_per_unit": 0, "expected_units": 1}, 1e308),
+    ({"fixed_costs": 1e13, "price_per_unit": 1e-290, "variable_cost_per_unit": 0, "expected_units": 1e-6}, 1e303),
+    # an ordinary quantity (100 / 6) against the smallest expected quantities a float holds
+    ({"fixed_costs": 100, "price_per_unit": 10, "variable_cost_per_unit": 4, "expected_units": 1e-320}, 100 / 6),
+    ({"fixed_costs": 100, "price_per_unit": 10, "variable_cost_per_unit": 4, "expected_units": 5e-324}, 100 / 6),
+    # break-even 250 units; the shortfall is -2.5e309 percent, one step past what a float holds
+    ({"fixed_costs": 1_000, "price_per_unit": 10, "variable_cost_per_unit": 6, "expected_units": 1e-305}, 250.0),
+])
+def test_a_margin_no_percentage_can_state_is_said_in_words(inputs, units):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("break_even_point", dict(inputs))
+    assert env["status"] == "success", env
+    result = env["result"]
+    # the quantity is reported to four decimal places
+    assert result["break_even_units"] == pytest.approx(units, rel=1e-9, abs=1e-4)
+    assert "margin_of_safety_percent" not in result
+    assert all(math.isfinite(v) for v in _numbers(result)), result
+    assert result["margin_of_safety_units"] < 0
+    said = " ".join(result["working"])
+    assert "cannot be stated as a percentage" in said
+    assert "inf" not in said.lower() and "nan" not in said.lower()
+    import json
+    json.dumps(result, allow_nan=False)  # every figure is a number JSON can carry
+
+
+@pytest.mark.parametrize("q,percent", [
+    # break-even 250 units (1,000 / 4): a shortfall far below, still a figure that can be written
+    (1e-3, (1e-3 - 250) / 1e-3 * 100),
+    (1e-300, -2.5e304),
+    (1e-303, -2.5e307),
+])
+def test_a_very_large_shortfall_that_can_still_be_written_keeps_its_percentage(q, percent):
+    out = break_even_point(1_000, 10, 6, q)
+    assert math.isfinite(out["margin_of_safety_percent"])
+    assert out["margin_of_safety_percent"] == pytest.approx(percent, rel=1e-9)
+    assert "(below break-even: a shortfall)" in out["working"][-1]
+    assert out["working"][-1].rstrip(" (below break-even: a shortfall)").endswith("%")
+
+
+@pytest.mark.parametrize("q,line_end", [(3_000.0, "= 33.33%"), (1_500.0, "= -33.33% (below break-even: a shortfall)")])
+def test_the_margin_line_prints_the_percentage_it_reports(q, line_end):
+    # break-even 2,000 units (60,000 / 30)
+    out = break_even_point(60_000, 50, 20, q)
+    assert out["working"][-1].endswith(line_end)
+    assert out["margin_of_safety_percent"] == pytest.approx(float(line_end.split("= ")[1].split("%")[0]), abs=0.005)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_no_result_leaves_the_calculator_holding_a_number_that_cannot_be_written(bad):
+    from app.agents.hats.commercial.formulas import construction_formulas_additions as mod
+
+    refused = mod._stated({"break_even_units": 12.0, "margin_of_safety_percent": bad, "working": ["x"]})
+    assert set(refused) == {"error"} and "too large to state" in refused["error"]
+    kept = {"break_even_units": 12.0, "units_to_cover_fixed_costs": 12, "break_even_revenue": None, "working": ["x"]}
+    assert mod._stated(kept) is kept
+
+
+@pytest.mark.parametrize("price,variable", [(50, 20), (20, 20)])
+def test_both_exits_hand_the_result_through_the_check(monkeypatch, price, variable):
+    """With a break-even point and without one, what is returned is what the
+    last check hands back."""
+    from app.agents.hats.commercial.formulas import construction_formulas_additions as mod
+
+    seen = []
+    verdict = {"error": "checked"}
+
+    def spy(out):
+        seen.append(out)
+        return verdict
+
+    monkeypatch.setattr(mod, "_stated", spy)
+    assert break_even_point(60_000, price, variable, 1_500) is verdict
+    assert len(seen) == 1 and "working" in seen[0] and "contribution_per_unit" in seen[0]
+
