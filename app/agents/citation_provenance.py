@@ -856,7 +856,16 @@ def _has_number(text: str, targets: list[float]) -> bool:
 
 
 def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
-    return _has_number(answer, credit.result_numbers)
+    """True when the answer states a figure the calculator returned.
+
+    A figure is read from prose without its sign, and prose states a negative
+    amount in more ways than this check could list ("-3", "(3)", "a loss of
+    3", "each unit loses 3", "short by 3"). Which of those a sentence means
+    is language, and no rule here is keyed on wording: a negative result is
+    matched on its size, exactly as a positive one is. The check answers
+    where a figure came from, not how the sentence around it reads.
+    """
+    return _has_number(answer, [abs(target) for target in credit.result_numbers])
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:
