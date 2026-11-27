@@ -67,7 +67,10 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     (FS/SS/FF/SF) and ``lag`` in working days, or a list or tuple of any of
     those (a sequence is read item by item, never as its printed text).
     Nothing is assumed beyond what the CPM convention itself defines: a link
-    with no type is FS and a link with no lag has none."""
+    with no type is FS and a link with no lag has none. A mapping's id is
+    kept exactly as written, as the activity's own id is, so a link joins
+    the activity whose id is that same text; only an id read out of a
+    comma-separated string loses the spaces around it."""
     if raw is None or raw == "":
         return []
     items = list(raw) if isinstance(raw, (list, tuple)) else [raw]
@@ -75,7 +78,7 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     for item in items:
         if isinstance(item, dict):
             pid = item.get("id", item.get("predecessor_id"))
-            links.append({"predecessor_id": str(pid).strip(),
+            links.append({"predecessor_id": str(pid),
                           "type": str(item.get("type") or "FS").strip().upper(),
                           "lag": item.get("lag") or 0})
         else:
@@ -106,6 +109,8 @@ def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
                 near_critical_band_days: Optional[float] = None) -> dict:
     """CPM over the network the user supplied. Each activity is a mapping
     with ``id``, ``duration`` (whole working days) and ``predecessors``.
+    An id is kept exactly as given, so every row of the result joins back to
+    the caller's activity by the id it sent; an id that is blank is refused.
 
     Total float TF = LS - ES; free float FF = the slack to the earliest
     successor date (an activity with no successor has FF = TF, because its
@@ -135,8 +140,8 @@ def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
     for i, act in enumerate(activities, start=1):
         if not isinstance(act, dict):
             return {"error": f"activity {i} is not a mapping of id, duration and predecessors."}
-        aid = str(act.get("id") or "").strip()
-        if not aid:
+        aid = str(act.get("id") or "")
+        if not aid.strip():
             return {"error": f"activity {i} has no id."}
         dur = act.get("duration")
         try:

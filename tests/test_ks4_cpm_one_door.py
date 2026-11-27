@@ -296,3 +296,86 @@ def test_plan_executor_histogram_needs_activities(acts, ok):
     else:
         with pytest.raises(PlanExecutionError):
             asyncio.run(PlanExecutor()._step_resource_histogram(step, session))
+
+
+# ── Ids are kept as given; a turn ask never edits the caller's own band ─────
+
+def _spaced(first, second):
+    return [{"id": first, "duration": 2},
+            {"id": second, "duration": 3, "predecessors": [{"predecessor_id": first}]}]
+
+
+@pytest.mark.parametrize("first, second", [("A1 ", "A2 "), (" K", "L  ")])
+def test_run_cpm_keeps_each_id_exactly_as_given(first, second):
+    data = CPMInput(activities=_spaced(first, second))
+    out = run_cpm(data)
+    assert out == compute_cpm(data)
+    assert [r.id for r in out.results] == [first, second]
+    assert out.critical_path == [first, second]
+
+
+@pytest.mark.parametrize("plain, spaced", [("A", "A "), ("B", " B")])
+def test_ids_that_differ_by_a_space_are_two_activities(plain, spaced):
+    data = CPMInput(activities=[{"id": plain, "duration": 4},
+                                {"id": spaced, "duration": 1}])
+    out = run_cpm(data)
+    assert out == compute_cpm(data)
+    assert {r.id for r in out.results} == {plain, spaced}
+
+
+@pytest.mark.parametrize("first, second, duration", [
+    ("A1 ", "A2 ", 5),   # hand: 0-2, 2-5
+    (" P", "Q ", 5),
+])
+def test_container_network_pass_joins_spaced_ids(first, second, duration):
+    from app.containers.construction import ConstructionContainer
+    acts = [{"id": first, "duration": 2},
+            {"id": second, "duration": 3, "predecessors": [{"id": first}]}]
+    out = ConstructionContainer()._calculate_cpm({"activities": acts})
+    assert out["critical_path"] == [first, second]
+    assert out["project_duration_days"] == duration
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_kernel_refuses_a_blank_id(blank):
+    env = cf.run_calculation("cpm_network", {"activities": [{"id": blank, "duration": 2}]})
+    assert env.get("status") != "success"
+    assert "has no id" in str(env.get("error"))
+
+
+@pytest.mark.parametrize("raw, ids", [
+    ("A, B", ["A", "B"]),                       # a written list: pieces trimmed
+    ([{"id": " C"}, "D ,E"], [" C", "D", "E"]),  # a mapping's id kept as written
+])
+def test_links_trim_only_ids_read_out_of_a_written_list(raw, ids):
+    from app.agents.hats.planning.formulas.construction_formulas_planning import (
+        _network_links,
+    )
+    assert [link["predecessor_id"] for link in _network_links(raw)] == ids
+
+
+def _banded(lag):
+    return [{"id": "A", "duration": 5},
+            {"id": "B", "duration": 3, "predecessors": [{"predecessor_id": "A"}]},
+            {"id": "C", "duration": 1, "predecessors": [{"predecessor_id": "A"}]},
+            {"id": "D", "duration": 4,
+             "predecessors": [{"predecessor_id": "B"},
+                              {"predecessor_id": "C", "lag": lag}]}]
+
+
+@pytest.mark.parametrize("band, lag, ask", [
+    (2, -2, "Run the critical path with a near-critical band of two days. "
+            "D has a lead of -2 days."),
+    (5, -5, "Flag anything within a working week of critical; "
+            "the link from C has a lag of -5."),
+])
+def test_a_turn_ask_never_flips_the_callers_band(band, lag, ask):
+    data = CPMInput(activities=_banded(lag), near_critical_band_days=band)
+    token = cf.set_current_ask(ask)
+    try:
+        out = run_cpm(data)
+        assert cf._CURRENT_ASK.get() == ask   # the turn's ask is back afterwards
+    finally:
+        cf._CURRENT_ASK.reset(token)
+    assert out == compute_cpm(data)
+    assert out.near_critical_band_days == band

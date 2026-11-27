@@ -269,7 +269,18 @@ def run_cpm(data: CPMInput) -> CPMOutput:
         params["project_start"] = data.project_start.isoformat()
     if data.near_critical_band_days is not None:
         params["near_critical_band_days"] = data.near_critical_band_days
-    env = run_calculation("cpm_network", params)
+    # The network is the caller's own, already read from its input, so the
+    # kernel runs with no turn ask: the envelope's repairs that read the
+    # user's words (a written sign restored, an unwritten zero dropped) are
+    # for a model's call to a calculator, and would otherwise turn the
+    # caller's band of 2 days into -2 whenever the ask writes "-2" for a lag.
+    from app.lib import construction_formulas as calc
+
+    ask_token = calc.set_current_ask("")
+    try:
+        env = run_calculation("cpm_network", params)
+    finally:
+        calc._CURRENT_ASK.reset(ask_token)
     result = env.get("result") if isinstance(env, dict) else None
     if (not isinstance(env, dict) or env.get("status") != "success"
             or not isinstance(result, dict)):
