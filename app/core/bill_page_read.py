@@ -22,8 +22,10 @@ It decides nothing about the figures; it only states facts about them:
   column under the label the page gives it; nothing is forced into rate or
   amount;
 * each row carries its check: ``""`` when accepted, otherwise what failed
-  (a figure that is not a number, or quantity x rate != amount). A figure
-  that fails is kept as read and flagged; it is never repaired;
+  (a figure that is not a number, quantity x rate != amount, or a sum line
+  that is not the sum of the lines it closes - its section, page or bill,
+  :func:`check_sum_lines`). A figure that fails is kept as read and flagged;
+  it is never repaired;
 * a page whose read is missing or is not a list of lines is NOT READ, never
   "a page with no rows";
 * a key of the read that is not a page number (decimal digits only) is not dropped
@@ -46,6 +48,7 @@ from typing import Any
 
 import httpx
 
+from app.core import bill_aggregate as agg
 from app.core import bill_table_geometry as g
 
 HEADING = "heading"
@@ -55,6 +58,11 @@ REF_LABEL = "Item"
 #: placed by its own line's bill, not only by the page it sits on.
 BILL_LABEL = "Bill"
 CHECK_NOT_A_NUMBER = "figure not a number"
+CHECK_SUM_LINE = "sum line is not the sum of the lines it closes"
+#: Line types the read prompt defines as a sum of other lines of the page.
+#: ``brought_forward`` restates an earlier page: it is added, never checked.
+SUM_LINE_TYPES = frozenset({"carried", "subtotal", "total"})
+BROUGHT_FORWARD = "brought_forward"
 
 #: The model's figure keys, mapped to the sheet's canonical fields.
 _FIGURES = (("quantity", "quantity"), ("rate", "rate"), ("amount", "total"))
@@ -147,8 +155,154 @@ def rows_from_page_reads(
                 continue
             after_row = True
             out.rows.append(_row(line, page, top + tuple(headings), kind))
+    check_sum_lines(out.rows, out.pages_not_read)
     return out
 
+
+def check_sum_lines(
+    rows: Sequence[g.BillRow], pages_not_read: Sequence[int] = (),
+) -> list[g.BillRow]:
+    """Flag every sum line that adds up to none of the runs it can close.
+
+    Rows are walked page by page in page order, in their order on the page.
+    A line the model typed as a sum of other lines (:data:`SUM_LINE_TYPES`)
+    can close one of three nested runs, and it agrees when its amount equals
+    the sum of any one of them:
+
+    ====================  ==================================================
+    run                   lines summed
+    ====================  ==================================================
+    section               every non-sum line with an amount since the last
+                          sum line on its page (or the page top)
+    page                  every non-sum line with an amount above it on its
+                          page, whatever sum lines stand between
+    bill                  every ``item`` amount of its bill so far, across
+                          pages; its bill is the one the line names, else the
+                          one bill the items of its section name (none when
+                          they name no bill or more than one); when the
+                          bill the line names has no run, the one bill of its
+                          section
+    stretch               every ``item`` amount across pages since the last
+                          item naming another bill, items naming no bill
+                          included; offered to a line whose bill is the
+                          stretch's or unknown on either side, and closed by a
+                          line that names a bill and agrees with the longest
+                          of them (the whole run since the last such line).
+                          Every other sum line with an amount (named or not)
+                          opens one more stretch after it, kept beside the
+                          longer ones: a section can run over a page break and
+                          close on the next page whether or not its sum line
+                          names its bill, and a named line that closes only a
+                          section or a page leaves the bill's stretch open
+    ====================  ==================================================
+
+    A run across pages starts after a page: the bill run after the page of
+    the last item before the bill's first item, a stretch after the page of
+    the sum line that opened it or of the other bill's last item. When a page
+    that was not read (``pages_not_read``) lies after that page and before the
+    line's own page, the run is not offered, and if no run that is offered
+    agrees the line gets no verdict: the rows it may close were not read, and
+    a page the platform could not read is never charged to the document's
+    figure. The bill holding that page is NOT READ by :func:`bill_states`.
+
+    The bill and stretch runs are counted from the pages read, so they are
+    not offered on a page that prints a brought-forward amount above the
+    line: there the page run, which adds that amount, is the document's own
+    run across pages, and an earlier page may not have been read.
+
+    A sum line with no amount closes no run: the section, the stretch and the
+    bills its section names carry on past it. Where a section starts and ends
+    is read by :func:`_sections` alone, here and in ``_section_bills``.
+
+    "Equals" is within one unit of the amount's own last printed place (the
+    same arithmetic ``bill_aggregate.row_kinds`` decides a collection by).
+    When the section holds at least one ``item`` line and no run agrees, the
+    line's check is :data:`CHECK_SUM_LINE`. A section with no item line (a
+    collection page listing other pages' totals) is closed without a verdict:
+    the page itself holds nothing to add up. A row that already carries a
+    check keeps it. Returns the rows flagged here."""
+    flagged: list[g.BillRow] = []
+    unread = sorted(set(pages_not_read))
+    keys = _sections(rows)
+    by_page: dict[int, list[int]] = {}
+    for i, row in enumerate(rows):
+        by_page.setdefault(row.source_page, []).append(i)
+    bill_items: dict[str, float] = {}
+    bill_start: dict[str, int] = {}
+    # Each stretch is [its amount, the page it starts after].
+    stretches: list[list[float]] = [[0.0, -1]]
+    stretch_bill = ""
+    last_item_page = -1
+    for page in sorted(by_page):
+        on_page = 0.0
+        carried_in = False
+        current: tuple[int, int] | None = None
+        for i in by_page[page]:
+            row = rows[i]
+            if keys[i] != current:
+                current = keys[i]
+                section, items = 0.0, 0
+                named: set[str] = set()
+            kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
+            text = _text(row.fields.get("total"))
+            amount = g.parse_number(text)
+            if kind not in SUM_LINE_TYPES:
+                if amount is None:
+                    continue
+                carried_in = carried_in or kind == BROUGHT_FORWARD
+                section += amount
+                on_page += amount
+                if kind == ITEM:
+                    items += 1
+                    bill = _row_bill(row)
+                    if bill:
+                        named.add(bill)
+                        if bill not in bill_items:
+                            bill_items[bill] = 0.0
+                            bill_start[bill] = last_item_page
+                        bill_items[bill] += amount
+                        if stretch_bill and bill != stretch_bill:
+                            stretches = [[0.0, last_item_page]]
+                        stretch_bill = bill
+                    for run in stretches:
+                        run[0] += amount
+                    last_item_page = page
+                continue
+            if not _ends_section(row):
+                continue
+            own = _row_bill(row)
+            single = next(iter(named)) if len(named) == 1 else ""
+            bill = own if own in bill_items else (single or own)
+            runs = [section, on_page]
+            withheld = False
+            if bill in bill_items and not carried_in:
+                if _unread_between(unread, bill_start[bill], page):
+                    withheld = True
+                else:
+                    runs.append(bill_items[bill])
+            if not carried_in and (not bill or not stretch_bill or bill == stretch_bill):
+                for total, start in stretches:
+                    if _unread_between(unread, int(start), page):
+                        withheld = True
+                    else:
+                        runs.append(total)
+            place = agg._last_place(text)
+            if items and not row.check and not withheld and not any(
+                    agg._same_figure(amount, run, place) for run in runs):
+                row.check = CHECK_SUM_LINE
+                flagged.append(row)
+            if own and agg._same_figure(amount, stretches[0][0], place):
+                stretches, stretch_bill = [[0.0, page]], ""
+            else:
+                stretches.append([0.0, page])
+    return flagged
+
+
+def _unread_between(unread: Sequence[int], after: int, page: int) -> bool:
+    """True when a page not read lies after page ``after`` and before
+    ``page``: a run across pages that starts after ``after`` may hold rows of
+    it."""
+    return any(after < p < page for p in unread)
 
 def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -> g.BillRow:
     fields = {"description": _text(line.get("description")),
@@ -503,7 +657,10 @@ def bill_states(
     column of its own): the document prints no item prices for that bill.
     ``FAILED`` when the item sum differs from the printed total by more than
     ``tolerance`` (the caller states it from the bill's own rounding) or any
-    row of the bill is flagged, else ``RECONCILED``. An item row whose line
+    row of the bill is flagged (a sum line that does not add up and names no
+    bill counts against the bills the items it closes name, or, when they name
+    none, every bill whose range holds or reaches its page), else
+    ``RECONCILED``. An item row whose line
     names no bill could belong to every bill whose range holds its page or
     that reaches it (``pages_unplaced_reach``): each such bill is ``NOT
     CHECKED`` with the count (``rows_unplaced``), never FAILED for them. Rows
@@ -513,6 +670,9 @@ def bill_states(
     placed: set[int] = set()
     missing = set(pages_not_read)
     own = [_row_bill(r) for r in rows]
+    keys = _sections(rows)
+    closes = {i: _section_bills(rows, own, keys, i) for i, r in enumerate(rows)
+              if not own[i] and r.check == CHECK_SUM_LINE}
     for span in spans:
         ranged = span.first_page is not None and span.last_page is not None
         key = _bill_key(span.label)
@@ -525,7 +685,15 @@ def bill_states(
                  or r.source_page in reach))
         placed.update(members)
         items_sum = 0.0
-        summed = without = flagged = items = priced = 0
+        summed = without = items = priced = 0
+        # A sum line that names no bill and does not add up fails the bills
+        # the items it closes name; when those items name none, every bill
+        # whose range holds or reaches its page.
+        flagged = sum(
+            1 for i, bills in closes.items()
+            if (key in bills if bills else
+                ((ranged and span.first_page <= rows[i].source_page <= span.last_page)
+                 or rows[i].source_page in reach)))
         for i in members:
             r = rows[i]
             flagged += 1 if r.check else 0
@@ -576,6 +744,38 @@ BILL_KEY = "bill"
 def _bill_key(value: Any) -> str:
     """A bill's identifier compared without case, spacing or punctuation."""
     return " ".join(re.findall(r"[^\W_]+", _text(value).casefold()))
+
+
+def _ends_section(row: g.BillRow) -> bool:
+    """True when the row is a sum line (:data:`SUM_LINE_TYPES`) that has an
+    amount: it closes the section it stands in. A sum line with no amount
+    closes nothing."""
+    return (_text(row.extra.get(LINE_TYPE_LABEL)).lower() in SUM_LINE_TYPES
+            and g.parse_number(_text(row.fields.get("total"))) is not None)
+
+
+def _sections(rows: Sequence[g.BillRow]) -> list[tuple[int, int]]:
+    """The section of each row, as ``(page, n)``: the one place that says
+    where a section starts and ends. A section lies on one page; it starts
+    at the page top or after a row that :func:`_ends_section`, and that row
+    is its last. Rows of a page are taken in their order in ``rows``."""
+    keys: list[tuple[int, int]] = []
+    count: dict[int, int] = {}
+    for row in rows:
+        n = count.get(row.source_page, 0)
+        keys.append((row.source_page, n))
+        if _ends_section(row):
+            count[row.source_page] = n + 1
+    return keys
+
+
+def _section_bills(rows: Sequence[g.BillRow], own: Sequence[str],
+                   keys: Sequence[tuple[int, int]], at: int) -> frozenset[str]:
+    """The bills the ``item`` lines of the section ``rows[at]`` closes name
+    (the section as :func:`_sections` gives it)."""
+    return frozenset(own[j] for j in range(len(rows))
+                     if j != at and keys[j] == keys[at] and own[j]
+                     and _text(rows[j].extra.get(LINE_TYPE_LABEL)).lower() == ITEM)
 
 
 def _row_bill(row: g.BillRow) -> str:
