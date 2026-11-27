@@ -1310,3 +1310,79 @@ def test_a_told_figure_is_kept_when_the_turns_only_tool_failed(client, monkeypat
     r = _turn(client, h, pid)
     assert r.status_code == 200, r.text
     assert f"{figure} m of kerb" in _streamed_text(r)
+
+
+@pytest.mark.parametrize("instead,ending", [("write_memory", " Use write_memory instead."), ("", "")])
+def test_driver_refusal_reads_the_tools_own_declaration(monkeypatch, instead, ending):
+    from app.agents.core import tool_registry
+    monkeypatch.setattr(tool_registry, "_TOOLS", dict(tool_registry._TOOLS))
+    off, on = f"probe_off_{uuid.uuid4().hex[:6]}", f"probe_on_{uuid.uuid4().hex[:6]}"
+
+    @tool_registry.tool(off, owner="base", display_name="Probe", driver=False, driver_instead=instead)
+    async def _off(call):
+        return {}
+
+    @tool_registry.tool(on, owner="base", display_name="Probe")
+    async def _on(call):
+        return {}
+    assert tool_registry.driver_refusal(off) == (
+        f"{off} is not offered on this path and did not run; nothing was stored.{ending}")
+    assert tool_registry.driver_refusal(on) == ""
+    assert off not in tool_registry.driver_tools() and on in tool_registry.driver_tools()
+
+
+@pytest.mark.parametrize("name", ["no_such_tool_here", None, "", ["remember_fact"]])
+def test_driver_refusal_leaves_what_is_not_a_registered_tool_alone(name):
+    from app.agents.core import tool_registry
+    assert tool_registry.driver_refusal(name) == ""
+
+
+@pytest.mark.parametrize("instead", ["write_memory", "read_memory"])
+def test_only_a_tool_not_offered_on_the_driver_path_names_one_instead(monkeypatch, instead):
+    from app.agents.core import tool_registry
+    monkeypatch.setattr(tool_registry, "_TOOLS", dict(tool_registry._TOOLS))
+    with pytest.raises(ValueError, match="only a tool not offered on the driver path names one instead"):
+        tool_registry.tool(f"probe_{uuid.uuid4().hex[:6]}", owner="base", display_name="Probe",
+                           driver_instead=instead)
+    name = f"probe_{uuid.uuid4().hex[:6]}"
+
+    @tool_registry.tool(name, owner="base", display_name="Probe", driver=False, driver_instead=f" {instead} ")
+    async def _h(call):
+        return {}
+    assert tool_registry._TOOLS[name].driver_instead == instead
+
+
+@pytest.mark.parametrize("figure,unit", [(2.35, "m"), (275, "mm")])
+def test_figure_provenance_credits_a_told_note_and_nothing_else_from_notes(figure, unit):
+    from app.agents import citation_provenance as cp
+    answer = f"From your notes, it is {figure} {unit}."
+    told = _tool_msg("read_memory", {"status": "success", "told_by_user": True, "data": {"v": f"{figure} {unit}"}})
+    untold = _tool_msg("read_memory", {"status": "success", "told_by_user": False, "data": {"v": figure}})
+    user = {"role": "user", "content": "what is it?"}
+    out, trail = cp.figure_provenance(answer, None, [user, told], enforce=True, tool_passages=True)
+    assert out == answer
+    assert [(e["figure"], e["source"], e["doc_name"]) for e in trail] == [
+        (f"{figure} {unit}", "user_note", "Told by the user, from the project notes")]
+    out, trail = cp.figure_provenance(answer, None, [user, untold], enforce=True, tool_passages=True)
+    assert str(figure) not in out and trail == []
+
+
+@pytest.mark.parametrize("result,records", [
+    ({"status": "success", "told_by_user": True, "data": {"datum": "+2.35 m"}}, 1),
+    ({"status": "success", "told_by_user": True, "data": [275]}, 1),
+    ({"status": "success", "told_by_user": "true", "data": {"datum": "+2.35 m"}}, 0),
+    ({"status": "success", "told_by_user": True}, 0),
+    ({"status": "success", "data": {"datum": "+2.35 m"}}, 0),
+])
+def test_told_note_records_take_the_reads_own_mark(result, records):
+    from app.agents.citation_provenance import _told_note_records
+    got = _told_note_records(json.dumps({"name": "read_memory", "ok": True, "result": result}))
+    assert len(got) == records
+    if records:
+        assert got[0].kind == "user_note" and json.loads(got[0].text) == result["data"]
+
+
+@pytest.mark.parametrize("content", [None, "not json", json.dumps([1, 2]), json.dumps({"result": "x"})])
+def test_told_note_records_skip_what_is_not_a_read_result(content):
+    from app.agents.citation_provenance import _told_note_records
+    assert _told_note_records(content) == []
