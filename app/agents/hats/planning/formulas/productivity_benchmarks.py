@@ -7,50 +7,12 @@ project's own documents or asks for it.
 """
 from __future__ import annotations
 
-import re
-
 from app.lib.formula_registry import Param, formula
+from app.lib.productivity_norms import TEMPLATE_PROVENANCE, benchmark_row
 
-_BENCHMARK_PROVENANCE = (
-    "benchmark, unverified, owner-supplied planner template "
-    "(GCC residential tower, finishing trades)"
-)
-
-# (work item, unit, crew, rate per crew-day, flag note)
-_PRODUCTIVITY_BENCHMARKS = [
-    ("blockwork walls", "m2", "mason + helper (1:1)", 12.0, ""),
-    ("internal wall plaster", "m2", "mason + helper", 20.0, ""),
-    ("ceiling plaster", "m2", "mason", 20.0, ""),
-    ("wall paint primer and stucco", "m2", "painter", 45.0, "painting rate at the low end of the usual GCC range"),
-    ("emulsion paint walls final coat", "m2", "painter", 45.0, "painting rate at the low end of the usual GCC range"),
-    ("acrylic emulsion ceilings", "m2", "painter", 45.0, "painting rate at the low end of the usual GCC range"),
-    ("ceramic tiles floors", "m2", "mason (tiler)", 40.0, ""),
-    ("ceramic tiles walls", "m2", "mason (tiler)", 40.0, "wall tiling at 40 is optimistic vs floor; flag"),
-    ("ceiling finishes false ceiling", "m2", "mason", 40.0, ""),
-    ("wall finishes common areas", "m2", "mason", 40.0, ""),
-    ("floor finishes common areas", "m2", "mason", 40.0, ""),
-    ("epoxy paint floors", "m2", "painter", 40.0, "painting rate at the low end of the usual GCC range"),
-    ("epoxy paint ceilings", "m2", "painter", 40.0, "painting rate at the low end of the usual GCC range"),
-    ("ceiling painting common areas", "m2", "painter", 40.0, "painting rate at the low end of the usual GCC range"),
-]
-
-def _normalise_work_item(text: str) -> str:
-    """Canonical lookup form of a work item.
-
-    Case, punctuation, hyphens, parentheses and whitespace do not
-    distinguish one name from another, so "Blockwork (walls)" and
-    "blockwork walls" reach the same row. Applied to both the stored keys
-    and the lookup key; crew strings and flag notes stay as written.
-    """
-    s = str(text or "").lower()
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    return " ".join(s.split())
-
-
-_BENCHMARK_KEYS = {
-    _normalise_work_item(item): (unit, crew, rate, flag)
-    for item, unit, crew, rate, flag in _PRODUCTIVITY_BENCHMARKS
-}
+# The rows live in ONE place, app/lib/productivity_norms.py (D1), which the
+# schedule path also reads; this calculator keeps no copy of its own.
+_BENCHMARK_PROVENANCE = TEMPLATE_PROVENANCE
 
 
 @formula(
@@ -81,8 +43,8 @@ def productivity_benchmark(work_item: str) -> dict:
     "owner-supplied planner template, unverified", and an answer using this
     rate must say so rather than present it as a project figure.
     """
-    key = _normalise_work_item(work_item)
-    if key not in _BENCHMARK_KEYS:
+    row = benchmark_row(work_item)
+    if row is None:
         return {
             "work_item": work_item,
             "rate_per_crew_day": None,
@@ -91,7 +53,7 @@ def productivity_benchmark(work_item: str) -> dict:
             "confidence": "MEDIUM",
             "flag": "no benchmark entry for this work item; use the project's own rate",
         }
-    unit, crew, rate, flag = _BENCHMARK_KEYS[key]
+    unit, crew, rate, flag = row["unit"], row["crew"], row["rate"], row["flag"]
     return {
         "work_item": work_item,
         "unit": unit,
