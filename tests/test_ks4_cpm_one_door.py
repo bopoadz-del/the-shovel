@@ -583,3 +583,40 @@ def test_an_input_refused_twice_is_asked_for_once(calendar):
                                              "calendar": calendar})
     assert env["missing"] == ["calendar"]
     assert env["error"].count("working calendar (working weekdays and holidays) given") == 1
+
+
+# The band's range is "more than 0": the bound is said as it is meant, to the
+# user and to the model, never as the smallest number a float can hold.
+
+@pytest.mark.parametrize("band, shown", [(0, "0"), ("0", "0"), (-1, "-1"), (-0.5, "-0.5"), (100001, "100,001")])
+def test_a_refused_band_names_the_range_as_a_person_would(band, shown):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
+                                             "near_critical_band_days": band})
+    assert env["status"] == "error"
+    assert env["error"] == (
+        f"The near-critical float band given ({shown} working days) is outside what the Critical path "
+        "of an activity network calculator accepts (more than 0 working days, up to 100,000 working days). "
+        "What near-critical float band should I use?")
+    for raw in ("e-324", "e-3", "4.94", "5e-"):
+        assert raw not in env["error"] and raw not in str(env.get("question") or "")
+
+
+def test_the_models_input_line_for_the_band_says_more_than_zero():
+    from app.agents.driver import tools as driver_tools
+    from app.lib import formula_registry as fr
+
+    params = fr.parameters(fr.get("cpm_network"))
+    line = driver_tools._input_line("near_critical_band_days", params["near_critical_band_days"])
+    assert "working days, more than 0, up to 100000, optional" in line
+    assert "e-324" not in line and "0 to 100000" not in line
+
+
+@pytest.mark.parametrize("link_type", ["QQ", "ZZ"])
+def test_a_schema_refusal_from_the_kernel_names_its_kind(link_type):
+    from app.agents.hats.planning.formulas.construction_formulas_planning import cpm_network
+
+    out = cpm_network(activities=[{"id": "A", "duration": 2},
+                                  {"id": "B", "duration": 3,
+                                   "predecessors": [{"predecessor_id": "A", "type": link_type}]}])
+    assert out["error_type"] == "ValueError"
+

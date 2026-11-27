@@ -100,7 +100,8 @@ BASIS_WORDS = {
 def _input_line(key: str, p: Any) -> str:
     bits = [p.unit] if p.unit and p.unit != "-" else []
     if p.lo is not None and p.hi is not None:
-        bits.append(f"{p.lo:g} to {p.hi:g}")
+        bits.append(f"more than {p.lo:g}, up to {p.hi:g}" if getattr(p, "above_lo", False)
+                    else f"{p.lo:g} to {p.hi:g}")
     if getattr(p, "basis", ""):
         bits.append(BASIS_WORDS[p.basis])
     if not p.required:

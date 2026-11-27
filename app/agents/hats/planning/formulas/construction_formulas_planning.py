@@ -8,7 +8,6 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import math
 
 
 logger = logging.getLogger(__name__)
@@ -160,10 +159,9 @@ def _refused_inputs(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
         'project_start': Param(label='project start date'),
         'calendar': Param(label='working calendar (working weekdays and holidays)'),
         # The band is a positive span (a band of none is not stated at all),
-        # so the declared range starts at the smallest positive figure: the
-        # envelope refuses 0 with the range question exactly where the
-        # schedule itself does.
-        'near_critical_band_days': Param('working days', math.ulp(0.0), 100000,
+        # so the declared range is more than 0: the envelope refuses 0 with
+        # the range question exactly where the schedule itself does.
+        'near_critical_band_days': Param('working days', 0, 100000, above_lo=True,
                                          label='near-critical float band'),
     },
     outputs={'project_duration': 'working days', 'critical_path': '-',
