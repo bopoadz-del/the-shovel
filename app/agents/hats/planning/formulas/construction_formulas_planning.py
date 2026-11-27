@@ -68,9 +68,11 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     those (a sequence is read item by item, never as its printed text).
     Nothing is assumed beyond what the CPM convention itself defines: a link
     with no type is FS and a link with no lag has none. A mapping's id is
-    kept exactly as written; only an id read out of a comma-separated string
-    loses the spaces around it. Which activity each link joins is settled
-    afterwards against the network's own ids (``_join_links_to_ids``)."""
+    kept exactly as written, and so is an id given on its own as text (alone
+    or as one item of a list); only an id read out of a comma-separated
+    string loses the spaces around it, because there they belong to the
+    separator. Which activity each link joins is settled afterwards against
+    the network's own ids (``_join_links_to_ids``)."""
     if raw is None or raw == "":
         return []
     items = list(raw) if isinstance(raw, (list, tuple)) else [raw]
@@ -82,8 +84,11 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
                           "type": str(item.get("type") or "FS").strip().upper(),
                           "lag": item.get("lag") or 0})
         else:
-            links += [{"predecessor_id": p.strip(), "type": "FS", "lag": 0}
-                      for p in str(item).split(",") if p.strip()]
+            pieces = str(item).split(",")
+            if len(pieces) > 1:
+                pieces = [p.strip() for p in pieces]
+            links += [{"predecessor_id": p, "type": "FS", "lag": 0}
+                      for p in pieces if p.strip()]
     return links
 
 

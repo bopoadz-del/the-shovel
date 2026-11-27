@@ -400,12 +400,17 @@ def test_chat_calculator_joins_a_link_written_with_other_spaces(acts, path, dura
     assert env["result"]["critical_path"] == path
 
 
+@pytest.mark.parametrize("form", [
+    lambda link: [{"id": link}],   # a mapping
+    lambda link: [link],           # an id as one item of a list
+    lambda link: link,             # an id given on its own as text
+])
 @pytest.mark.parametrize("link, duration", [("A ", 1 + 3), ("A", 7 + 3)])
-def test_an_exact_id_wins_over_a_spaced_twin(link, duration):
+def test_an_exact_id_wins_over_a_spaced_twin(form, link, duration):
     # "A" (7 days) and "A " (1 day) are two activities; a link joins the one
-    # it names exactly, never its twin.
+    # it names exactly, never its twin, however the link is written.
     acts = [{"id": "A", "duration": 7}, {"id": "A ", "duration": 1},
-            {"id": "B", "duration": 3, "predecessors": [{"id": link}]}]
+            {"id": "B", "duration": 3, "predecessors": form(link)}]
     env = cf.run_calculation("cpm_network", {"activities": acts})
     assert env.get("status") == "success", env
     row = {r["id"]: r for r in env["result"]["activities"]}["B"]
@@ -430,3 +435,30 @@ def test_band_upper_bound_is_the_declared_range(band, accepted):
     env = cf.run_calculation("cpm_network", {"activities": acts,
                                              "near_critical_band_days": band})
     assert (env.get("status") == "success") is accepted, env
+
+
+@pytest.mark.parametrize("preds, start", [("A , C", 7), ("C, A ", 7),
+                                          ("C ,A", 7), ("A ", 1)])
+def test_comma_list_ids_lose_only_the_separator_spaces(preds, start):
+    # Inside "x, y" the spaces belong to the separator, so a piece reads as
+    # its trimmed text ("A", the 7-day twin); an id on its own keeps its text.
+    acts = [{"id": "A", "duration": 7}, {"id": "A ", "duration": 1},
+            {"id": "C", "duration": 2},
+            {"id": "B", "duration": 3, "predecessors": preds}]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env.get("status") == "success", env
+    row = {r["id"]: r for r in env["result"]["activities"]}["B"]
+    assert row["early_start"] == start
+
+
+@pytest.mark.parametrize("preds, start", [(" ", 0), (["\t", "C"], 2),
+                                          ("A, ", 7)])
+def test_a_blank_predecessor_is_no_link(preds, start):
+    # Text with nothing but spaces names no activity: it adds no link, it is
+    # not refused as an unknown predecessor.
+    acts = [{"id": "A", "duration": 7}, {"id": "C", "duration": 2},
+            {"id": "B", "duration": 3, "predecessors": preds}]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env.get("status") == "success", env
+    row = {r["id"]: r for r in env["result"]["activities"]}["B"]
+    assert row["early_start"] == start
