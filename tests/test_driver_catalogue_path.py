@@ -1128,3 +1128,182 @@ def test_a_carried_given_keeps_its_credit_when_no_history_is_sent(monkeypatch, a
         {"content": f"The total length is {a + b} m."}])
     shown = _text(_run(user_message=f"Add the {b} m return. What is the total?", history=[], **who))
     assert f"{a + b} m" in shown and "incomplete" not in shown
+
+
+# --- a number the user gave, with its unit changed by the model, is not the user's ---
+
+_TRENCH_ASK = "A trench is 12 m long, 3 m wide and 2 m deep. What volume is excavated?"
+
+
+def _volume_turn(monkeypatch, conv, update, said):
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", update, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": said},
+    ])
+    shown = _text(_run(user_message=_TRENCH_ASK, conversation_id=conv, sheet_mode=True))
+    return shown, trace_store.records(_today(), conv)[0]
+
+
+@pytest.mark.parametrize("length,ran", [("12 mm", 0.072), ("12 cm", 0.72), ({"value": 12, "unit": "mm"}, 0.072),
+                                         ("12 ft", 21.946)])
+def test_a_plan_literal_with_the_users_number_and_another_unit_is_not_credited(monkeypatch, length, ran):
+    """The user wrote 12 m. The model plans the length as "12 mm": the step
+    runs on 0.012 m. That quantity is the model's, so its result is neither
+    shown nor credited to the calculator."""
+    shown, row = _volume_turn(monkeypatch, f"unit-lit-{ran}", {
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": length, "width_m": 3, "depth_m": 2}}]},
+        f"The excavation is {ran:g} m3.")
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [pytest.approx(ran)]   # the step did run
+    assert f"{ran:g} m3" not in shown
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("value,unit,ran", [(12, "mm", 0.072), (12, "cm", 0.72), (12000, "m", 72000.0)])
+def test_a_given_with_the_users_number_and_another_unit_is_not_the_users(monkeypatch, value, unit, ran):
+    shown, row = _volume_turn(monkeypatch, f"unit-giv-{ran}", {
+        "givens": [{"id": "g1", "value": value, "unit": unit}, {"id": "g2", "value": 3, "unit": "m"},
+                   {"id": "g3", "value": 2, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}}]},
+        f"The excavation is {ran:g} m3.")
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == [None, "user", "user"]
+    assert f"{ran:g} m3" not in shown
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("value,unit", [(12, "m"), (12000, "mm"), (0.012, "km")])
+def test_the_users_quantity_in_any_unit_of_its_kind_is_the_users_and_is_credited(monkeypatch, value, unit):
+    shown, row = _volume_turn(monkeypatch, f"unit-ok-{unit}", {
+        "givens": [{"id": "g1", "value": value, "unit": unit}, {"id": "g2", "value": 3, "unit": "m"},
+                   {"id": "g3", "value": 2, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}}]},
+        "The excavation is 72 m3.")
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["user", "user", "user"]
+    assert "72 m3" in shown and "incomplete" not in shown
+    assert [f["step"] for f in row["figures"] if f.get("step")][:1] == ["s1"]
+
+
+@pytest.mark.parametrize("length", ["12 m", "12000 mm", {"value": 12, "unit": "m"}])
+def test_the_users_quantity_written_in_the_plan_is_credited(monkeypatch, length):
+    shown, row = _volume_turn(monkeypatch, f"unit-lit-ok-{length}", {
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": length, "width_m": "3 m", "depth_m": "2 m"}}]},
+        "The excavation is 72 m3.")
+    assert "72 m3" in shown and "incomplete" not in shown
+    assert [f["step"] for f in row["figures"] if f.get("step")][:1] == ["s1"]
+
+
+# --- a figure from a workflow's answer keeps its sign for the given check ---
+
+def _level_workflow(monkeypatch, answer):
+    from app.agents.driver import routes
+
+    async def ran(args, *a, **k):
+        return {"ok": True, "workflow": "survey_levels", "answer": answer}
+
+    async def nothing_stated(*a, **k):
+        return {}
+
+    monkeypatch.setattr(routes, "run", ran)
+    monkeypatch.setattr(loop, "_inputs_stated_in_ask", nothing_stated)
+    return routes.RUN_WORKFLOW
+
+
+@pytest.mark.parametrize("level,rise,wrong", [(-43, 10, "53"), (-7, 2.5, "9.5")])
+def test_a_workflow_figure_with_its_sign_turned_is_not_credited(monkeypatch, level, rise, wrong):
+    """The workflow answers a level below datum. The model writes it as a
+    given without the minus: nobody gave that number."""
+    conv = f"wf-flip-{rise}"
+    run_workflow = _level_workflow(monkeypatch, f"The formation level is {level} m.")
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call(run_workflow, {"workflow": "survey_levels"}, "c0")]},
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": -level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The new level is {wrong} m."},
+    ])
+    shown = _text(_run(user_message=f"Read the formation level and raise it by {rise} m. What is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    assert f"{wrong} m" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == [None, "user"]
+    assert not [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+@pytest.mark.parametrize("level,rise,new", [(-43, 10, "-33"), (-7, 2.5, "-4.5")])
+def test_a_workflow_figure_with_its_sign_kept_is_credited_with_its_step(monkeypatch, level, rise, new):
+    conv = f"wf-kept-{rise}"
+    run_workflow = _level_workflow(monkeypatch, f"The formation level is {level} m.")
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call(run_workflow, {"workflow": "survey_levels"}, "c0")]},
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The new level is {new} m."},
+    ])
+    shown = _text(_run(user_message=f"Read the formation level and raise it by {rise} m. What is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    assert f"{new} m" in shown and "incomplete" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["calculator", "user"]
+    assert [f for f in row["figures"] if f.get("step") == "s1"]
+
+
+# --- a given written before its passage is fetched is checked again before the step runs ---
+
+@pytest.mark.parametrize("depth,add,total", [(7.25, 2, "9.25"), (13.5, 2, "15.5")])
+def test_a_given_written_before_its_passage_is_marked_when_the_step_runs(monkeypatch, depth, add, total):
+    from app.agents.runtime import Agent
+
+    conv = f"late-passage-{depth}"
+
+    async def found(self, call, api_key=None, project_id=None, conversation_id=None, **kw):
+        return {"ok": True, "result": {"results": [{"text": f"Pile cap depth is {depth} m.",
+                                                     "doc_name": "drawing.pdf", "page": 4}]}}
+
+    monkeypatch.setattr(Agent, "_run_tool_call", found)
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": depth, "unit": "m"}, {"id": "g2", "value": add, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("search_project_documents", {"query": "pile cap depth"}, "c2")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c3")]},
+        {"content": f"The depth with the blinding is {total} m."},
+    ])
+    shown = _text(_run(user_message=f"Add {add} m of blinding to the pile cap depth on the drawing.",
+                       conversation_id=conv, project_id="late-passage-proj", sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["passage", "user"]
+    assert f"{total} m" in shown
+
+
+@pytest.mark.parametrize("level,rise,said,credited", [
+    (-43, 10, "-33 m", True),      # as code wrote it
+    (-43, 10, "33 m", False),      # the minus dropped in the reply
+    (43, 10, "53 m", True),
+    (43, 10, "-53 m", False),      # a minus code never wrote
+])
+def test_a_step_result_is_credited_to_its_step_only_with_the_sign_code_wrote(monkeypatch, level, rise, said, credited):
+    conv = f"sign-{level}-{said}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The new level is {said}."},
+    ])
+    _run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+         conversation_id=conv, sheet_mode=True)
+    row = trace_store.records(_today(), conv)[0]
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(level + rise)]
+    assert bool([f for f in row["figures"] if f.get("step") == "s1"]) is credited
+

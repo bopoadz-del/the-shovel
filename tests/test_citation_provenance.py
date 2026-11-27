@@ -506,3 +506,112 @@ def test_given_pools_take_user_numbers_produced_numbers_and_passages(produced, n
     pool, passages = _given_pools(ev, produced)
     assert _given_to_us(67.0, pool, passages) is True
     assert _given_to_us(number, pool, passages) is expected
+
+
+# --- a given is held to the QUANTITY that was written, not to its number alone ---
+
+@pytest.mark.parametrize("text,quantities", [
+    ("A trench is 12 m long, 3 m wide and 2 m deep.", [(12.0, "m"), (3.0, "m"), (2.0, "m")]),
+    ("The formation level is -43 m. Raise it by 10 m: what now?", [(-43.0, "m"), (10.0, "m")]),
+    ("The depth is 2.5 m, not 2 m.", [(2.5, "m"), (2.0, "m")]),
+    ("12mm bars at 200 thick, 5% waste, 20 kN/m2", [(12.0, "mm"), (200.0, ""), (5.0, "%"), (20.0, "kN/m2"), (2.0, None)]),
+    ("cost at 67 per m3, then 1,250 m3", [(67.0, ""), (3.0, None), (1250.0, "m3"), (3.0, None)]),
+    ("grade M25 on grid B-12, 7 working days", [(25.0, ""), (12.0, ""), (7.0, "working days")]),
+    ("no figure here", []), ("", []), (None, []),
+])
+def test_given_quantities_reads_each_figure_with_the_unit_written_after_it(text, quantities):
+    from app.agents.citation_provenance import _given_figures, _given_quantities
+
+    assert _given_quantities(text) == quantities
+    # the same figures, in the same order, as the number reader gives
+    assert [n for n, _unit in _given_quantities(text)] == _given_figures(text)
+
+
+@pytest.mark.parametrize("unit,kind", [
+    ("m", ("length", 1.0)), ("mm", ("length", 0.001)), ("km", ("length", 1000.0)), ("m3", ("volume", 1.0)),
+    ("", None), (None, None), ("long", None), ("per m3", None),
+    ("working days", None),     # needs a calendar to convert: the number check alone
+])
+def test_unit_kind_is_the_kind_and_scale_of_a_unit_a_scale_alone_converts(unit, kind):
+    from app.agents.citation_provenance import _unit_kind
+
+    assert _unit_kind(unit) == kind
+
+
+_TRENCH = "A trench is 12 m long, 3 m wide and 2 m deep. The rate is 67 per m3 and the slab is 200 thick."
+
+
+@pytest.mark.parametrize("number,unit,expected", [
+    (12.0, "m", "user"),          # as written
+    (12000.0, "mm", "user"),      # the same quantity in another unit
+    (0.012, "km", "user"),
+    (12.0, "", "user"),           # a bare number: the number check, as before
+    (12.0, "mm", ""),             # the unit changed: 12 mm is not what the user wrote
+    (12.0, "km", ""),
+    (12000.0, "m", ""),           # the number rescaled under the same unit
+    (2.0, "mm", ""), (3.0, "cm", ""),
+    (12.0, "m2", ""),             # written as a length, used as an area
+    (3.0, "m3", ""),              # the 3 of "per m3" is no figure anyone gave
+    (67.0, "currency", "user"),   # written bare: the unit is a reading of it
+    (200.0, "mm", "user"), (200.0, "m", "user"),
+    (4321.0, "m", ""), (4321.0, "", ""),
+])
+def test_given_check_holds_a_given_with_a_unit_to_the_quantity_the_user_wrote(number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": _TRENCH}])(number, unit) == expected
+
+
+@pytest.mark.parametrize("message,number,unit,expected", [
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "m", "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", 43.0, "m", ""),
+    ("The formation level is -43 m. Raise it by 10 m.", -43000.0, "mm", "user"),
+    ("The formation level is -43 m. Raise it by 10 m.", -43.0, "mm", ""),
+    ("Two small bars, 1 mm and 2 mm.", 1.0, "mm", "user"),
+    ("Two small bars, 1 mm and 2 mm.", 1.5, "mm", ""),      # close in metres, not the same quantity
+    ("Two small bars, 1 mm and 2 mm.", 0.001, "m", "user"),
+])
+def test_a_quantity_is_compared_at_the_givens_own_scale_with_its_sign(message, number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number, unit) == expected
+
+
+@pytest.mark.parametrize("number,unit,users,tools,passages,expected", [
+    (5.0, "m", [], [(5.0, "")], [], True),                  # a calculator's bare result, read as metres
+    (5.0, "m", [], [(5.0, "mm")], [], False),               # a workflow wrote 5 mm
+    (5000.0, "mm", [], [(5.0, "m")], [], True),
+    (7.25, "m", [], [], [[(7.25, "m")]], True),             # a passage wrote it
+    (7.25, "mm", [], [], [[(7.25, "m")]], False),
+    (7.25, "m", [], [], [[(7.25, "")]], True),
+    (7.25, "m", [], [], [[(7.25, None)]], False),           # a digit inside a unit gives nothing
+    (7.25, "", [(7.25, "m")], [], [], True),                # no unit on the given: the number check
+    (-7.25, "", [(7.25, "m")], [], [], False),
+])
+def test_quantity_given_over_users_tools_and_passages(number, unit, users, tools, passages, expected):
+    from app.agents.citation_provenance import _quantity_given
+
+    assert _quantity_given(number, unit, users, tools, passages) is expected
+
+
+@pytest.mark.parametrize("answer,number,unit,expected", [
+    ("The formation level is -43 m.", -43.0, "m", "calculator"),
+    ("The formation level is -43 m.", 43.0, "m", ""),          # the sign turned
+    ("The formation level is -43 m.", 43.0, "", ""),
+    ("The formation level is -43 m.", -43.0, "", "calculator"),
+    ("Cut depth -7 m at chainage 120.", -7.0, "m", "calculator"),
+    ("Cut depth -7 m at chainage 120.", 7.0, "m", ""),
+])
+def test_a_workflows_answer_is_read_with_its_signs_for_the_given_check(answer, number, unit, expected):
+    import json
+
+    from app.agents.citation_provenance import given_check
+
+    messages = [
+        {"role": "user", "content": "What is the level?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1",
+         "content": json.dumps({"ok": True, "workflow": "survey_levels", "answer": answer})},
+    ]
+    assert given_check(messages)(number, unit) == expected

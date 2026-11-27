@@ -354,7 +354,8 @@ def mark_given(sheet: Dict[str, Any], is_given: Any) -> Dict[str, Any]:
     out = copy.deepcopy(sheet)
     for given in out.get("givens") or []:
         number = _number(given.get("value"))
-        by = is_given(number) if number is not None and not given.get("checked") else ""
+        by = (is_given(number, str(given.get("unit") or ""))
+              if number is not None and not given.get("checked") else "")
         if by:
             given["checked"] = by if isinstance(by, str) else True
     return out
@@ -370,16 +371,22 @@ def user_givens(sheet: Any) -> List[float]:
 
 
 def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
-    """The numbers a step's result rests on that nothing has checked yet:
-    the value of every given it reads that code has not marked ``checked``
-    (``mark_given``) and every number written in the plan itself, followed
-    back through the earlier steps it reads. The model wrote each of them,
-    so a result is only as sourced as these are; who reads this list checks
-    each one against what the user and the tools gave. Read from the plan's
-    own inputs and nothing else."""
+    """The numbers of ``rests_quantities``, without their units."""
+    return [number for number, _unit in rests_quantities(sheet, step_id)]
+
+
+def rests_quantities(sheet: Dict[str, Any], step_id: str) -> List[Tuple[float, str]]:
+    """The quantities a step's result rests on that nothing has checked yet,
+    each as (number, unit): every given it reads that code has not marked
+    ``checked`` (``mark_given``), with the unit the model wrote on it, and
+    every quantity written in the plan itself, followed back through the
+    earlier steps it reads. The model wrote each of them, so a result is
+    only as sourced as these are; who reads this list checks each one --
+    number and unit -- against what the user and the tools gave. Read from
+    the plan's own inputs and nothing else."""
     plan = {p.get("id"): p for p in sheet.get("plan") or [] if isinstance(p, dict)}
     givens = {g.get("id"): g for g in sheet.get("givens") or [] if isinstance(g, dict)}
-    found: List[float] = []
+    found: List[Tuple[float, str]] = []
     seen: set = set()
     frontier = [step_id]
     while frontier:
@@ -394,13 +401,14 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
                 given = givens.get(ref) or {}
                 number = _number(given.get("value"))
                 if number is not None and not given.get("checked"):
-                    found.append(number)
+                    found.append((number, str(given.get("unit") or "")))
             else:
                 # A literal the reader below finds no number in, while the
                 # formula ran on one, is taken as the formula ran it: the
                 # check never reads less than the step did.
                 ran = ((_step(sheet, sid) or {}).get("inputs") or {}).get(name)
-                found.extend(written_numbers(ref) or _ran_numbers(ran))
+                read = written_quantities(ref) if written_numbers(ref) else []
+                found.extend(read or [(n, "") for n in _ran_numbers(ran)])
     return found
 
 
@@ -412,27 +420,39 @@ def _ran_numbers(value: Any) -> List[float]:
 
 
 def written_numbers(literal: Any) -> List[float]:
-    """Every number a plan literal carries, read by the formula registry's
-    own readers: a bare number, a quantity written as text ("43 m", "-7",
-    ".5 m", "AED 5,000"), a ``{"value": ..., "unit": ...}`` object, a list
-    of any of these. Text that carries no number (an operator, a named
-    option) and a flag carry none."""
+    """The numbers of ``written_quantities``, without their units."""
+    return [number for number, _unit in written_quantities(literal)]
+
+
+def written_quantities(literal: Any) -> List[Tuple[float, str]]:
+    """Every quantity a plan literal carries, as (number, unit), read by the
+    formula registry's own readers: a bare number, a quantity written as
+    text ("43 m", "-7", ".5 m", "AED 5,000"), a ``{"value": ..., "unit":
+    ...}`` object, a list of any of these. The unit is "" where none is
+    written. Text that carries no number (an operator, a named option) and
+    a flag carry none."""
     from app.lib import formula_registry
 
     if isinstance(literal, (int, float)):  # a flag is no number: _number refuses it
         number = _number(literal)
-        return [] if number is None else [number]
+        return [] if number is None else [(number, "")]
     if isinstance(literal, str):
         number = _number(literal)
-        if number is None:
-            with_unit = formula_registry.value_and_unit(literal)
-            lead = re.match(rf"\s*({formula_registry.SIGNED_NUMBER})", literal)
-            number = with_unit[0] if with_unit else _number(lead.group(1).replace(",", "")) if lead else None
-        return [] if number is None else [number]
+        if number is not None:
+            return [(number, "")]
+        with_unit = formula_registry.value_and_unit(literal)
+        if with_unit:
+            return [(with_unit[0], str(with_unit[1] or ""))]
+        lead = re.match(rf"\s*({formula_registry.SIGNED_NUMBER})", literal)
+        number = _number(lead.group(1).replace(",", "")) if lead else None
+        return [] if number is None else [(number, "")]
     if isinstance(literal, dict):
-        return [n for value in literal.values() for n in written_numbers(value)]
+        with_unit = formula_registry.value_and_unit(literal)
+        if with_unit:
+            return [(with_unit[0], str(with_unit[1] or ""))]
+        return [q for value in literal.values() for q in written_quantities(value)]
     if isinstance(literal, (list, tuple)):
-        return [n for value in literal for n in written_numbers(value)]
+        return [q for value in literal for q in written_quantities(value)]
     return []
 
 

@@ -593,7 +593,7 @@ def test_code_marks_a_given_checked_and_only_an_unchanged_one_keeps_the_mark(a, 
                    {"id": "g2", "value": b, "unit": "m"}],
         "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]})
     assert problems == [] and not any(g.get("checked") for g in s["givens"])
-    marked = ws.mark_given(s, lambda number: number == float(a))
+    marked = ws.mark_given(s, lambda number, unit: number == float(a))
     assert [g.get("checked") for g in marked["givens"]] == [True, None]
     assert not any(g.get("checked") for g in s["givens"])  # the sheet passed in is not changed
     assert ws.rests_on(marked, "s1") == [float(b)]         # the checked given is no longer open
@@ -612,7 +612,7 @@ def test_code_marks_a_given_checked_and_only_an_unchanged_one_keeps_the_mark(a, 
 def test_user_givens_are_the_givens_code_marked_as_the_users_own(by, kept):
     s, _ = ws.apply_update(ws.new_sheet("t1", "q"), {"givens": [{"id": "g1", "value": 40, "unit": "m"},
                                                                 {"id": "g2", "value": 3, "unit": "m"}]})
-    marked = ws.mark_given(s, lambda number: by if number == 40.0 else "")
+    marked = ws.mark_given(s, lambda number, unit: by if number == 40.0 else "")
     assert marked["givens"][0].get("checked") == by and marked["givens"][1].get("checked") is None
     assert ws.user_givens(marked) == kept
     assert ws.user_givens(None) == [] and ws.user_givens({"givens": ["g1"]}) == []
@@ -661,3 +661,48 @@ def test_a_result_rests_on_numbers_written_in_the_plan_as_text_or_as_objects(a, 
     assert problems == []
     assert sorted(ws.rests_on(work, "s1")) == sorted(ws.written_numbers(a) + ws.written_numbers(b))
     assert len(ws.rests_on(work, "s1")) == 2
+
+
+# --- the plan's own quantities keep the unit they were written with ---
+
+@pytest.mark.parametrize("literal,expected", [
+    (43, [(43.0, "")]), ("43 m", [(43.0, "m")]), ("12 mm", [(12.0, "mm")]), ("12.5m", [(12.5, "m")]),
+    (" -7.5 m", [(-7.5, "m")]), ("-7", [(-7.0, "")]), ("1,250 m3", [(1250.0, "m3")]),
+    ({"value": 4321, "unit": "m3"}, [(4321.0, "m3")]), ({"value": 12, "unit": "mm"}, [(12.0, "mm")]),
+    ({"value": "987.5 m2"}, [(987.5, "m2")]), ({"value": 5}, [(5.0, "")]),
+    ([3, "4 m", {"value": 5, "unit": "kg"}], [(3.0, ""), (4.0, "m"), (5.0, "kg")]),
+    ("add", []), ("m 43", []), (True, []), (None, []), ({"unit": "m"}, []),
+])
+def test_written_quantities_reads_each_number_with_the_unit_written_on_it(literal, expected):
+    assert ws.written_quantities(literal) == expected
+    assert ws.written_numbers(literal) == [number for number, _unit in expected]
+
+
+@pytest.mark.parametrize("unit_a,literal,expected", [
+    ("m", "3 m", [(12.0, "m"), (3.0, "m"), (2.0, "")]),
+    ("mm", {"value": 3, "unit": "cm"}, [(12.0, "mm"), (3.0, "cm"), (2.0, "")]),
+])
+def test_what_a_step_rests_on_keeps_each_unit_the_model_wrote(unit_a, literal, expected):
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": 12, "unit": unit_a}],
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": "g1", "width_m": literal, "depth_m": 2}}]})
+    assert problems == []
+    assert sorted(ws.rests_quantities(work, "s1")) == sorted(expected)
+    assert sorted(ws.rests_on(work, "s1")) == sorted(number for number, _unit in expected)
+
+
+@pytest.mark.parametrize("unit", ["m", "mm", "-"])     # "-" is how a pure number is written on the sheet
+def test_the_check_a_given_is_marked_with_receives_its_unit(unit):
+    s, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": 12, "unit": unit}]})
+    assert problems == []
+    asked = []
+
+    def check(number, written_unit):
+        asked.append((number, written_unit))
+        return "user" if written_unit == "m" else ""
+
+    marked = ws.mark_given(s, check)
+    assert asked == [(12.0, unit)]
+    assert [g.get("checked") for g in marked["givens"]] == (["user"] if unit == "m" else [None])
