@@ -284,6 +284,36 @@ def test_every_memory_call_is_in_the_turns_trace(client, monkeypatch, caplog, na
     assert all(t["turn"].endswith("#1") for t in traces)
 
 
+@pytest.mark.parametrize("stated", [None, "not a dict", ["a", "list"]])
+def test_a_call_whose_tool_states_no_trace_keeps_the_records_shape(monkeypatch, caplog, stated):
+    """Only a tool that states its own trace dict adds a "trace" key to the
+    turn's call record; any other result leaves the record's keys as before."""
+    from tests.lane5_core_support import call, drive, install_driver_stream
+    from app.agents.runtime import Agent
+
+    install_driver_stream(monkeypatch)
+    given = {"memory": "list", "name": None, "bytes": 3, "turn": "t#1", "ok": True}
+    results = {"stated_tool": {"ok": True, "trace": given}, "plain_tool": {"ok": True}}
+    if stated is not None:
+        results["plain_tool"]["trace"] = stated
+
+    async def fake_run_tool_call(self, tool_call, *a, **k):
+        return results[tool_call["function"]["name"]]
+
+    monkeypatch.setattr(Agent, "_run_tool_call", fake_run_tool_call)
+    with caplog.at_level(logging.INFO, logger="app.agents.driver.loop"):
+        drive(monkeypatch, "go", [
+            {"content": "", "tool_calls": [call("plain_tool", {}, "p1"), call("stated_tool", {}, "s1")]},
+            {"content": "Done."},
+        ])
+    lines = [m for m in caplog.messages if m.startswith("DRIVER_TURN ")]
+    calls = json.loads(lines[-1][len("DRIVER_TURN "):])["steps"][0]["calls"]
+    by_tool = {c["tool"]: c for c in calls}
+    assert "trace" not in by_tool["plain_tool"]
+    assert by_tool["stated_tool"]["trace"] == given
+    assert set(by_tool["stated_tool"]) - set(by_tool["plain_tool"]) == {"trace"}
+
+
 @pytest.mark.parametrize("name,data", NOTES)
 def test_the_admin_endpoint_lists_a_projects_notes(client, monkeypatch, name, data):
     h = _user(client, "adm")

@@ -492,17 +492,20 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             # text copied into the answer, for the errors this turn recorded.
             from app.agents import answer_exit
             answer_exit.note_tool_result(name, result_of_call)
-            trace[-1]["calls"].append({
+            call_record = {
                 "tool": name, "workflow": args.get("workflow") if name == routes.RUN_WORKFLOW else None,
                 "calculation": args.get("calculation") if name == "construction_calc" else None,
-                # What the tool itself states for the trace record (e.g. a
-                # memory note's operation, name, size and turn), as given.
-                "trace": result_of_call.get("trace") if isinstance(result_of_call.get("trace"), dict) else None,
                 "ok": ok, "missing": bool(result_of_call.get("missing") or result_of_call.get("needs_input")),
                 # A calculator's own verdict: success, or needs_input and which inputs.
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
-            })
+            }
+            # What the tool itself states for the trace record (e.g. a memory
+            # note's operation, name, size and turn), as given. A tool that
+            # states nothing leaves the record's shape as it was.
+            if isinstance(result_of_call.get("trace"), dict):
+                call_record["trace"] = result_of_call["trace"]
+            trace[-1]["calls"].append(call_record)
             if name != tools.SELECT_HAT:
                 if ok:
                     succeeded = True
