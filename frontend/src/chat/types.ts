@@ -73,8 +73,6 @@ export interface ChatMessage {
   /** The final working sheet of a catalogue-path turn (SSE 'end'); shown
    *  folded under the answer by ShowWorking, never merged into its text. */
   sheet?: unknown
-  /** Figure provenance from the SSE 'end' event (code's sources). */
-  provenance?: unknown
   /** trace/1 ending of a catalogue-path turn: answer | asked_input | ceiling. */
   ended?: string
 }

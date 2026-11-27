@@ -2,8 +2,9 @@
 
 The built UI talks to a real uvicorn (sign-in, project, sessions). Only the
 model turn is replaced: ``/v1/chat/stream`` answers with a recorded SSE
-``end`` event in the shape the driver sends on the catalogue path (``sheet``,
-``ended``, ``provenance``). Two recorded sheets of different shape: a
+``end`` event of the catalogue path. The two recordings are REAL end events
+of ``loop.stream`` (tests/test_driver_catalogue_path.py::
+test_the_panel_fixtures_are_real_end_events re-runs them and compares): a
 three-step chain that finished, and a chain that stopped on a missing input.
 A third turn carries no sheet and must show no panel.
 
@@ -61,20 +62,12 @@ def _send(page: Page, text: str) -> None:
     expect(box).to_be_enabled(timeout=30_000)
 
 
-def _number(figure: str):
-    m = re.match(r"\s*(-?[\d,]*\.?\d+)", figure)
-    return float(m.group(1).replace(",", "")) if m else None
-
-
 def _expected(turn: dict) -> dict:
     sheet = turn["sheet"]
     by_id = {s["id"]: s for s in sheet["steps"]}
     statuses = [by_id.get(p["id"], {}).get("status", "not_run") for p in sheet["plan"]]
-    sourced = {
-        g["id"] for g in sheet["givens"]
-        if any(_number(p["figure"]) == float(g["value"]) and p.get("source") not in ("", "unresolved")
-               for p in turn.get("provenance", []))
-    }
+    # The source shown is code's own check on the given, nothing else.
+    checked = [g for g in sheet["givens"] if g.get("checked")]
     return {
         "statuses": statuses,
         "results": [by_id[p["id"]]["result"] for p in sheet["plan"]
@@ -82,8 +75,8 @@ def _expected(turn: dict) -> dict:
         "needs": [n for s in sheet["steps"] for n in s.get("needs", [])],
         "missing": [m["label"] for m in sheet["missing"]],
         "givens": len(sheet["givens"]),
-        "unsourced": len(sheet["givens"]) - len(sourced),
-        "docs": [p["doc_name"] for p in turn.get("provenance", []) if p.get("doc_name")],
+        "unchecked": len(sheet["givens"]) - len(checked),
+        "user": [g["what"] for g in checked if g["checked"] == "user"],
     }
 
 
@@ -131,13 +124,19 @@ def test_the_working_sheet_folds_under_the_answer(page: Page, live_app, width):
         for label in want["missing"]:
             expect(panel.locator("[data-testid=sw-missing]").filter(has_text=label)).to_have_count(1)
         expect(panel.locator("[data-testid=sw-given]")).to_have_count(want["givens"])
-        for doc in want["docs"]:
-            expect(panel.locator("[data-testid=sw-given]").filter(has_text=doc)).to_have_count(1)
+        # A figure the user typed is shown as theirs, never as "no source".
+        for what in want["user"]:
+            expect(panel.locator("[data-testid=sw-given]").filter(has_text=what)).to_contain_text("from your words")
+        expect(panel.locator("[data-testid=sw-given]").filter(has_text="not checked")).to_have_count(
+            want["unchecked"])
         ending = panel.locator("[data-testid=sw-ending]")
-        if want["unsourced"]:
-            expect(ending).to_contain_text(f"{want['unsourced']} given")
+        if want["unchecked"]:
+            expect(ending).to_contain_text(f"{want['unchecked']} given")
         else:
-            expect(ending).to_contain_text("every given has a source")
+            expect(ending).to_contain_text("every given was checked")
+        # No internal id (g1, s2) and no underscore name reaches the screen.
+        shown = panel.inner_text()
+        assert not re.search(r"\b[gs]\d+\b", shown) and "_" not in shown, shown
 
         # Fits the screen: nothing in the open panel runs past the viewport.
         overflow = panel.evaluate(

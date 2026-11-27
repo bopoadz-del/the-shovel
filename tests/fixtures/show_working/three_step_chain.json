@@ -1,27 +1,141 @@
 {
-  "_note": "A recorded SSE 'end' event of a catalogue-path turn, in the shape app/agents/driver/loop.py sends (sheet + ended + provenance). Every value is invented.",
-  "content": "The slab needs 39.69 m3 of concrete including the allowance.",
+  "_note": "The SSE 'end' event of a real catalogue-path turn (app.agents.driver.loop.stream, scripted model): a three-step chain the user gave every figure for. Recorded by tests/test_driver_catalogue_path.py::test_the_panel_fixtures_are_real_end_events, which re-runs the turn and compares. The turn and conversation ids in it are the recording's own.",
+  "content": "The painted area is 100.8 m2.",
   "ended": "answer",
   "provenance": [
-    {"figure": "9 m", "source": "user_input"},
-    {"figure": "3.5 m", "source": "project_document", "doc_name": "Drawing set B", "page_or_section": "p. 3"},
-    {"figure": "39.69 m3", "source": "calculator"}
+    {
+      "figure": "100.8 m2",
+      "source": "calculator",
+      "formula": "formula:arithmetic_step",
+      "inputs": {},
+      "step": "s3",
+      "unit": "m*m*nr*nr"
+    }
   ],
   "sheet": {
+    "turn": "ws-rec-1@1795807811728",
+    "question": "each wall is 12 m long and 0.6 m high and there are 7 walls with 2 coats; what area do I paint",
     "givens": [
-      {"id": "g1", "what": "length", "value": 9, "unit": "m", "source": "user"},
-      {"id": "g2", "what": "width", "value": 3.5, "unit": "m", "source": "document"},
-      {"id": "g3", "what": "thickness", "value": 1.2, "unit": "m", "source": "user"}
+      {
+        "id": "g1",
+        "what": "wall length",
+        "value": 12.0,
+        "unit": "m",
+        "source": "user",
+        "checked": "user"
+      },
+      {
+        "id": "g2",
+        "what": "wall height",
+        "value": 0.6,
+        "unit": "m",
+        "source": "user",
+        "checked": "user"
+      },
+      {
+        "id": "g3",
+        "what": "walls",
+        "value": 7.0,
+        "unit": "nr",
+        "source": "user",
+        "checked": "user"
+      },
+      {
+        "id": "g4",
+        "what": "coats",
+        "value": 2.0,
+        "unit": "nr",
+        "source": "spec",
+        "checked": "user"
+      }
     ],
     "plan": [
-      {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"a": "g1", "b": "g2", "op": "multiply"}},
-      {"id": "s2", "entry": "formula:arithmetic_step", "inputs": {"a": "s1", "b": "g3", "op": "multiply"}},
-      {"id": "s3", "entry": "formula:arithmetic_step", "inputs": {"a": "s2", "b": 1.05, "op": "multiply"}}
+      {
+        "id": "s1",
+        "entry": "formula:arithmetic_step",
+        "inputs": {
+          "operator": "multiply",
+          "a": "g1",
+          "b": "g2"
+        }
+      },
+      {
+        "id": "s2",
+        "entry": "formula:arithmetic_step",
+        "inputs": {
+          "operator": "multiply",
+          "a": "s1",
+          "b": "g3"
+        }
+      },
+      {
+        "id": "s3",
+        "entry": "formula:arithmetic_step",
+        "inputs": {
+          "operator": "multiply",
+          "a": "s2",
+          "b": "g4"
+        }
+      }
     ],
     "steps": [
-      {"id": "s1", "status": "done", "result": {"name": "result", "value": 31.5, "unit": "m2"}},
-      {"id": "s2", "status": "done", "result": {"name": "result", "value": 37.8, "unit": "m3"}},
-      {"id": "s3", "status": "done", "result": {"name": "result", "value": 39.690000000000005, "unit": "m3"}}
+      {
+        "id": "s1",
+        "call_id": "c2",
+        "entry": "formula:arithmetic_step",
+        "status": "done",
+        "result": {
+          "name": "result",
+          "value": 7.2,
+          "unit": "m*m"
+        },
+        "inputs": {
+          "operator": "multiply",
+          "a": 12.0,
+          "b": 0.6,
+          "a_unit": "m",
+          "b_unit": "m"
+        },
+        "method": "12 m * 0.6 m = 7.2 m*m"
+      },
+      {
+        "id": "s2",
+        "call_id": "c3",
+        "entry": "formula:arithmetic_step",
+        "status": "done",
+        "result": {
+          "name": "result",
+          "value": 50.4,
+          "unit": "m*m*nr"
+        },
+        "inputs": {
+          "operator": "multiply",
+          "a": 7.2,
+          "b": 7.0,
+          "a_unit": "m*m",
+          "b_unit": "nr"
+        },
+        "method": "7.2 m*m * 7 nr = 50.4 m*m*nr"
+      },
+      {
+        "id": "s3",
+        "call_id": "c4",
+        "entry": "formula:arithmetic_step",
+        "status": "done",
+        "result": {
+          "name": "result",
+          "value": 100.8,
+          "unit": "m*m*nr*nr"
+        },
+        "inputs": {
+          "operator": "multiply",
+          "a": 50.4,
+          "b": 2.0,
+          "a_unit": "m*m*nr",
+          "b_unit": "nr"
+        },
+        "method": "50.4 m*m*nr * 2 nr = 100.8 m*m*nr*nr"
+      }
     ],
     "missing": [],
     "done": true

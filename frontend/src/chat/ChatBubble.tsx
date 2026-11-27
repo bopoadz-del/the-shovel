@@ -120,7 +120,7 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
         {/* The working sheet of a catalogue-path turn, folded under the
             answer: display only, the answer text above is untouched. */}
         {!isUser && !message.streaming && message.sheet !== undefined && (
-          <ShowWorking sheet={message.sheet} provenance={message.provenance} ended={message.ended} />
+          <ShowWorking sheet={message.sheet} ended={message.ended} />
         )}
 
         {detailsMarkdown && !message.streaming && (

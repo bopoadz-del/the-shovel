@@ -1,120 +1,152 @@
 // node --test src/chat/workingSheet.test.mjs
-// The display view of a working sheet. Two sheet shapes, every value invented:
-// a three-step chain that finished, and a chain that stopped on a missing
-// input. One view for both: nothing here names a formula or a project.
+// The display view of a working sheet. The first two tests read REAL end
+// events of the catalogue path (tests/fixtures/show_working, re-run and
+// compared by tests/test_driver_catalogue_path.py::
+// test_the_panel_fixtures_are_real_end_events): a three-step chain that
+// finished, and a chain that stopped on a missing input. The rest build
+// their own sheets, two inputs each. Nothing here names a formula or a
+// project.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { endingWords, entryWords, figureNumber, givenSource, readSheet, showNumber, workingView } from './workingSheet.js'
+import { checkedWord, endingWords, entryWords, givenSource, readSheet, showNumber, workingView } from './workingSheet.js'
 
-const CHAIN = {
-  givens: [
-    { id: 'g1', what: 'length', value: 12, unit: 'm', source: 'user' },
-    { id: 'g2', what: 'width', value: 0.6, unit: 'm', source: 'user' },
-    { id: 'g3', what: 'count', value: 7, unit: 'nr', source: 'bill' },
-  ],
-  plan: [
-    { id: 's1', entry: 'formula:arithmetic_step', inputs: { a: 'g1', b: 'g2', op: 'multiply' } },
-    { id: 's2', entry: 'formula:arithmetic_step', inputs: { a: 's1', b: 'g3', op: 'multiply' } },
-    { id: 's3', entry: 'formula:arithmetic_step', inputs: { a: 's2', b: 1.05, op: 'multiply' } },
-  ],
-  steps: [
-    { id: 's1', status: 'done', result: { name: 'result', value: 7.2, unit: 'm2' } },
-    { id: 's2', status: 'done', result: { name: 'result', value: 50.4, unit: 'm2' } },
-    { id: 's3', status: 'done', result: { name: 'result', value: 52.92000000000001, unit: 'm2' } },
-  ],
-  missing: [],
-  done: true,
+const FIXTURES = new URL('../../../tests/fixtures/show_working/', import.meta.url)
+const recorded = (name) => JSON.parse(readFileSync(new URL(name, FIXTURES), 'utf8'))
+
+// What the screen shows of a view: every label and source word, no keys.
+function shownWords(v) {
+  return [
+    ...v.givens.flatMap((g) => [g.what, g.source]),
+    ...v.steps.flatMap((s) => [s.label, s.tool, ...s.needs, ...s.inputs.flatMap((i) => [i.name, i.from])]),
+    ...v.missing.flatMap((m) => [m.label, m.for]),
+  ].join(' | ')
 }
 
-const STOPPED = {
-  givens: [{ id: 'g1', what: 'depth', value: 2.5, unit: 'm', source: 'user' }],
-  plan: [
-    { id: 's1', entry: 'formula:trench_volume', inputs: { depth: 'g1' } },
-    { id: 's2', entry: 'formula:arithmetic_step', inputs: { a: 's1', b: 3, op: 'multiply' } },
-  ],
-  steps: [{ id: 's1', status: 'waiting_input', needs: ['Trench length', 'Trench width'] }],
-  missing: [{ for: 's1', input: 'length', label: 'Trench length', asked: true }],
-  done: false,
-}
-
-const PROV_CHAIN = [
-  { figure: '12 m', source: 'user_input' },
-  { figure: '7 nr', source: 'project_document', doc_name: 'Bill 2', page_or_section: 'p. 14' },
-  { figure: '52.92 m2', source: 'calculator' },
-]
-
-test('three-step chain: every step in plan order with its tool, inputs and result', () => {
-  const v = workingView(CHAIN, PROV_CHAIN)
-  assert.deepEqual(v.steps.map((s) => s.id), ['s1', 's2', 's3'])
+test('real chain end event: steps in plan order, results resolved, every typed given from your words', () => {
+  const turn = recorded('three_step_chain.json')
+  const v = workingView(turn.sheet)
+  assert.deepEqual(v.steps.map((s) => s.label), ['step 1', 'step 2', 'step 3'])
   assert.deepEqual(v.steps.map((s) => s.status), ['done', 'done', 'done'])
-  assert.equal(v.steps[0].tool, 'arithmetic step')
-  assert.deepEqual(v.steps.map((s) => s.result.value), [7.2, 50.4, 52.92000000000001])
-  // s2's first input is s1's result, resolved from the sheet, not re-typed
-  assert.deepEqual(v.steps[1].inputs[0], { name: 'a', ref: 's1', value: 7.2, unit: 'm2' })
-  // a literal input is passed as written, with no reference
-  assert.deepEqual(v.steps[2].inputs[1], { name: 'b', ref: '', value: 1.05, unit: '' })
-  assert.equal(v.done, true)
-  assert.deepEqual(v.missing, [])
+  assert.deepEqual(v.steps.map((s) => s.result.value), [7.2, 50.4, 100.8])
+  // step 2 reads step 1's result, resolved from the sheet and named by place
+  assert.deepEqual(v.steps[1].inputs[1], { name: 'a', from: 'step 1', value: 7.2, unit: 'm*m' })
+  assert.deepEqual(v.steps[0].inputs[1], { name: 'a', from: 'wall length', value: 12, unit: 'm' })
+  // the user typed every figure: code marked each "user", none is unchecked
+  assert.deepEqual(v.givens.map((g) => g.source), ['your words', 'your words', 'your words', 'your words'])
+  assert.equal(v.unchecked, 0)
+  assert.equal(endingWords(turn.ended), 'answered')
 })
 
-test('stopped chain: the waiting step names its needs, no result is shown, missing listed', () => {
-  const v = workingView(STOPPED, [])
+test('real stopped end event: the waiting step names its needs, the model-written given is not checked', () => {
+  const turn = recorded('stopped_on_missing_input.json')
+  const v = workingView(turn.sheet)
   assert.deepEqual(v.steps.map((s) => s.status), ['waiting_input', 'not_run'])
-  assert.equal(v.steps[0].result, null)
-  assert.deepEqual(v.steps[0].needs, ['Trench length', 'Trench width'])
-  assert.equal(v.steps[1].result, null)
-  // s2 reads s1, which has no result: shown as not available, never a number
-  assert.deepEqual(v.steps[1].inputs[0], { name: 'a', ref: 's1', missing: true })
-  assert.deepEqual(v.missing, [{ for: 's1', label: 'Trench length' }])
-  assert.equal(v.done, false)
+  assert.deepEqual(v.steps.map((s) => s.result), [null, null])
+  assert.deepEqual(v.steps[0].needs, ['second value'])
+  // step 2 reads step 1, which has no result: not available, never a number
+  assert.deepEqual(v.steps[1].inputs[1], { name: 'a', from: 'step 1', missing: true })
+  assert.deepEqual(v.missing, [{ for: 'step 1', label: 'pit plan area' }])
+  // the model labelled the bulking factor "general knowledge"; code did not check it
+  assert.deepEqual(v.givens.map((g) => [g.what, g.source]), [['pit depth', 'your words'], ['bulking factor', '']])
+  assert.equal(v.unchecked, 1)
+  assert.equal(endingWords(turn.ended), 'asked you for an input')
 })
 
-test('a failed step shows its reason and never a figure, even if a result is present', () => {
-  const sheet = { ...STOPPED, steps: [{ id: 's1', status: 'failed', error: 'depth: out of range', result: { value: 9, unit: 'm3' } }] }
-  const v = workingView(sheet, [])
-  assert.equal(v.steps[0].result, null)
-  assert.equal(v.steps[0].error, 'depth: out of range')
-  const other = workingView({ ...sheet, steps: [{ id: 's1', status: 'failed', error: 'no output' }] }, [])
-  assert.equal(other.steps[0].error, 'no output')
-})
-
-test("a given's source is code's provenance match, never the model's own label", () => {
-  const v = workingView(CHAIN, PROV_CHAIN)
-  assert.deepEqual(v.givens.map((g) => g.source), ['your words', '', 'project document (Bill 2, p. 14)'])
-  assert.equal(v.unsourced, 1)
-  // the model labelled g3 'bill' and g1 'user': with no provenance, no source at all
-  const bare = workingView(CHAIN, [])
-  assert.deepEqual(bare.givens.map((g) => g.source), ['', '', ''])
-  assert.equal(bare.unsourced, 3)
-})
-
-test('an unresolved or empty provenance source is not a source; a different number does not match', () => {
-  assert.equal(givenSource({ value: 12 }, [{ figure: '12 m', source: 'unresolved' }]), '')
-  assert.equal(givenSource({ value: 12 }, [{ figure: '12 m', source: '' }]), '')
-  assert.equal(givenSource({ value: 12 }, [{ figure: '12.5 m', source: 'user_input' }]), '')
-  assert.equal(givenSource({ value: 1250.5 }, [{ figure: '1,250.5 m3', source: 'calculator' }]), 'calculator')
-})
-
-test('not a sheet, or an empty sheet: nothing to show', () => {
-  for (const raw of [null, undefined, 'x', 3, [], {}, { givens: [], plan: [], missing: [] }]) {
-    assert.equal(readSheet(raw), null)
-    assert.equal(workingView(raw, []), null)
+test('no internal id is put on screen, on both real end events', () => {
+  for (const name of ['three_step_chain.json', 'stopped_on_missing_input.json']) {
+    const words = shownWords(workingView(recorded(name).sheet))
+    assert.doesNotMatch(words, /\b[gs]\d+\b/, `${name}: ${words}`)
+    assert.doesNotMatch(words, /_/, `${name}: ${words}`)
   }
-  assert.notEqual(readSheet({ missing: [{ input: 'x' }] }), null)
 })
 
-test('small helpers on two inputs each', () => {
-  assert.equal(figureNumber('1,250.5 m3'), 1250.5)
-  assert.equal(figureNumber('-3 kN'), -3)
-  assert.equal(figureNumber('none'), null)
-  assert.equal(entryWords('formula:pile_cap_volume'), 'pile cap volume')
-  assert.equal(entryWords('arithmetic_step'), 'arithmetic step')
-  assert.equal(showNumber(52.92000000000001), '52.92')
-  assert.equal(showNumber(0.1 + 0.2), '0.3')
-  assert.equal(endingWords('answer'), 'answered')
-  assert.equal(endingWords('ceiling'), 'stopped at the round limit')
-  assert.equal(endingWords('other'), '')
+test("each check code records is shown as what code recorded, two givens each", () => {
+  const cases = [
+    ['user', 'your words'],
+    ['calculator', 'a calculation'],
+    ['passage', 'a retrieved passage'],
+    [true, 'checked'],
+    ['a_kind_added_later', 'checked'],
+  ]
+  for (const [checked, word] of cases) {
+    for (const value of [450000, 1.75]) {
+      assert.equal(givenSource({ id: 'g1', value, checked }), word, String(checked))
+    }
+  }
+})
+
+test("a given code did not check is shown as not checked, whatever label the model wrote", () => {
+  for (const given of [
+    { id: 'g1', value: 12, source: 'user' },
+    { id: 'g2', value: 7, source: 'bill p. 14' },
+    { id: 'g3', value: 7, source: 'user', checked: '' },
+    { id: 'g4', value: 7, source: 'user', checked: false },
+    { id: 'g5', value: 7, source: 'user', checked: '  ' },
+    { id: 'g6', value: 7, source: 'user', checked: null },
+  ]) {
+    assert.equal(givenSource(given), '', JSON.stringify(given))
+  }
+  assert.equal(givenSource(null), '')
+  assert.equal(givenSource([{ checked: 'user' }]), '')
+  for (const [marks, unchecked] of [[['user', undefined, 'passage'], 1], [[undefined, undefined, 'calculator'], 2]]) {
+    const sheet = { givens: marks.map((checked, i) => ({ id: `g${i + 1}`, what: 'x', value: i, unit: 'm', checked })) }
+    assert.equal(workingView(sheet).unchecked, unchecked)
+  }
+})
+
+test('checkedWord on its own, two inputs per word', () => {
+  assert.equal(checkedWord('user'), 'your words')
+  assert.equal(checkedWord('calculator'), 'a calculation')
+  assert.equal(checkedWord('passage'), 'a retrieved passage')
+  assert.equal(checkedWord(true), 'checked')
+  assert.equal(checkedWord('later'), 'checked')
+  assert.equal(checkedWord(undefined), '')
+  assert.equal(checkedWord(0), '')
+})
+
+test("a failed step shows no figure and no backend message, even with a result present", () => {
+  for (const error of ["'formula:no_such_formula' is not a registered formula", 's1 is not a plan step']) {
+    const sheet = {
+      givens: [{ id: 'g1', what: 'x', value: 5, unit: 'm' }],
+      plan: [{ id: 's1', entry: 'formula:arithmetic_step', inputs: { a: 'g1' } },
+        { id: 's2', entry: 'formula:arithmetic_step', inputs: { a: 's1' } }],
+      steps: [{ id: 's1', status: 'failed', error, result: { value: 9, unit: 'm3' } }],
+    }
+    const v = workingView(sheet)
+    assert.equal(v.steps[0].status, 'failed')
+    assert.equal(v.steps[0].result, null)
+    assert.equal(JSON.stringify(v).includes(error), false)
+    // step 2 reads the failed step: not available, not its stray result
+    assert.deepEqual(v.steps[1].inputs[0], { name: 'a', from: 'step 1', missing: true })
+  }
+})
+
+test('needs are shown only for a step waiting for an input', () => {
+  for (const [status, needs] of [['failed', []], ['done', []], ['waiting_input', ['unit rate']]]) {
+    const sheet = {
+      plan: [{ id: 's1', entry: 'formula:arithmetic_step', inputs: {} }],
+      steps: [{ id: 's1', status, needs: ['unit_rate'], result: { value: 1, unit: '' } }],
+    }
+    assert.deepEqual(workingView(sheet).steps[0].needs, needs, status)
+  }
+})
+
+test('a status run_step does not write is shown as unknown, never raw', () => {
+  for (const status of ['half_done', '']) {
+    const sheet = { plan: [{ id: 's1', entry: 'x', inputs: {} }], steps: [{ id: 's1', status }] }
+    assert.equal(workingView(sheet).steps[0].status, 'unknown')
+  }
+  const notRun = workingView({ plan: [{ id: 's1', entry: 'x', inputs: {} }], steps: [] })
+  assert.equal(notRun.steps[0].status, 'not_run')
+})
+
+test('a missing input for a step off the plan names no step', () => {
+  for (const ref of ['s9', '']) {
+    const v = workingView({ plan: [{ id: 's1', entry: 'x' }], missing: [{ for: ref, input: 'unit_rate' }] })
+    assert.deepEqual(v.missing, [{ for: '', label: 'unit rate' }])
+  }
 })
 
 test('a plan input naming a given the sheet does not hold is shown as not available, on two sheets', () => {
@@ -125,8 +157,27 @@ test('a plan input naming a given the sheet does not hold is shown as not availa
       steps: [],
       missing: [],
     }
-    const [a, b] = workingView(raw, []).steps[0].inputs
-    assert.deepEqual(a, { name: 'a', ref: held, value: 2.5, unit: 'm' })
-    assert.deepEqual(b, { name: 'b', ref: absent, missing: true })
+    const [a, b] = workingView(raw).steps[0].inputs
+    assert.deepEqual(a, { name: 'a', from: 'depth', value: 2.5, unit: 'm' })
+    assert.deepEqual(b, { name: 'b', from: '', missing: true })
   }
+})
+
+test('not a sheet, or an empty sheet: nothing to show', () => {
+  for (const raw of [null, undefined, 'x', 3, [], {}, { givens: [], plan: [], missing: [] }]) {
+    assert.equal(readSheet(raw), null)
+    assert.equal(workingView(raw), null)
+  }
+  assert.notEqual(readSheet({ missing: [{ input: 'x' }] }), null)
+})
+
+test('small helpers on two inputs each', () => {
+  assert.equal(entryWords('formula:pile_cap_volume'), 'pile cap volume')
+  assert.equal(entryWords('arithmetic_step'), 'arithmetic step')
+  assert.equal(showNumber(52.92000000000001), '52.92')
+  assert.equal(showNumber(0.1 + 0.2), '0.3')
+  assert.equal(endingWords('answer'), 'answered')
+  assert.equal(endingWords('asked_input'), 'asked you for an input')
+  assert.equal(endingWords('ceiling'), 'stopped at the round limit')
+  assert.equal(endingWords('other'), '')
 })

@@ -332,7 +332,10 @@ def test_the_round_ceiling_ends_a_turn_whose_step_stays_open(monkeypatch, rounds
     assert seen[-1]["tools"] == []  # only the ceiling's closing call has no tools
     row = trace_store.records(_today(), "ws-p6-1")[0]
     assert row["ended"] == "ceiling" and row["sheet"]["steps"][0]["status"] == "failed"
-    assert [e for e in events if e.get("type") == "end"][0]["trace_record"]
+    end = [e for e in events if e.get("type") == "end"][0]
+    assert end["trace_record"]
+    # The panel reads the ending from the end event: the ceiling, not "answer".
+    assert end["ended"] == row["ended"] == "ceiling"
 
 
 def _owned_conversation(conv, user, title="carry project"):
@@ -1412,3 +1415,64 @@ def test_a_bare_number_of_the_plan_in_the_unit_the_user_gave_it_in_is_credited(m
     assert total in shown
     assert [f.get("step") for f in row["figures"]] == ["s1"]
 
+# --- the recorded end events the answer's panel is tested on ----------------
+# tests/fixtures/show_working holds two real SSE 'end' events of this path;
+# the panel's node and browser tests read them. Each is re-run here through
+# loop.stream with the same scripted model and must come out the same, so
+# the panel is never tested on a hand-made end event.
+
+_FIXTURES = __import__("pathlib").Path(__file__).resolve().parent / "fixtures" / "show_working"
+
+_RECORDED_TURNS = {
+    "three_step_chain.json": (
+        "each wall is 12 m long and 0.6 m high and there are 7 walls with 2 coats; what area do I paint",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "wall length", "value": 12, "unit": "m", "source": "user"},
+                       {"id": "g2", "what": "wall height", "value": 0.6, "unit": "m", "source": "user"},
+                       {"id": "g3", "what": "walls", "value": 7, "unit": "nr", "source": "user"},
+                       {"id": "g4", "what": "coats", "value": 2, "unit": "nr", "source": "spec"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s1", "b": "g3"}},
+                     {"id": "s3", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s2", "b": "g4"}}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s2"}, "c3")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s3"}, "c4")]},
+         {"content": "The painted area is 100.8 m2."}],
+        "ws-rec-1", ["user", "user", "user", "user"]),
+    "stopped_on_missing_input.json": (
+        "the pit is 1.75 m deep; work out the loose excavation volume",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "pit depth", "value": 1.75, "unit": "m", "source": "user"},
+                       {"id": "g2", "what": "bulking factor", "value": 1.25, "unit": "-",
+                        "source": "general knowledge"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s1", "b": "g2"}}],
+            "missing": [{"for": "s1", "input": "b", "label": "pit plan area"}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "What is the pit plan area?"}],
+        "ws-rec-2", ["user", None]),
+}
+
+
+def _without_turn(sheet):
+    return {k: v for k, v in sheet.items() if k != "turn"}
+
+
+@pytest.mark.parametrize("name", sorted(_RECORDED_TURNS))
+def test_the_panel_fixtures_are_real_end_events(monkeypatch, name):
+    message, replies, conv, marks = _RECORDED_TURNS[name]
+    _scripted(monkeypatch, json.loads(json.dumps(replies)))
+    events = _run(user_message=message, conversation_id=conv, project_id=None, sheet_mode=True)
+    end = [e for e in events if e.get("type") == "end"][0]
+    recorded = json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
+    assert _text(events) == recorded["content"]
+    assert end["ended"] == recorded["ended"]
+    assert _without_turn(end["sheet"]) == _without_turn(recorded["sheet"])
+    # Code's own check on each given is what the panel shows as its source:
+    # a figure the user typed is marked "user"; one the model wrote is not.
+    assert [g.get("checked") for g in end["sheet"]["givens"]] == marks
