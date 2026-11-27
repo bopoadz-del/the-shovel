@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 #: Retrieval and navigation tools: their results are passages, not figures.
 RETRIEVAL_TOOLS = frozenset({"search_project_documents", "search_general_knowledge",
-                             "fetch_document", "list_project_documents"})
+                             "fetch_document", "list_project_documents", "bill_section_map"})
 #: Tools whose credit is written elsewhere (the attribution gate credits
 #: construction_calc) or that produce no figures.
 _NO_CREDIT_LINE = frozenset({"select_hat", "construction_calc", "remember_fact", "delegate_to_agent"})
