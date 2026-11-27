@@ -193,8 +193,8 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     run across pages, and an earlier page may not have been read.
 
     A sum line with no amount closes no run: the section, the stretch and the
-    bills its section names carry on past it (``_section_bills`` reads the
-    same boundary).
+    bills its section names carry on past it. Where a section starts and ends
+    is read by :func:`_sections` alone, here and in ``_section_bills``.
 
     "Equals" is within one unit of the amount's own last printed place (the
     same arithmetic ``bill_aggregate.row_kinds`` decides a collection by).
@@ -204,17 +204,22 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     the page itself holds nothing to add up. A row that already carries a
     check keeps it. Returns the rows flagged here."""
     flagged: list[g.BillRow] = []
-    by_page: dict[int, list[g.BillRow]] = {}
-    for row in rows:
-        by_page.setdefault(row.source_page, []).append(row)
+    keys = _sections(rows)
+    by_page: dict[int, list[int]] = {}
+    for i, row in enumerate(rows):
+        by_page.setdefault(row.source_page, []).append(i)
     bill_items: dict[str, float] = {}
     stretch, stretch_bill = 0.0, ""
     for page in sorted(by_page):
-        section = on_page = 0.0
-        items = 0
-        named: set[str] = set()
+        on_page = 0.0
         carried_in = False
-        for row in by_page[page]:
+        current: tuple[int, int] | None = None
+        for i in by_page[page]:
+            row = rows[i]
+            if keys[i] != current:
+                current = keys[i]
+                section, items = 0.0, 0
+                named: set[str] = set()
             kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
             text = _text(row.fields.get("total"))
             amount = g.parse_number(text)
@@ -235,7 +240,7 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
                         stretch_bill = bill
                     stretch += amount
                 continue
-            if amount is None:
+            if not _ends_section(row):
                 continue
             own = _row_bill(row)
             single = next(iter(named)) if len(named) == 1 else ""
@@ -252,7 +257,6 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
                 flagged.append(row)
             if own and agg._same_figure(amount, stretch, place):
                 stretch, stretch_bill = 0.0, ""
-            section, items, named = 0.0, 0, set()
     return flagged
 
 
@@ -622,7 +626,8 @@ def bill_states(
     placed: set[int] = set()
     missing = set(pages_not_read)
     own = [_row_bill(r) for r in rows]
-    closes = {i: _section_bills(rows, own, i) for i, r in enumerate(rows)
+    keys = _sections(rows)
+    closes = {i: _section_bills(rows, own, keys, i) for i, r in enumerate(rows)
               if not own[i] and r.check == CHECK_SUM_LINE}
     for span in spans:
         ranged = span.first_page is not None and span.last_page is not None
@@ -697,22 +702,36 @@ def _bill_key(value: Any) -> str:
     return " ".join(re.findall(r"[^\W_]+", _text(value).casefold()))
 
 
-def _section_bills(rows: Sequence[g.BillRow], own: Sequence[str], at: int) -> frozenset[str]:
-    """The bills the ``item`` lines of the section a sum line closes name:
-    the rows above ``rows[at]`` on its page, back to the sum line before it
-    that has an amount (a sum line with none closes no run, as in
-    :func:`check_sum_lines`)."""
-    bills: set[str] = set()
-    for j in range(at - 1, -1, -1):
-        row = rows[j]
-        if row.source_page != rows[at].source_page:
-            break
-        kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
-        if kind in SUM_LINE_TYPES and g.parse_number(row.fields.get("total", "")) is not None:
-            break
-        if kind == ITEM and own[j]:
-            bills.add(own[j])
-    return frozenset(bills)
+def _ends_section(row: g.BillRow) -> bool:
+    """True when the row is a sum line (:data:`SUM_LINE_TYPES`) that has an
+    amount: it closes the section it stands in. A sum line with no amount
+    closes nothing."""
+    return (_text(row.extra.get(LINE_TYPE_LABEL)).lower() in SUM_LINE_TYPES
+            and g.parse_number(_text(row.fields.get("total"))) is not None)
+
+
+def _sections(rows: Sequence[g.BillRow]) -> list[tuple[int, int]]:
+    """The section of each row, as ``(page, n)``: the one place that says
+    where a section starts and ends. A section lies on one page; it starts
+    at the page top or after a row that :func:`_ends_section`, and that row
+    is its last. Rows of a page are taken in their order in ``rows``."""
+    keys: list[tuple[int, int]] = []
+    count: dict[int, int] = {}
+    for row in rows:
+        n = count.get(row.source_page, 0)
+        keys.append((row.source_page, n))
+        if _ends_section(row):
+            count[row.source_page] = n + 1
+    return keys
+
+
+def _section_bills(rows: Sequence[g.BillRow], own: Sequence[str],
+                   keys: Sequence[tuple[int, int]], at: int) -> frozenset[str]:
+    """The bills the ``item`` lines of the section ``rows[at]`` closes name
+    (the section as :func:`_sections` gives it)."""
+    return frozenset(own[j] for j in range(len(rows))
+                     if j != at and keys[j] == keys[at] and own[j]
+                     and _text(rows[j].extra.get(LINE_TYPE_LABEL)).lower() == ITEM)
 
 
 def _row_bill(row: g.BillRow) -> str:

@@ -1291,18 +1291,61 @@ def _bill_flags(pages, spans):
     return [(x["label"], x["state"], x["rows_flagged"]) for x in got]
 
 
+@pytest.mark.parametrize("blank_kind", ["subtotal", "carried"])
 @pytest.mark.parametrize("a, b, wrong", [(6, 4, 99), (60, 17, 1)])
-def test_blank_sum_line_is_no_section_edge_when_a_flag_is_charged(a, b, wrong):
+def test_blank_sum_line_is_no_section_edge_when_a_flag_is_charged(a, b, wrong, blank_kind):
     """A sum line with no amount closes no run, so the items of both bills on
     either side of it are closed by the unnamed wrong total and both bills are
     FAILED, exactly as with no blank line between them."""
     spans = [bpr.BillSpan("A", 1, 2, a), bpr.BillSpan("B", 2, 3, b)]
     control = {"2": [_billed("A", "X", a), _billed("B", "Y", b), _sum_line("total", wrong)]}
-    blank = {"2": [_billed("A", "X", a), _sum_line("subtotal", ""), _billed("B", "Y", b),
+    blank = {"2": [_billed("A", "X", a), _sum_line(blank_kind, ""), _billed("B", "Y", b),
                    _sum_line("total", wrong)]}
     want = [("A", bpr.STATE_FAILED, 1), ("B", bpr.STATE_FAILED, 1)]
     assert _bill_flags(control, spans) == want
     assert _bill_flags(blank, spans) == want
+    # The flag itself is checked against the same section: A's item is in it.
+    assert _flags(blank) == [(2, str(wrong))]
+
+
+@pytest.mark.parametrize("blank_kind", ["subtotal", "carried"])
+@pytest.mark.parametrize("a, b", [(6, 4), (60, 17)])
+def test_blank_sum_line_keeps_the_section_for_a_total_that_adds_up(a, b, blank_kind):
+    """Must-not-fire twin: the unnamed total equals both items across the
+    blank sum line, so no line is flagged and both bills reconcile."""
+    spans = [bpr.BillSpan("A", 1, 2, a), bpr.BillSpan("B", 2, 3, b)]
+    blank = {"2": [_billed("A", "X", a), _sum_line(blank_kind, ""), _billed("B", "Y", b),
+                   _sum_line("total", a + b)]}
+    assert _flags(blank) == []
+    assert _bill_flags(blank, spans) == [("A", bpr.STATE_RECONCILED, 0), ("B", bpr.STATE_RECONCILED, 0)]
+
+
+@pytest.mark.parametrize("pages, want", [
+    ({"2": [_billed("A", "X", 6), _sum_line("subtotal", ""), _billed("B", "Y", 4),
+            _sum_line("total", 10), _billed("B", "Z", 1)]},
+     [(2, 0), (2, 0), (2, 0), (2, 0), (2, 1)]),
+    ({"3": [_billed("A", "X", 6), _sum_line("carried", 6), _billed("B", "Y", 4),
+            _sum_line("subtotal", "")],
+      "4": [_billed("B", "Z", 1)]},
+     [(3, 0), (3, 0), (3, 1), (3, 1), (4, 0)]),
+])
+def test_sections_end_only_at_a_sum_line_with_an_amount(pages, want):
+    """One reader of the boundary: a sum line with an amount is the last row of
+    its section, a blank one ends nothing, and each page starts a section."""
+    assert bpr._sections(_rows(pages)) == want
+
+
+@pytest.mark.parametrize("a, b", [(6, 4), (60, 17)])
+def test_sections_keep_a_page_together_when_its_rows_are_not_adjacent(a, b):
+    """Rows of one page split by another page's rows in the list are still one
+    section until a sum line with an amount: the total charges both bills."""
+    rows = _rows({"2": [_billed("A", "X", a)], "5": [_billed("C", "Q", 1)]})
+    rows += _rows({"2": [_billed("B", "Y", b), _sum_line("total", a + b + 1)]})
+    assert [k for k in bpr._sections(rows)] == [(2, 0), (5, 0), (2, 0), (2, 0)]
+    spans = [bpr.BillSpan("A", 1, 2, a), bpr.BillSpan("B", 2, 3, b)]
+    got = bpr.bill_states(rows, [], spans=spans, tolerance=0)["bills"]
+    assert [(x["label"], x["state"], x["rows_flagged"]) for x in got] == [
+        ("A", bpr.STATE_FAILED, 1), ("B", bpr.STATE_FAILED, 1)]
 
 
 @pytest.mark.parametrize("a, b, wrong", [(6, 4, 99), (60, 17, 1)])
