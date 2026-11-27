@@ -75,10 +75,7 @@ def _traced_name(name: Any) -> Any:
     is a valid one, else None. A refused name is free text from the model
     (it can hold the user's words), and the trace goes to the turn's log
     line, which keeps ids and never text."""
-    try:
-        return llm_memory.clean_name(name)
-    except llm_memory.MemoryRefused:
-        return None
+    return llm_memory.valid_name(name)
 
 
 def _refused(call: ToolCall, op: str, error: str, name: Any = None) -> dict:

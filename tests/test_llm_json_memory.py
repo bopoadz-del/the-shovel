@@ -788,3 +788,70 @@ def test_the_new_note_lock_is_taken_where_two_writers_can_count_at_once(dialect,
     assert len(ran) == locks
     if locks:
         assert "pg_advisory_xact_lock" in ran[0][0] and ran[0][1] == {"project": "llm_memory:proj-7"}
+
+
+@pytest.mark.parametrize("sent,stored", [("Paths.JSON", "Paths"), ("how-to.Json", "how-to")])
+def test_a_json_suffix_in_any_case_comes_off_the_stored_name(sent, stored):
+    pid = f"mem-case-{uuid.uuid4().hex[:8]}"
+    assert llm_memory.write(pid, sent, '{"v": 1}', "t#1")["name"] == stored
+    assert llm_memory.read(pid, stored)["data"] == {"v": 1}
+    assert llm_memory.read(pid, sent)["name"] == stored
+    assert [n["name"] for n in llm_memory.listing(pid)] == [stored]
+
+
+@pytest.mark.parametrize("name,expected", [("Paths.JSON", "Paths"), ("a_1", "a_1"),
+                                           ("x" * 65, None), ("two words", None), (["l"], None)])
+def test_valid_name_gives_the_stored_name_or_none(name, expected):
+    assert llm_memory.valid_name(name) == expected
+
+
+@pytest.mark.parametrize("setting", ["0", "-3"])
+def test_a_limit_set_to_zero_or_below_falls_back_to_the_default(monkeypatch, setting):
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", setting)
+    monkeypatch.setenv("LLM_MEMORY_MAX_BYTES", setting)
+    assert llm_memory.max_docs() == llm_memory.DEFAULT_MAX_DOCS
+    assert llm_memory.max_bytes() == llm_memory.DEFAULT_MAX_BYTES
+    pid = f"mem-lim-{uuid.uuid4().hex[:8]}"
+    assert llm_memory.write(pid, "kept", '{"a": [1, 2, 3]}', "t#1")["created"] is True
+    assert llm_memory.read(pid, "kept")["data"] == {"a": [1, 2, 3]}
+
+
+@pytest.mark.parametrize("written,listed", [(["zeta", "alpha", "mid"], ["alpha", "mid", "zeta"]),
+                                            (["b2", "a1"], ["a1", "b2"])])
+def test_notes_list_in_name_order_for_the_model_and_the_owner(written, listed):
+    """SQLite returns a project's rows in primary-key (name) order even with
+    no ORDER BY; its reverse_unordered_selects pragma turns that order round,
+    so only a query that asks for name order lists them in name order."""
+    from sqlalchemy import event
+
+    from app.core.db import get_engine
+    from app.routers.admin import admin_project_memory
+    engine = get_engine()
+    pid = f"mem-ord-{uuid.uuid4().hex[:8]}"
+    for name in written:
+        llm_memory.write(pid, name, json.dumps({"n": name}), "t#1")
+
+    def reverse_unordered(conn, cursor, statement, params, context, executemany):
+        cursor.execute("PRAGMA reverse_unordered_selects = ON")
+
+    sqlite = engine.dialect.name == "sqlite"
+    if sqlite:
+        event.listen(engine, "before_cursor_execute", reverse_unordered)
+    try:
+        names = [n["name"] for n in llm_memory.listing(pid)]
+        got = admin_project_memory(pid, auth={"user_id": "a", "role": "admin"})
+    finally:
+        if sqlite:
+            event.remove(engine, "before_cursor_execute", reverse_unordered)
+            engine.dispose()
+    assert names == listed
+    assert [n["name"] for n in got["notes"]] == listed
+    assert [n["data"] for n in got["notes"]] == [{"n": name} for name in listed]
+
+
+@pytest.mark.parametrize("doc,size", [({"k": "خرسانة"}, 20), ({"k": "béton armé"}, 20)])
+def test_a_notes_size_is_its_utf8_byte_count_and_the_text_reads_back_unchanged(doc, size):
+    pid = f"mem-utf-{uuid.uuid4().hex[:8]}"
+    assert llm_memory.write(pid, "word", json.dumps(doc), "t#1")["bytes"] == size
+    got = llm_memory.read(pid, "word")
+    assert got["bytes"] == size and got["data"] == doc

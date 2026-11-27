@@ -76,13 +76,23 @@ def init_db() -> None:
         _initialized_for_url = url
 
 
+def valid_name(name: Any) -> Optional[str]:
+    """The stored name for ``name`` (``.json`` taken off), or None when the
+    name is not text or has anything outside letters, digits, hyphen and
+    underscore, or is longer than 64."""
+    if not isinstance(name, str):
+        return None
+    stem = name[:-5] if name.lower().endswith(".json") else name
+    return stem if _NAME_RE.fullmatch(stem) else None
+
+
 def clean_name(name: Any) -> str:
-    """The stored name for ``name``: ``.json`` taken off; anything outside
-    letters, digits, hyphen and underscore, or longer than 64, is refused."""
+    """The stored name for ``name``; a name ``valid_name`` rejects is refused
+    with a message the model can act on."""
     if not isinstance(name, str):
         raise MemoryRefused("name must be a text: letters, digits, '-' or '_', at most 64 characters")
-    stem = name[:-5] if name.lower().endswith(".json") else name
-    if not _NAME_RE.fullmatch(stem):
+    stem = valid_name(name)
+    if stem is None:
         raise MemoryRefused(
             f"name {name!r} is not allowed: use letters, digits, '-' or '_', at most 64 "
             "characters, optionally ending in .json")
