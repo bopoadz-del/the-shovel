@@ -205,3 +205,53 @@ def test_a_per_that_names_no_input_is_a_schema_gap(monkeypatch, display, per_a, 
     params = fr.parameters(spec)
     assert sorted(params) == ["a", "b"]
     assert (params["a"].per, params["b"].per) == (per_a, per_b)
+
+
+# --- A unit written straight after the figure ("310/m3") is read, so it is
+# --- checked or refused, never dropped; a refusal after a conversion quotes
+# --- the figure the user wrote.
+
+@pytest.mark.parametrize("text,expect", [
+    ("310/m3", (310.0, "/m3")),
+    ("0.31/L", (0.31, "/L")),
+    ("45 /day", (45.0, "/day")),
+])
+def test_value_and_unit_reads_a_unit_that_begins_with_a_slash(text, expect):
+    assert fr.value_and_unit(text) == expect
+
+
+@pytest.mark.parametrize("text", ["310", "3,200", " 12.5 "])
+def test_value_and_unit_finds_no_unit_in_a_bare_figure(text):
+    assert fr.value_and_unit(text) is None
+
+
+@pytest.mark.parametrize("written,converted", [
+    ("-310 per m3", -0.31),
+    ("-5 per L", -5000.0),
+])
+def test_an_out_of_range_refusal_after_a_conversion_quotes_the_written_figure(written, converted):
+    values = {"quantity": 640, "consumption_per_unit": 22, "price_per_resource_unit": converted}
+    _, rejected = fr.check_inputs("resource_cost_line", values,
+                                  {**values, "price_per_resource_unit": written})
+    assert [(r["parameter"], r["reason"], r["value"]) for r in rejected] == [
+        ("price_per_resource_unit", "out_of_range", written)]
+    assert "scale" not in rejected[0]
+
+
+@pytest.mark.parametrize("written", [None, "-0.31", "-0.31 per count", -0.31])
+def test_an_out_of_range_refusal_without_a_conversion_quotes_the_checked_value(written):
+    values = {"quantity": 640, "consumption_per_unit": 22, "price_per_resource_unit": -0.31}
+    given = None if written is None else {**values, "price_per_resource_unit": written}
+    _, rejected = fr.check_inputs("resource_cost_line", values, given)
+    assert [(r["reason"], r["value"]) for r in rejected] == [("out_of_range", -0.31)]
+
+
+@pytest.mark.parametrize("values", [
+    {"quantity": "640 m2", "consumption_per_unit": "22 l/m2", "price_per_resource_unit": "0.31 per L"},
+    {"quantity": "50 m3", "consumption_per_unit": "2 kg/m3", "price_per_resource_unit": "4 per KG"},
+])
+def test_a_chained_denominator_of_equal_scale_is_not_converted(values):
+    out, conversions, rejected = _chain(values)
+    assert rejected == []
+    assert [c for c in conversions if c["from_unit"] != c["to_unit"]] == []
+    assert out["price_per_resource_unit"] == fr.value_and_unit(values["price_per_resource_unit"])[0]

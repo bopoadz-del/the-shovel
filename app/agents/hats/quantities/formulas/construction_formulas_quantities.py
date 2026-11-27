@@ -5,7 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import math
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 
 _STEEL_DENSITY = 7850.0  # kg/m^3
@@ -369,6 +369,11 @@ def _as_shown(x: float) -> float:
     return float(Decimal(f"{x:.10g}"))
 
 
+def _cents(x: Decimal) -> Decimal:
+    """A money figure rounded once to the cent, half up."""
+    return x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 @formula(
     owner='quantities',
     display_name='Resource cost line',
@@ -424,6 +429,10 @@ def resource_cost_line(
     if min([q, rate, price] + optional) < 0:
         return {"error": "quantity, consumption_per_unit, price_per_resource_unit, "
                          "waste_percent and markup_percent must be >= 0."}
+    # Each figure is used as it is printed, so a figure carried in with more
+    # than ten significant digits (a price converted from another unit) is the
+    # figure the next step multiplies.
+    q, rate, price = _as_shown(q), _as_shown(rate), _as_shown(price)
     net = _as_shown(q * rate)
     working = [(f"Net resource = quantity {_qty(q)} x consumption {_qty(rate)} "
                 f"= {_qty(net)}")]
@@ -440,14 +449,17 @@ def resource_cost_line(
         gross = _as_shown(float(Decimal(repr(net)) * exact))
         working.append(f"With waste {_qty(waste_percent)}% = {_qty(net)} x "
                        f"{exact:f} = {_qty(gross)}")
-    cost = gross * price
+    # Money is rounded once, to the cent, and every later line adds the
+    # rounded figures it prints: cost + markup = total as printed and as
+    # returned.
+    cost = _cents(Decimal(repr(gross)) * Decimal(repr(price)))
     working.append(f"Resource cost = {_qty(gross)} x price {_qty(price)} = {cost:,.2f}")
     if markup_percent is None:
         markup = None
         total = cost
         working.append("No markup supplied: none applied (no default markup).")
     else:
-        markup = cost * float(markup_percent) / 100.0
+        markup = _cents(cost * Decimal(repr(markup_percent)) / 100)
         total = cost + markup
         working.append(f"Markup {_qty(float(markup_percent))}% = {markup:,.2f}; "
                        f"line total = {cost:,.2f} + {markup:,.2f} = {total:,.2f}")
@@ -455,9 +467,9 @@ def resource_cost_line(
         "resource_quantity_net": round(net, 6),
         "waste_factor": factor,
         "resource_quantity": round(gross, 6),
-        "resource_cost": round(cost, 2),
-        "markup_amount": round(markup, 2) if markup is not None else None,
-        "line_total": round(total, 2),
+        "resource_cost": float(cost),
+        "markup_amount": float(markup) if markup is not None else None,
+        "line_total": float(total),
         "standard": "resource-based estimating (quantity x consumption x waste x price)",
         "working": working,
     }

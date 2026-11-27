@@ -591,9 +591,10 @@ def run_step(sheet: Dict[str, Any], step_id: str, call_id: str = "") -> Dict[str
     if unknown:
         return _end(status="failed", error=f"{', '.join(unknown)} are not inputs of {name}")
     supplied = _formula_values(spec, values)
+    as_written = dict(supplied)
     supplied, _conversions, rejected = formula_registry.convert_written_units(name, supplied)
     if not rejected:
-        supplied, rejected = formula_registry.check_inputs(name, supplied)
+        supplied, rejected = formula_registry.check_inputs(name, supplied, as_written)
     if rejected:
         return _end(status="failed", error="; ".join(
             f"{r.get('label') or r.get('input') or r.get('name')}: {r.get('reason')}" for r in rejected))

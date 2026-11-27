@@ -732,7 +732,7 @@ FIGURE_SIGN = r"(?:(?<![0-9.,])(?<![A-WYZa-wyz])[-+])?"
 SIGNED_FIGURE = FIGURE_SIGN + r"\d[\d,]*(?:\.\d+)?"
 
 _VALUE_UNIT_RE = re.compile(
-    rf"^\s*({SIGNED_NUMBER})\s*((?:1\s*/|[A-Za-z%°µμ‰'\"]).*?)?\s*[.,;]?\s*$")
+    rf"^\s*({SIGNED_NUMBER})\s*((?:1\s*/|/|[A-Za-z%°µμ‰'\"]).*?)?\s*[.,;]?\s*$")
 _UNIT_VALUE_RE = re.compile(
     rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*([A-Za-z/][\w /\-]*?)?\s*$")
 
@@ -1030,10 +1030,14 @@ def convert_written_units(name: str, values: Dict[str, Any],
     return out, conversions, rejected
 
 
-def check_inputs(name: str, values: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+def check_inputs(name: str, values: Dict[str, Any],
+                 written: Optional[Dict[str, Any]] = None,
+                 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Supplied ``values`` for formula ``name`` held to each input's declared
     type and range. Returns the values as the formula receives them and one
-    rejection per value that cannot be run."""
+    rejection per value that cannot be run. ``written`` holds the values as
+    the user wrote them, before any unit conversion: a refusal quotes the
+    figure and unit the user gave, not the converted one."""
     spec = get(name)
     if spec is None:
         return dict(values), []
@@ -1075,6 +1079,13 @@ def check_inputs(name: str, values: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
                 continue
             out[key] = int(number)
         if not _in_range(p, number):
+            given = (written or {}).get(key)
+            stated = value_and_unit(given)
+            if stated is not None and stated[0] != number:
+                # Converted from the unit the user wrote: quote that, and
+                # offer no rescaling of a figure the user never saw.
+                rejected.append(_rejection(p, given, "out_of_range"))
+                continue
             row = _rejection(p, value, "out_of_range")
             hint = scale_hint(p, number)
             if hint:

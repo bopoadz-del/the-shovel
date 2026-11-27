@@ -397,3 +397,103 @@ def test_the_gross_is_the_printed_net_times_the_factor(q, c, p, waste, gross_ste
     if gross_step:
         assert gross_step in out["working"]
     assert out["line_total"] == total
+
+
+# --- Money is rounded once and the printed lines add up: cost + markup =
+# --- total as printed and as returned, over a grid of ordinary inputs.
+
+def _money(text):
+    from decimal import Decimal
+    return Decimal(text.replace(",", ""))
+
+
+@pytest.mark.parametrize("q", [1, 3, 7.5, 640])
+@pytest.mark.parametrize("c", [12.5, 0.35, 22])
+@pytest.mark.parametrize("p", [3.25, 42.5, 0.31, 2457.14])
+@pytest.mark.parametrize("m", [10, 7.5, 12.5])
+def test_the_printed_markup_line_adds_up(q, c, p, m):
+    import re
+    from decimal import Decimal
+    out = resource_cost_line(q, c, p, markup_percent=m)
+    line = out["working"][-1]
+    cost, markup, total = (_money(x) for x in re.search(
+        r"= ([\d,]+\.\d\d) \+ ([\d,]+\.\d\d) = ([\d,]+\.\d\d)$", line).groups())
+    assert cost + markup == total
+    assert (Decimal(repr(out["resource_cost"])), Decimal(repr(out["markup_amount"])),
+            Decimal(repr(out["line_total"]))) == (cost, markup, total)
+
+
+@pytest.mark.parametrize("args,line", [
+    ((3, 12.5, 3.25, None, 10), "line total = 121.88 + 12.19 = 134.07"),
+    ((1, 12.5, 42.5, None, 10), "line total = 531.25 + 53.13 = 584.38"),
+])
+def test_the_markup_is_taken_on_the_rounded_cost(args, line):
+    assert resource_cost_line(*args)["working"][-1].endswith(line)
+
+
+@pytest.mark.parametrize("args,gross_line,total", [
+    ((600_150, 41.8517, 1, 6), "= 25,117,297.75 x 1.06 = 26,624,335.61", 26_624_335.61),
+    ((68_712, 7.688, 2_457.14, 11.28), "= 528,257.856 x 1.1128 = 587,845.3422", 1_444_418_304.13),
+    ((90_284.8, 38, 9_708.09, 17.77), None, 39_225_339_017.48),
+])
+def test_the_gross_and_the_total_on_large_and_tie_inputs(args, gross_line, total):
+    out = resource_cost_line(*args)
+    if gross_line:
+        assert out["working"][1].endswith(gross_line)
+    assert out["line_total"] == total
+
+
+# --- Through the chat door: a converted price is printed as it is used, a
+# --- unit written straight after the figure is kept, and a refusal quotes
+# --- what the user wrote.
+
+def _printed_step_reconciles(out):
+    import re
+    line = next(s for s in out["working"] if s.startswith("Resource cost"))
+    gross, price, cost = (_money(x) for x in re.search(
+        r"= ([\d,.]+) x price ([\d,.]+) = ([\d,]+\.\d\d)$", line).groups())
+    from decimal import ROUND_HALF_UP
+    return (gross * price).quantize(_money("0.01"), rounding=ROUND_HALF_UP) == cost
+
+
+@pytest.mark.parametrize("params", [
+    {"quantity": "1000000 m2", "consumption_per_unit": "1 m3/m2", "price_per_resource_unit": "95 per yd3"},
+    {"quantity": "3333333 m2", "consumption_per_unit": "0.7 m3/m2",
+     "price_per_resource_unit": "95 USD/yd3", "waste_percent": 7.5},
+])
+def test_a_converted_price_is_printed_as_it_is_used(params):
+    out = _chat(params)
+    assert out["status"] == "success", out
+    assert _printed_step_reconciles(out["result"])
+
+
+@pytest.mark.parametrize("price,total", [
+    ("310/m3", 4_364.80),
+    ("155/m3", 2_182.40),
+    ("0.31/L", 4_364.80),
+])
+def test_a_price_unit_written_after_a_slash_is_kept(price, total):
+    out = _chat({"quantity": "640 m2", "consumption_per_unit": "22 L/m2",
+                 "price_per_resource_unit": price})
+    assert out["status"] == "success", out
+    assert out["result"]["line_total"] == total
+
+
+@pytest.mark.parametrize("rate,price,quoted,never", [
+    ("22 L/m2", "-310 per m3", "-310 per m3", "-0.31"),
+    ("0.022 m3/m2", "900000000 per L", "900000000 per L", "900,000,000,000"),
+])
+def test_a_refusal_after_a_conversion_quotes_the_users_figure(rate, price, quoted, never):
+    out = _chat({"quantity": "640 m2", "consumption_per_unit": rate,
+                 "price_per_resource_unit": price})
+    assert out["status"] == "error"
+    assert quoted in out["question"]
+    assert never not in out["question"]
+
+
+@pytest.mark.parametrize("rate", ["22/m2", "0.5/m3"])
+def test_a_rate_whose_unit_cannot_be_read_is_refused_by_name(rate):
+    out = _chat({"quantity": "640 m2", "consumption_per_unit": rate,
+                 "price_per_resource_unit": "310 per m3"})
+    assert out["status"] == "error"
+    assert "resource consumed per unit of work" in out["question"]

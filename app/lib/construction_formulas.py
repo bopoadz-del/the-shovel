@@ -3587,6 +3587,7 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     if not _accepts_param(fn, "unit"):
         params = _attach_written_units(str(name), fn, params, caller_figures,
                                        _with_current_ask(ask_text), call_unit)
+    as_written = dict(params)
     params, conversions, unit_rejected = formula_registry.convert_written_units(
         str(name), params, context)
     params = _coerce_bound_values(fn, params, frozenset(c.get("parameter") for c in conversions),
@@ -3594,7 +3595,7 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     params, derived = _derive_missing_by_unit(
         fn, params, _missing_required(fn, params, name=str(name)),
         _CURRENT_ASK.get() or ask_text)
-    params, rejected = formula_registry.check_inputs(str(name), params)
+    params, rejected = formula_registry.check_inputs(str(name), params, as_written)
     refused = {row["parameter"] for row in unit_rejected}
     rejected = unit_rejected + [row for row in rejected if row["parameter"] not in refused]
     missing = _missing_required(fn, params, name=str(name))
