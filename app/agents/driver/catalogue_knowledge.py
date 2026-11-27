@@ -14,9 +14,13 @@ re-words their content:
   neither, whatever fields it holds;
 * a knowledge file's sections are its own headings.
 
-``source["sections"]`` names what the entry or file HOLDS in ``source
-["file"]`` (a table, a checklist, a states list, variables, a section
-heading). It is a record of the source, not of what a tool call returns.
+``source["sections"]`` names the parts a call to the entry's tool hands
+back: for a knowledge base entry, the fields it holds content in among
+those a search match carries (the knowledge base's own ``match_fields``
+says which); for a knowledge file, its headings. A part the entry holds in
+its file and a call does not return (a table, a checklist, a states list,
+the variables) is not named. An entry of which a call returns no part
+beyond its record has ``sections: []``.
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ from typing import Any, Dict, List
 
 #: The knowledge base fields that say what an entry IS (its identity and
 #: its record), as opposed to what it HOLDS. They fill the entry's name,
-#: code and source; every other field with content is a section.
+#: code and source; a section is another field, returned with content.
 RECORD_FIELDS = ("id", "title", "domain", "type", "provenance",
                  "credibility_tier", "needs_review", "applicability")
 
@@ -80,9 +84,13 @@ def _held(value: Any) -> bool:
 
 
 def kb_sections(entry: Dict[str, Any]) -> List[str]:
-    """The fields an entry holds content in, in the entry's own order,
-    leaving out its record fields."""
-    return [k for k, v in entry.items() if k not in RECORD_FIELDS and _held(v)]
+    """The parts of an entry a call to the tool returns: the fields a match
+    carries with content, in the entry's own order, leaving out its record
+    fields. Empty when a call returns no part of it beyond its record."""
+    from app.blocks import _knowledge
+
+    returned = _knowledge.match_fields(entry)
+    return [k for k in entry if k not in RECORD_FIELDS and _held(returned.get(k))]
 
 
 def _kb_input(name: str, spec: Any) -> Dict[str, Any]:
@@ -96,24 +104,27 @@ def kb_entry(entry: Dict[str, Any], file: str) -> Dict[str, Any]:
     from app.agents.driver import catalogue
     from app.blocks import _knowledge
 
-    rule_id = str(entry.get("id") or "")
+    # Everything the entry says of itself is read from what a call returns
+    # of it; the variables are what an evaluation takes.
+    returned = _knowledge.match_fields(entry)
+    rule_id = str(returned["id"] or "")
     # What the tool does with the entry decides what the entry offers: values
     # in and a result out only where ``evaluate`` computes one.
     evaluated = _knowledge.evaluation_refusal(entry) is None
     variables = entry.get("variables") if evaluated and isinstance(entry.get("variables"), dict) else {}
-    thresholds = entry.get("thresholds") if isinstance(entry.get("thresholds"), dict) else {}
+    thresholds = returned["thresholds"] if isinstance(returned["thresholds"], dict) else {}
     outputs = [{"name": "result", "unit": thresholds.get("unit") or "", "main": True}] if evaluated else []
     out = catalogue._entry(
-        "knowledge", rule_id, name=entry.get("title") or rule_id,
+        "knowledge", rule_id, name=returned["title"] or rule_id,
         inputs=[_kb_input(k, v) for k, v in variables.items()],
         outputs=outputs,
         code={"tool": "construction_advisor", "rule_id": rule_id},
         source={"registry": "knowledge", "file": file, "entry": rule_id,
-                "type": entry.get("type") or "", "domain": entry.get("domain") or "",
+                "type": returned["type"] or "", "domain": returned["domain"] or "",
                 "sections": kb_sections(entry),
-                "provenance": copy.deepcopy(entry.get("provenance") or {}),
-                "credibility_tier": entry.get("credibility_tier")})
-    out["for"] = catalogue._one_line(entry.get("statement"))
+                "provenance": copy.deepcopy(returned["provenance"] or {}),
+                "credibility_tier": returned["credibility_tier"]})
+    out["for"] = catalogue._one_line(returned["statement"])
     out["gaps"] = catalogue._gaps(out)
     return out
 

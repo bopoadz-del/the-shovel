@@ -203,6 +203,25 @@ def _build_warnings(entry: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+def match_fields(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """The fields of an entry a search match carries, as it carries them.
+    The one statement of what a call returns OF an entry: the advisor block
+    returns exactly these (plus the warnings) for each match, and whoever
+    describes an entry (the catalogue) reads them here, so an entry never
+    names a part a call does not hand back."""
+    return {
+        "id": entry.get("id"),
+        "type": entry.get("type"),
+        "title": entry.get("title"),
+        "statement": entry.get("statement"),
+        "domain": entry.get("domain"),
+        "expression": entry.get("expression"),
+        "thresholds": entry.get("thresholds"),
+        "provenance": entry.get("provenance", {}),
+        "credibility_tier": entry.get("credibility_tier"),
+    }
+
+
 def evaluation_refusal(entry: Dict[str, Any]) -> Optional[str]:
     """Why :func:`evaluate` does not compute this entry, or ``None`` when it
     does. The one statement of what is evaluable: ``evaluate`` raises it,

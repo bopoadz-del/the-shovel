@@ -427,3 +427,54 @@ def test_evaluate_of_an_unknown_rule_is_a_key_error(tmp_path, monkeypatch, rule_
     _serve(tmp_path, monkeypatch, [_REFUSALS[0][0]])
     with pytest.raises(KeyError):
         kb.evaluate(rule_id, L=3)
+
+
+# --- what a match carries of its entry, stated once ----------------------------------
+
+_MATCHED = [
+    ({"id": "zz.m_formula", "type": "formula", "title": "Em formula", "statement": "Em is twice L.",
+      "domain": "d.one", "expression": "2 * L", "variables": {"L": {"unit": "meter"}},
+      "thresholds": {"unit": "meter"}, "provenance": {"source": "s-m"}, "credibility_tier": 2,
+      "needs_review": False},
+     {"id": "zz.m_formula", "type": "formula", "title": "Em formula", "statement": "Em is twice L.",
+      "domain": "d.one", "expression": "2 * L", "thresholds": {"unit": "meter"},
+      "provenance": {"source": "s-m"}, "credibility_tier": 2}),
+    ({"id": "zz.m_table", "type": "table", "title": "Em table", "table": {"rows": [{"k": 1}]},
+      "checklist": ["x"], "states": ["a"], "credibility_tier": 4},
+     {"id": "zz.m_table", "type": "table", "title": "Em table", "statement": None, "domain": None,
+      "expression": None, "thresholds": None, "provenance": {}, "credibility_tier": 4}),
+    ({}, {"id": None, "type": None, "title": None, "statement": None, "domain": None,
+          "expression": None, "thresholds": None, "provenance": {}, "credibility_tier": None}),
+]
+
+
+@pytest.mark.parametrize("entry,want", _MATCHED)
+def test_match_fields_are_the_fields_a_match_carries_and_no_other(entry, want):
+    got = kb.match_fields(entry)
+    assert got == want and list(got) == list(want)
+
+
+@pytest.mark.parametrize("entry,want", _MATCHED[:2])
+def test_the_advisor_block_returns_the_match_fields_and_the_warnings(tmp_path, monkeypatch, entry, want):
+    import asyncio
+
+    from app.blocks.construction_advisor import ConstructionAdvisorBlock
+
+    _serve(tmp_path, monkeypatch, [entry])
+    out = asyncio.run(ConstructionAdvisorBlock().process({"query": entry["title"]}, {}))
+    assert out["status"] == "success" and out["count"] == 1
+    (match,) = out["matches"]
+    # The fields of the entry a call returns, then the warnings: nothing else
+    # of the entry (no variables, table, checklist or states).
+    assert match == {**want, "warnings": kb._build_warnings(entry)}
+    assert list(match) == list(want) + ["warnings"]
+
+
+@pytest.mark.parametrize("query", ["", "   "])
+def test_the_advisor_block_refuses_an_empty_query(query):
+    import asyncio
+
+    from app.blocks.construction_advisor import ConstructionAdvisorBlock
+
+    out = asyncio.run(ConstructionAdvisorBlock().process({"query": query}, {}))
+    assert out == {"status": "error", "error": "no query provided"}

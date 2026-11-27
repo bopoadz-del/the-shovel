@@ -60,6 +60,22 @@ SIGMA = {"id": "zz.sigma_steps", "domain": "d.eight", "type": "workflow", "title
          "variables": {"x": {"unit": "meter"}, "layout": ["widths"]},
          "thresholds": {"unit": "meter"}, "states": ["a", "b"],
          "provenance": {"source": "s-s"}, "credibility_tier": 3}
+# An entry that holds only a part a call does not return.
+OMEGA = {"id": "zz.omega_table", "domain": "d.nine", "type": "table", "title": "Omega table",
+         "table": {"columns": [{"name": "k"}], "rows": [{"k": 1}]}, "checklist": ["x"],
+         "provenance": {"source": "s-o"}, "credibility_tier": 2}
+
+
+def _match(entry, query):
+    """What the tool's own block returns for the entry when asked for it."""
+    import asyncio
+
+    from app.blocks.construction_advisor import ConstructionAdvisorBlock
+
+    answer = asyncio.run(ConstructionAdvisorBlock().process({"query": query}, {"top_k": 20}))
+    found = [m for m in answer["matches"] if m["id"] == entry["id"]]
+    assert len(found) == 1, (entry["id"], query, [m["id"] for m in answer["matches"]])
+    return found[0]
 
 
 def _asked(entry, value):
@@ -153,13 +169,60 @@ def test_a_knowledge_file_entry_carries_its_sections(monkeypatch, tmp_path, file
 # --- one entry per knowledge base entry ----------------------------------------------
 
 @pytest.mark.parametrize("entry,want", [
-    (ALPHA, ["statement", "expression", "variables", "thresholds"]),
-    (BETA, ["statement", "states", "transitions", "checklist"]),
-    (GAMMA, ["statement", "expression", "variables", "thresholds", "table"]),
+    (ALPHA, ["statement", "expression", "thresholds"]),   # its variables are not returned
+    (BETA, ["statement"]),                                # nor states, transitions, a checklist
+    (GAMMA, ["statement", "expression", "thresholds"]),   # nor a table
+    (THETA, ["statement", "thresholds"]),
+    (OMEGA, []),                                          # it holds parts; a call returns none
     ({"id": "x", "title": "t", "statement": "", "table": None, "checklist": []}, []),
+    ({"id": "y", "thresholds": {"max": 3}, "statement": "S.", "expression": None}, ["thresholds", "statement"]),
 ])
-def test_kb_sections_are_the_fields_with_content_minus_the_record(entry, want):
+def test_kb_sections_are_the_parts_of_the_entry_a_call_returns(entry, want):
     assert ck.kb_sections(entry) == want
+
+
+@pytest.mark.parametrize("entries", [
+    [ALPHA, BETA, THETA, OMEGA],      # a formula, a workflow, a threshold, a table
+    [GAMMA, SIGMA, DELTA, KAPPA],     # a formula with a table, a workflow, a rule, a threshold
+])
+def test_an_entry_names_only_the_parts_the_tool_returns_for_it(kb_file, entries):
+    kb_file(entries)
+    named = 0
+    for entry in entries:
+        e = ck.kb_entry(entry, "kb.json")
+        match = _match(entry, entry["title"])
+        sections = e["source"]["sections"]
+        # Every part named is in the tool's answer, with the entry's content;
+        # every part of the entry the answer carries with content is named.
+        assert all(match[part] == entry[part] for part in sections), (entry["id"], sections, match)
+        assert sections == [k for k in entry if k not in ck.RECORD_FIELDS and ck._held(match.get(k))]
+        # The rest of what the entry says of itself is in the answer too.
+        assert (e["name"], e["source"]["type"], e["source"]["domain"]) == \
+            (match["title"], match["type"], match["domain"])
+        assert e["for"] == catalogue._one_line(match["statement"])
+        assert e["source"]["provenance"] == match["provenance"]
+        assert e["source"]["credibility_tier"] == match["credibility_tier"]
+        named += len(sections)
+    assert named  # the sets hold parts that are returned, so the check is not empty
+
+
+@pytest.mark.parametrize("asked_by", ["title", "id"])
+def test_no_shipped_kb_entry_names_a_part_the_tool_does_not_return(monkeypatch, asked_by):
+    monkeypatch.delenv("CONSTRUCTION_KB_FILE", raising=False)
+    catalogue._CACHE.clear()
+    built = {e["id"]: e for e in catalogue.entries() if e["kind"] == "knowledge"}
+    shipped = _knowledge.load_knowledge()
+    held_back = 0
+    for kb in shipped:
+        e = built["knowledge:" + kb["id"]]
+        # Asked as a caller would: by the entry's title, or by its id the way
+        # the tool's handler turns an id into a search.
+        match = _match(kb, kb["title"] if asked_by == "title" else kb["id"].replace(".", " "))
+        for part in e["source"]["sections"]:
+            assert ck._held(match.get(part)) and match[part] == kb[part], (kb["id"], part)
+        held_back += len([k for k in kb if k not in ck.RECORD_FIELDS and ck._held(kb[k])
+                          and k not in e["source"]["sections"]])
+    assert shipped and held_back  # the base holds parts a call does not return: none is named
 
 
 @pytest.mark.parametrize("entry,file,name,for_,inputs,outputs", [
@@ -188,8 +251,8 @@ def test_a_formula_kb_entry_is_read_as_it_is(entry, file, name, for_, inputs, ou
 
 
 @pytest.mark.parametrize("entry,sections", [
-    (BETA, ["statement", "states", "transitions", "checklist"]),
-    (DELTA, ["statement", "checklist"]),
+    (BETA, ["statement"]),
+    (DELTA, ["statement"]),
 ])
 def test_an_entry_without_an_expression_has_no_output_and_no_inputs(entry, sections):
     e = ck.kb_entry(entry, "kb.json")
@@ -202,8 +265,8 @@ def test_an_entry_without_an_expression_has_no_output_and_no_inputs(entry, secti
 def test_an_entry_the_tool_does_not_evaluate_offers_no_inputs_and_no_output(entry):
     e = ck.kb_entry(entry, "kb.json")
     assert e["inputs"] == [] and e["outputs"] == []
-    # What it holds is still named, and its code still finds it.
-    assert "variables" in e["source"]["sections"]
+    # Its variables are not a part a call returns, and its code still finds it.
+    assert "variables" not in e["source"]["sections"] and "statement" in e["source"]["sections"]
     assert e["code"] == {"tool": "construction_advisor", "rule_id": entry["id"]}
     assert e["source"]["type"] == entry["type"]
 
@@ -357,9 +420,9 @@ def test_kb_identity_names_the_resolved_path_whatever_the_spelling(kb_file, monk
 
 @pytest.mark.parametrize("entries,line,looked_up,sections", [
     ([ALPHA, BETA], "knowledge:zz.alpha_rule | knowledge | Alpha rule | Alpha holds for a span.",
-     "knowledge:zz.beta_flow", ["statement", "states", "transitions", "checklist"]),
+     "knowledge:zz.beta_flow", ["statement"]),
     ([GAMMA, DELTA], "knowledge:zz.delta_check | knowledge | Delta check | Delta is checked.",
-     "knowledge:zz.gamma_load", ["statement", "expression", "variables", "thresholds", "table"]),
+     "knowledge:zz.gamma_load", ["statement", "expression", "thresholds"]),
 ])
 def test_kb_entries_reach_the_catalogue_index_and_lookup(kb_file, entries, line, looked_up, sections):
     kb_file(entries)
