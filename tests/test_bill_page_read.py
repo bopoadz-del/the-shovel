@@ -141,3 +141,26 @@ def test_written_sheet_reads_back_through_the_aggregate_reader(tmp_path, a, b):
     assert [(r.ref, r.amount, r.pages) for r in rows] == [
         ("A", str(a), [5]), ("B", str(b), [5]), ("", str(a + b), [5])]
     assert all(r.path == ("Bill 9", "Roads") for r in rows)
+
+
+@pytest.mark.parametrize("reads, want_pages, want_not_read", [
+    ({0: [_item("A", 2, 3, 6)], 1: [_item("B", 4, 5, 20), _item("C", 1, 9, 9)]},
+     [1, 2, 2], []),
+    ({0: None, 1: "not lines", 2: [_head("Part"), _item("D", 7, 7, 49)]},
+     [3], [1, 2]),
+])
+def test_rows_of_reads_each_page_and_numbers_it_from_one(reads, want_pages, want_not_read):
+    from types import SimpleNamespace
+
+    asked: list[int] = []
+
+    def read_page(page_read):
+        asked.append(page_read.index)
+        return reads[page_read.index]
+
+    rows_of = bpr.rows_of_model_reads(read_page, "Bill 9")
+    rows, not_read = rows_of([SimpleNamespace(index=i) for i in sorted(reads)])
+    assert asked == sorted(reads)
+    assert [r.source_page for r in rows] == want_pages
+    assert not_read == want_not_read
+    assert all(tuple(r.path[:1]) == ("Bill 9",) for r in rows)
