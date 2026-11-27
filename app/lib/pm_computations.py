@@ -240,6 +240,76 @@ def compute_cpm(data: CPMInput) -> CPMOutput:
         near_critical_band_days=data.near_critical_band_days,
     )
 
+def run_cpm(data: CPMInput) -> CPMOutput:
+    """The CPM of ``data`` through the calculation envelope (KS-4).
+
+    Every schedule path that needs a CPM pass calls this, not
+    ``compute_cpm``: the network is run by ``run_calculation`` on the
+    registered ``cpm_network`` kernel, so the pass is the one copy and every
+    caller gets it inside the same envelope the chat path does. The kernel's
+    refusal comes back as the exception its ``error_type`` names (a loop is
+    ``CircularDependencyError``, anything else ``ValueError``), so callers
+    keep catching what they caught before. An empty network has nothing to
+    pass over and returns the empty output ``compute_cpm`` defines.
+    """
+    if not data.activities:
+        return compute_cpm(data)
+    from app.lib.construction_formulas import run_calculation
+
+    params: Dict[str, Any] = {
+        "activities": [
+            {"id": a.id, "name": a.name, "duration": a.duration,
+             "predecessors": [{"id": d.predecessor_id, "type": d.type.value,
+                               "lag": d.lag} for d in a.predecessors]}
+            for a in data.activities
+        ],
+        "calendar": data.calendar.model_dump(mode="json"),
+    }
+    if data.project_start is not None:
+        params["project_start"] = data.project_start.isoformat()
+    if data.near_critical_band_days is not None:
+        params["near_critical_band_days"] = data.near_critical_band_days
+    # The network is the caller's own, already read from its input, so the
+    # kernel runs with no turn ask: the envelope's repairs that read the
+    # user's words (a written sign restored, an unwritten zero dropped) are
+    # for a model's call to a calculator, and would otherwise turn the
+    # caller's band of 2 days into -2 whenever the ask writes "-2" for a lag.
+    from app.lib import construction_formulas as calc
+
+    ask_token = calc.set_current_ask("")
+    try:
+        env = run_calculation("cpm_network", params)
+    finally:
+        calc._CURRENT_ASK.reset(ask_token)
+    result = env.get("result") if isinstance(env, dict) else None
+    if (not isinstance(env, dict) or env.get("status") != "success"
+            or not isinstance(result, dict)):
+        reason = ((env.get("error") if isinstance(env, dict) else None)
+                  or "the CPM kernel returned no result")
+        kind = env.get("error_type") if isinstance(env, dict) else None
+        if kind == CircularDependencyError.__name__:
+            raise CircularDependencyError(reason)
+        raise ValueError(reason)
+    rows = result.get("activities") or []
+    return CPMOutput(
+        results=[CPMResult(
+            id=r["id"], name=r.get("name") or "", duration=r["duration"],
+            early_start_day=r["early_start"], early_finish_day=r["early_finish"],
+            late_start_day=r["late_start"], late_finish_day=r["late_finish"],
+            total_float=r["total_float"], free_float=r["free_float"],
+            is_critical=r["is_critical"],
+            early_start=r.get("early_start_date"), early_finish=r.get("early_finish_date"),
+            late_start=r.get("late_start_date"), late_finish=r.get("late_finish_date"),
+        ) for r in rows],
+        project_duration=result["project_duration"],
+        project_finish=result.get("project_finish"),
+        critical_path=list(result.get("critical_path") or []),
+        critical_percentage=result.get("critical_percentage") or 0.0,
+        near_critical=result.get("near_critical"),
+        near_critical_band_days=result.get("near_critical_band_days"),
+    )
+
+
 # ── One duration kernel for every schedule builder (KS-4) ──────────────────
 #
 # The quantity -> duration step is a schedule kernel, and it goes through the
@@ -475,7 +545,7 @@ def compress_schedule(
     if unknown:
         raise ValueError(f"Unknown activity ids: {', '.join(sorted(unknown))}")
 
-    baseline = compute_cpm(data)
+    baseline = run_cpm(data)
     revised_acts = []
     for a in data.activities:
         if a.id in reductions:
@@ -484,7 +554,7 @@ def compress_schedule(
         else:
             revised_acts.append(a)
 
-    revised = compute_cpm(data.model_copy(update={"activities": revised_acts}))
+    revised = run_cpm(data.model_copy(update={"activities": revised_acts}))
     delta = baseline.project_duration - revised.project_duration
     return revised, delta
 

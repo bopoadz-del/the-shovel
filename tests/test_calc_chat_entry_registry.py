@@ -43,6 +43,13 @@ from app.lib import formula_registry as fr
 _NON_PHYSICAL_UNITS = {"", "-", "count", "ratio", "fraction", "%", "currency"}
 
 
+_CPM_ACTIVITIES = [
+    {"id": "A", "duration": 3},
+    {"id": "B", "duration": 2, "predecessors": ["A"]},
+    {"id": "C", "duration": 4, "predecessors": ["A"]},
+    {"id": "D", "duration": 1, "predecessors": ["B", "C"]}]
+
+
 class Case(NamedTuple):
     params: Dict[str, Any]
     expect: Dict[str, Any]
@@ -84,6 +91,16 @@ def _check(result: Dict[str, Any], expect: Dict[str, Any]) -> None:
 _DEFL = {"ec_mpa": 200000, "i_mm4": 1e8}
 
 CASES: Dict[str, Case] = {
+    # Totals to date: gross = 1,000,000 work + 50,000 materials = 1,050,000;
+    # retention 5% of the work = 50,000; net = 1,000,000; due = net less the
+    # 600,000 already certified = 400,000. Money and percent carry no
+    # physical unit, so there is no unit case.
+    "interim_payment_to_date": Case(
+        {"work_value_to_date": 1_000_000, "retention_percent": 5,
+         "previously_certified": 600_000, "materials_on_site": 50_000},
+        {"gross_to_date": 1_050_000.0, "retention_to_date": 50_000.0,
+         "net_to_date": 1_000_000.0, "amount_due": 400_000.0},
+        "work_value_to_date", None),
     # Cantilever, UDL: d = wL^4/(8EI). w = 10 kN/m = 10 N/mm, L = 2000 mm,
     # E = 200000 MPa, I = 1e8 mm4 -> 10 * 2000^4 / (8 * 2e5 * 1e8)
     # = 1.6e14 / 1.6e14 = 1.00 mm.
@@ -196,15 +213,16 @@ CASES: Dict[str, Case] = {
           "crane_rate_per_hr": 300}, {"total_for_area": 18047.0})),
     # A(3) -> B(2), C(4) -> D(1): paths A-B-D = 6, A-C-D = 8 -> duration 8,
     # critical path A, C, D (B has 2 days of float). Durations are whole
-    # working days in a table: no unit case.
+    # working days in a table. The near-critical band is the input with a
+    # unit: 1 working week at 5 working days per week = 5 working days, and
+    # B's float of 2 <= 5 names B near-critical.
     "cpm_network": Case(
-        {"activities": [
-            {"id": "A", "duration": 3},
-            {"id": "B", "duration": 2, "predecessors": ["A"]},
-            {"id": "C", "duration": 4, "predecessors": ["A"]},
-            {"id": "D", "duration": 1, "predecessors": ["B", "C"]}]},
+        {"activities": _CPM_ACTIVITIES},
         {"project_duration": 8, "critical_path": ["A", "C", "D"]},
-        "activities", None),
+        "activities",
+        ({"activities": _CPM_ACTIVITIES, "near_critical_band_days": "1 working week",
+          "days_per_week": 5},
+         {"project_duration": 8, "near_critical": ["B"], "near_critical_band_days": 5})),
     # 2 cranes x 6 months; per crane per month 10000 + 2000 + 3000 = 15000;
     # hire 2*6*15000 = 180000; mobilisation 50 % of one month's dry hire per
     # crane = 2*5000 = 10000; demobilisation 75 % of that = 7500;

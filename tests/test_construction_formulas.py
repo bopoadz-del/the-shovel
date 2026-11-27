@@ -146,6 +146,8 @@ _SMOKE_INPUTS = {
     "score_risk": dict(probability=4, impact=5),
     # Referenced from construction_formulas_additions (post-live-chat Q2/Q12).
     "guardrail_top_rail_height": dict(),
+    "interim_payment_to_date": dict(work_value_to_date=1_000_000, retention_percent=5,
+                                    previously_certified=600_000),
     "calculate_interim_payment": dict(gross_valuation=900_000, retention_percent=10),
     "break_even_point": dict(fixed_costs=12_000, price_per_unit=50, variable_cost_per_unit=30),
     # Additive discipline library — structural steel (dual-code).

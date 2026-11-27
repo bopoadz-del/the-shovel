@@ -177,7 +177,11 @@ _NAMED_KINDS = frozenset({"ratio", "count", "fraction"})
 
 
 def _accepted_range(row: Dict[str, Any]) -> str:
-    shown = f"{_shown_quantity(row['lo'], row)} to {_shown_quantity(row['hi'], row)}"
+    if row.get("above_lo"):
+        # The lower bound is not itself accepted: said as it is meant.
+        shown = f"more than {_shown_quantity(row['lo'], row)}, up to {_shown_quantity(row['hi'], row)}"
+    else:
+        shown = f"{_shown_quantity(row['lo'], row)} to {_shown_quantity(row['hi'], row)}"
     kind = _norm(row.get("unit") or "")
     if kind in _NAMED_KINDS and not _is_fraction_percent(row):
         shown += f", as a {kind}"

@@ -91,6 +91,7 @@ def test_network_dates_floats_and_critical_path(network, duration, critical, exp
 ])
 def test_unschedulable_network_is_refused_by_name_not_raised(network, words):
     r = _run(network)
-    assert set(r) == {"error"}
+    # Refused, never raised: the error, and at most the kind it names.
+    assert "error" in r and set(r) <= {"error", "error_type"}
     for word in words:
         assert word in r["error"]
