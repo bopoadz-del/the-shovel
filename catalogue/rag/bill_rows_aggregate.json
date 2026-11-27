@@ -79,8 +79,38 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": [],
-    "question_kinds": []
+    "purpose": "Counts, or totals the quantity or amount of, every row of a bill of quantities whose description holds the given words, and lists the rows it used with reference and page.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:search_project_documents",
+        "difference": "A search returns a few ranked passages; this tool reads every row of the bill, so only it can give a complete count or total."
+      },
+      {
+        "id": "tool:bill_section_map",
+        "difference": "That one returns a bill's section headings; this one counts and totals the rows."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "not_for",
+        "how": "A question answered by one passage needs no count or total; search instead."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "leads",
+        "how": "Pass the words of the item, and the section when the question names one; report its count, sum and rows as given, without adding figures."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Gives the bill side when the question needs a total or count of the items the specification clause governs; the clause itself comes from a search."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "not_for",
+        "how": "It reads only bill rows; neither a specification clause nor a drawing is a bill row."
+      }
+    ]
   }
 }

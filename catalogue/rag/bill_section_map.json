@@ -41,8 +41,38 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": [],
-    "question_kinds": []
+    "purpose": "Returns the sections a bill of quantities prints, number and heading, in the order the document prints them, read from the document's own headings.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:bill_rows_aggregate",
+        "difference": "That one counts and totals rows; this one only names the sections the rows sit in."
+      },
+      {
+        "id": "tool:list_project_documents",
+        "difference": "That one lists documents; this one lists the sections inside one bill."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "supports",
+        "how": "Answers what sections a bill has; for any other single passage search instead."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "supports",
+        "how": "Gives the section's own heading words, so a total confined to one section passes words the bill really prints."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Shows which bill section holds the work a specification clause governs, before the rows are read."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "not_for",
+        "how": "A bill's section headings say nothing about a drawing."
+      }
+    ]
   }
 }

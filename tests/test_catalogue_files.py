@@ -325,17 +325,37 @@ def test_identity_changes_when_a_file_changes(copy_dir, shipped, change):
 
 @pytest.mark.parametrize("f_index,r_index", [(0, 0), (9, 2)])
 def test_hint_gaps_lists_files_without_a_written_hint(copy_dir, shipped, f_index, r_index):
-    before = cf.hint_gaps(copy_dir)
-    assert len(before) == len(shipped)  # nothing is written yet
+    before = set(cf.hint_gaps(copy_dir))
+    unwritten = {i for i, d in shipped.items()
+                 if not d["hints"]["purpose"].strip()
+                 or (d["kind"] == "rag" and not d["hints"]["question_kinds"])}
+    assert before == unwritten
     formula, rag = _a_file(shipped, "formula", f_index), _a_file(shipped, "rag", r_index)
+    kinds = [{"kind": k, "role": "supports", "how": "What it does for this kind."} for k in cf.QUESTION_KINDS]
     for doc in (formula, rag):
         changed = json.loads(json.dumps(doc))
         changed["hints"]["purpose"] = "What it is for."
+        if doc["kind"] == "rag":
+            changed["hints"]["question_kinds"] = []
         _write(copy_dir, cf.path_of(doc["kind"], doc["id"]), changed)
-    after = cf.hint_gaps(copy_dir)
+    after = set(cf.hint_gaps(copy_dir))
     # A formula with a purpose is written; a retrieval tool also needs its question kinds.
-    assert formula["id"] not in after and rag["id"] in after
-    assert len(after) == len(before) - 1
+    assert after == (before - {formula["id"]}) | {rag["id"]}
+    changed["hints"]["question_kinds"] = kinds
+    _write(copy_dir, cf.path_of(rag["kind"], rag["id"]), changed)
+    assert set(cf.hint_gaps(copy_dir)) == before - {formula["id"], rag["id"]}
+
+
+@pytest.mark.parametrize("f_index,blank", [(1, "   "), (7, chr(10) + chr(9))])
+def test_hint_gaps_counts_a_blank_purpose_as_unwritten(copy_dir, shipped, f_index, blank):
+    formula = _a_file(shipped, "formula", f_index)
+    changed = json.loads(json.dumps(formula))
+    changed["hints"]["purpose"] = "What it is for."
+    _write(copy_dir, cf.path_of("formula", formula["id"]), changed)
+    assert formula["id"] not in cf.hint_gaps(copy_dir)
+    changed["hints"]["purpose"] = blank
+    _write(copy_dir, cf.path_of("formula", formula["id"]), changed)
+    assert formula["id"] in cf.hint_gaps(copy_dir)
 
 
 # -- using a file: call_for, hint_text, enrich ------------------------------------------
