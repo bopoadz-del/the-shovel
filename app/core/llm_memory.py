@@ -148,11 +148,14 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
     row = {"data": text, "size_bytes": size, "written_at": _now(), "written_by_turn": turn or ""}
     with SessionLocal() as s:
         with s.begin():
-            done = s.execute(update(LlmMemory)
-                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
-                             .values(**row)).rowcount
+            done = _replace(s, project_id, stem, row)
             if not done:
                 _one_new_note_at_a_time(s, project_id)
+                # Asked again now the lock is held: another turn may have
+                # created this same note while this one waited, and then
+                # this write is a replace, not a new note against the limit.
+                done = _replace(s, project_id, stem, row)
+            if not done:
                 count = s.scalar(select(func.count()).select_from(LlmMemory)
                                  .where(LlmMemory.project_id == project_id)) or 0
                 if count >= max_docs():
@@ -161,6 +164,14 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                 s.add(LlmMemory(project_id=project_id, name=stem, **row))
         created = not done
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
+
+
+def _replace(session: Any, project_id: str, stem: str, row: Dict[str, Any]) -> int:
+    """Replace the note ``stem`` of ``project_id`` with ``row``; the number
+    of notes replaced (0 when there is no such note yet)."""
+    return session.execute(update(LlmMemory)
+                           .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
+                           .values(**row)).rowcount
 
 
 def _one_new_note_at_a_time(session: Any, project_id: str) -> None:
