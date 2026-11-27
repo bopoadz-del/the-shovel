@@ -317,6 +317,9 @@ async def lifespan(app: FastAPI):
         # After the warm-up task is finished or cancelled, so its freeze
         # can never land after this release.
         loop_watchdog.release_startup_heap()
+        # The watchdog watches this lifespan's loop; it ends with it. Off the
+        # loop: stop() joins the monitor's threads.
+        await asyncio.to_thread(loop_watchdog.stop)
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()

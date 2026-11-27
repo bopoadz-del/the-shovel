@@ -468,6 +468,9 @@ def _fact_as_dict(fact: ProjectFact) -> Dict[str, Any]:
         "source_document": fact.source_document,
         "confidence": fact.confidence,
         "updated_at": fact.updated_at,
+        "verified": bool(fact.verified_by),
+        "verified_by": fact.verified_by,
+        "verified_at": fact.verified_at,
     }
 
 
@@ -576,6 +579,15 @@ def _patch_legacy_columns() -> None:
                     "ALTER TABLE documents ADD COLUMN drive_md5 TEXT"
                 ))
                 conn.commit()
+            fact_cols = {row[1] for row in conn.execute(
+                sqla_text("PRAGMA table_info(project_facts)")
+            )}
+            for column in ("verified_by", "verified_at"):  # Alembic 0040
+                if column not in fact_cols:
+                    conn.execute(sqla_text(
+                        f"ALTER TABLE project_facts ADD COLUMN {column} TEXT"
+                    ))
+                    conn.commit()
     except Exception:
         # Don't crash boot on a dev-environment patch failure — the
         # next call to a feature that needs the column will surface
@@ -3067,10 +3079,18 @@ def set_fact(
     value: str,
     source_document: Optional[str] = None,
     confidence: Optional[float] = None,
+    verified_by: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Upsert a durable fact for a project (one row per project+key)."""
+    """Upsert a durable fact for a project (one row per project+key).
+
+    ``verified_by`` names who confirmed the value. Every write sets the mark
+    afresh, so a value the app writes by itself is not verified even when it
+    replaces one that was.
+    """
     _ensure_db()
     now = _now()
+    verified_by = (verified_by or "").strip() or None
+    verified_at = now if verified_by else None
     with _lock:
         with SessionLocal() as session:
             existing = session.scalars(
@@ -3084,6 +3104,8 @@ def set_fact(
                 existing.source_document = source_document
                 existing.confidence = confidence
                 existing.updated_at = now
+                existing.verified_by = verified_by
+                existing.verified_at = verified_at
             else:
                 session.add(
                     ProjectFact(
@@ -3094,6 +3116,8 @@ def set_fact(
                         source_document=source_document,
                         confidence=confidence,
                         updated_at=now,
+                        verified_by=verified_by,
+                        verified_at=verified_at,
                     )
                 )
             session.commit()
@@ -3112,20 +3136,26 @@ def get_fact(project_id: str, key: str) -> Optional[Dict[str, Any]]:
     return _fact_as_dict(fact) if fact else None
 
 
-def list_facts(project_id: str) -> List[Dict[str, Any]]:
+def list_facts(project_id: str, verified_only: bool = False) -> List[Dict[str, Any]]:
+    """A project's facts; ``verified_only`` keeps the rows someone confirmed."""
     _ensure_db()
+    stmt = (
+        select(ProjectFact)
+        .where(ProjectFact.project_id == project_id)
+        .order_by(ProjectFact.key)
+    )
+    if verified_only:
+        stmt = stmt.where(ProjectFact.verified_by.is_not(None), ProjectFact.verified_by != "")
     with SessionLocal() as session:
-        rows = session.scalars(
-            select(ProjectFact)
-            .where(ProjectFact.project_id == project_id)
-            .order_by(ProjectFact.key)
-        ).all()
+        rows = session.scalars(stmt).all()
     return [_fact_as_dict(fact) for fact in rows]
 
 
-def search_facts(project_id: str, query: str) -> List[Dict[str, Any]]:
+def search_facts(
+    project_id: str, query: str, verified_only: bool = False,
+) -> List[Dict[str, Any]]:
     """Keyword search over fact keys + values (case-insensitive, any-term)."""
-    facts = list_facts(project_id)
+    facts = list_facts(project_id, verified_only=verified_only)
     terms = (query or "").lower().split()
     if not terms:
         return facts

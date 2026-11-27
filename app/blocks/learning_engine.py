@@ -261,10 +261,10 @@ class LearningEngineBlock(UniversalBlock):
             return self._reset_formula(formula_id)
         elif operation == "hydrate":
             # Nightly "sleep on it" pass — see app/core/learning/hydration.py.
-            # Reads the day's conversations and files, indexes new docs,
-            # writes recurring topics/friction back to the project_facts +
-            # agent_facts the chat path consults, and records each friction
-            # signal here as a pattern (durable across runs).
+            # Reads the day's conversations, keeps the brief (topics/friction)
+            # in its run row for the operator report — never in the facts the
+            # chat prompt reads — and records each friction signal here as a
+            # pattern (durable across runs).
             from app.core.learning import hydration as _hydration
 
             return await _hydration.run(
