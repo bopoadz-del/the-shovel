@@ -498,3 +498,67 @@ def test_chain_refuses_an_output_the_file_does_not_list(shipped, output):
     with pytest.raises(AssertionError, match="lists no output"):
         _plan(shipped, [("s1", "formula:excavation_volume",
                          {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}, output)])
+
+
+# -- the files read into the catalogue's own entries ------------------------------------
+
+def _unhinted_formula_ids(shipped, capabilities):
+    """Formula ids whose registry declares no when_to_use and whose file exists."""
+    return sorted(e["id"] for k, e in capabilities
+                  if k == "formula" and not e["when_to_use"] and e["id"] in shipped)
+
+
+def _entry_of(entry_id):
+    from app.agents.driver import catalogue
+    return next(e for e in catalogue.entries() if e["id"] == entry_id)
+
+
+@pytest.mark.parametrize("index,purpose,later", [
+    (0, "First approved purpose.", "A rewritten purpose, longer than the first one."),
+    (1, "Another approved purpose, for a second formula.", "Short rewrite."),
+])
+def test_entries_carry_an_approved_files_hint_and_follow_a_rewrite(shipped, capabilities, copy_dir,
+                                                                   monkeypatch, index, purpose, later):
+    entry_id = _unhinted_formula_ids(shipped, capabilities)[index]
+    rel = cf.path_of("formula", entry_id)
+    monkeypatch.setattr(cf, "files_dir", lambda: copy_dir)
+    doc = _read(copy_dir, rel)
+    doc["hints"].update(approved=True, purpose=purpose)
+    _write(copy_dir, rel, doc)
+    entry = _entry_of(entry_id)
+    assert entry["when_to_use"] == purpose
+    assert "when_to_use" not in entry["gaps"]
+    # A rewritten file is a new state: the catalogue reads it, never a stale copy.
+    doc["hints"].update(purpose=later)
+    _write(copy_dir, rel, doc)
+    assert _entry_of(entry_id)["when_to_use"] == later
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_entries_ignore_an_unapproved_files_hint(shipped, capabilities, copy_dir, monkeypatch, index):
+    entry_id = _unhinted_formula_ids(shipped, capabilities)[index]
+    rel = cf.path_of("formula", entry_id)
+    monkeypatch.setattr(cf, "files_dir", lambda: copy_dir)
+    doc = _read(copy_dir, rel)
+    doc["hints"].update(approved=False, purpose="Written but not approved.")
+    _write(copy_dir, rel, doc)
+    entry = _entry_of(entry_id)
+    assert entry["when_to_use"] == ""
+    assert "when_to_use" in entry["gaps"]
+
+
+@pytest.mark.parametrize("fault", ["{not json", "[]"])
+def test_entries_stay_whole_when_the_files_cannot_load(shipped, capabilities, copy_dir, monkeypatch, fault):
+    from app.agents.driver import catalogue
+    entry_id = _unhinted_formula_ids(shipped, capabilities)[0]
+    rel = cf.path_of("formula", entry_id)
+    monkeypatch.setattr(cf, "files_dir", lambda: copy_dir)
+    doc = _read(copy_dir, rel)
+    doc["hints"].update(approved=True, purpose="Read only while every file loads.")
+    _write(copy_dir, rel, doc)
+    assert _entry_of(entry_id)["when_to_use"] == "Read only while every file loads."
+    before = [e["id"] for e in catalogue.entries()]
+    with open(os.path.join(copy_dir, "formulas", "zz_broken.json"), "w", encoding="utf-8") as f:
+        f.write(fault)
+    assert [e["id"] for e in catalogue.entries()] == before
+    assert _entry_of(entry_id)["when_to_use"] == ""

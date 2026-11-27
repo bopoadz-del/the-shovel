@@ -327,6 +327,7 @@ def _state_key() -> Any:
     from app.agents.core import tool_registry
     from app.agents.driver import routes
     from app.blocks import _knowledge
+    from app.agents.driver import catalogue_files
     from app.lib import formula_registry
 
     tool_registry.load()
@@ -337,7 +338,10 @@ def _state_key() -> Any:
             _knowledge_state(),
             # The knowledge base reloads when its file changes; the file's
             # identity (path, mtime, size, inode) is part of the state.
-            _knowledge.kb_identity())
+            _knowledge.kb_identity(),
+            # The catalogue files' hints are read into the entries; a file
+            # added, removed or rewritten is a new state.
+            catalogue_files.identity())
 
 
 def order(entry: Dict[str, Any]) -> Tuple[int, str]:
@@ -353,7 +357,11 @@ def entries() -> List[Dict[str, Any]]:
     key = _state_key()
     if key not in _CACHE:
         _CACHE.clear()
-        built = [e for build in _BUILDERS for e in build()]
+        from app.agents.driver import catalogue_files
+
+        # An approved file's hint fills a when_to_use / when_not the registry
+        # leaves empty (``catalogue_files.enrich``); nothing else changes.
+        built = catalogue_files.enriched([e for build in _BUILDERS for e in build()])
         _CACHE[key] = sorted(built, key=order)
     return copy.deepcopy(_CACHE[key])
 
