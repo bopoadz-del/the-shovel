@@ -31,7 +31,7 @@ import logging
 import os
 import re
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _LOG = logging.getLogger(__name__)
 
@@ -47,7 +47,10 @@ _KB_OVERRIDE_ENV = "CONSTRUCTION_KB_FILE"
 
 _LOCK = threading.RLock()
 _KB_CACHE: Optional[Dict[str, Any]] = None
-_KB_MTIME: float = 0.0
+# What the cached dict was read from: the file's resolved path and its stat
+# identity (mtime in ns, size, inode). An mtime alone is not an identity: two
+# files share one, and a rewrite inside the clock's resolution keeps it.
+_KB_KEY: Optional[Tuple[str, int, int, int]] = None
 
 
 def _kb_path() -> str:
@@ -55,20 +58,22 @@ def _kb_path() -> str:
 
 
 def _load_kb() -> Dict[str, Any]:
-    """Reload the KB JSON when its mtime changes.
+    """Reload the KB JSON when the file it names is not the one cached.
 
     Returns the parsed top-level dict (``schema_version``, ``kb_version``,
     ``entries``). On error returns an empty-but-structured dict so callers
-    never crash.
+    never crash; a failed read keeps the last good copy of the SAME file,
+    never another file's entries.
     """
-    global _KB_CACHE, _KB_MTIME
-    path = _kb_path()
+    global _KB_CACHE, _KB_KEY
+    path = os.path.realpath(_kb_path())
     try:
-        mtime = os.path.getmtime(path)
+        st = os.stat(path)
     except OSError:
         return {"schema_version": "0", "kb_version": "missing", "entries": []}
+    key = (path, st.st_mtime_ns, st.st_size, st.st_ino)
     with _LOCK:
-        if _KB_CACHE is not None and mtime == _KB_MTIME:
+        if _KB_CACHE is not None and key == _KB_KEY:
             return _KB_CACHE
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -76,13 +81,11 @@ def _load_kb() -> Dict[str, Any]:
             if not isinstance(data, dict) or "entries" not in data:
                 data = {"schema_version": "0", "kb_version": "invalid", "entries": []}
             _KB_CACHE = data
-            _KB_MTIME = mtime
+            _KB_KEY = key
         except (OSError, ValueError):
-            _KB_CACHE = _KB_CACHE or {
-                "schema_version": "0",
-                "kb_version": "error",
-                "entries": [],
-            }
+            same_file = _KB_KEY is not None and _KB_KEY[0] == path
+            if not (same_file and _KB_CACHE is not None):
+                return {"schema_version": "0", "kb_version": "error", "entries": []}
         return _KB_CACHE
 
 
@@ -96,6 +99,23 @@ def load_knowledge(domain: Optional[str] = None) -> List[Dict[str, Any]]:
         for e in entries
         if domain in (e.get("applicability", {}).get("applies_to") or [])
     ]
+
+
+def shipped_entry(rule_id: str) -> Optional[Dict[str, Any]]:
+    """Entry by id from the knowledge base shipped with the code, ignoring
+    the ``CONSTRUCTION_KB_FILE`` override. Calculator constants that the
+    knowledge base states read it here, so swapping the served file never
+    changes what a calculator computes. An unreadable shipped file raises
+    ``LookupError``: there is no empty knowledge base to fall back on."""
+    try:
+        with open(_KB_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise LookupError(f"shipped knowledge base is unreadable: {exc}") from exc
+    for entry in (data.get("entries") or []) if isinstance(data, dict) else []:
+        if isinstance(entry, dict) and entry.get("id") == rule_id:
+            return entry
+    return None
 
 
 def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:

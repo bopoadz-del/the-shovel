@@ -647,3 +647,47 @@ def test_tight_cap_skips_all_probes_but_turn_still_answers(deepseek_streaming, m
     types = [e.get("type") for e in events]
     assert _TOOL_PHASE_STATUS in _status_labels(events)
     assert "token" in types and types.index("status") < types.index("token")
+
+
+# ── a streamed answer that read a document: cut part-way it is read whole ─────
+
+_DOC_ROWS = [{"doc_name": "Site handbook.pdf", "page_or_section": "p. 4"}]
+
+
+def _with_doc_sources(*_a, **_k):
+    return [dict(r) for r in _DOC_ROWS]
+
+
+@pytest.mark.parametrize("first,second", [
+    ("The gate on the north side is painted grey.", "The fence beside it is painted green."),
+    ("Level 3 of the car park holds 42 bays.", "Level 2 of the car park holds 38 bays."),
+])
+def test_streamed_document_answer_cut_part_way_keeps_every_paragraph(deepseek_streaming, first, second):
+    deltas = [first + "\n\n", second + "\n\n", "The next para"]
+    with patch.object(Agent, "_call_llm", _tool_then_final()), \
+         patch.object(Agent, "_run_tool_call", _tool_ok), \
+         patch.object(Agent, "_stream_synthesis", _mk_stream_midway_drop(deltas)), \
+         patch("app.agents.runtime._build_sources_from_audit", _with_doc_sources):
+        events = _run_turn(_pa_agent())
+    end = events[-1]
+    assert end["type"] == "end"
+    assert first in end["content"] and second in end["content"], end["content"]
+    assert _SYNTH_CUTOFF_NOTICE in end["content"]
+    assert not end.get("details")
+
+
+@pytest.mark.parametrize("first,second", [
+    ("The gate on the north side is painted grey.", "The fence beside it is painted green."),
+    ("Level 3 of the car park holds 42 bays.", "Level 2 of the car park holds 38 bays."),
+])
+def test_streamed_document_answer_finished_leads_with_its_opening(deepseek_streaming, first, second):
+    deltas = [first + "\n\n", second]
+    with patch.object(Agent, "_call_llm", _tool_then_final()), \
+         patch.object(Agent, "_run_tool_call", _tool_ok), \
+         patch.object(Agent, "_stream_synthesis", _mk_stream(deltas)), \
+         patch("app.agents.runtime._build_sources_from_audit", _with_doc_sources):
+        events = _run_turn(_pa_agent())
+    end = events[-1]
+    assert end["type"] == "end"
+    assert first in end["content"] and second not in end["content"], end["content"]
+    assert second in (end.get("details") or "")

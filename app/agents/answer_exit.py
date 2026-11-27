@@ -99,6 +99,10 @@ class Turn:
     #: reply may be stated as "the documents did not yield an answer"; an
     #: error must never read as a not-found.
     forced_retry_outcome: str = ""
+    #: True when the answer stopped part-way (the model's output limit, or
+    #: the stream dropped): its end says why it stops, so it is not a
+    #: finished answer and is read whole (answer contract, rule 5).
+    cut: bool = False
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -113,6 +117,13 @@ def open_turn(question: str = "") -> Turn:
 
 def current_turn() -> Turn | None:
     return _TURN.get()
+
+
+def note_cut() -> None:
+    """The current turn's answer stopped part-way (see ``Turn.cut``)."""
+    turn = _TURN.get()
+    if turn is not None:
+        turn.cut = True
 
 
 def reset_turn(token: contextvars.Token) -> None:
@@ -1791,20 +1802,37 @@ def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
     return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
 
 
-def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
+def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None,
+                    fold: bool = False) -> dict[str, Any]:
     """The answer contract (``app.agents.answer_contract``) on the text that
     leaves: citations become numbered markers whose entries ride out as
     ``citations``, the coverage footer rides out as ``coverage``, machinery
-    wording and padding go. Form only -- nothing it does adds a claim."""
+    wording and padding go. Form only -- nothing it does adds a claim.
+
+    ``fold`` is True only where the reader renders the lead with its details
+    one click away (the stream's ``end`` event, read by the chat bubble).
+    Every other reader -- a delegating agent, the heavy-reasoning stream's
+    tokens, a JSON API client -- reads ``answer`` alone, so it gets the
+    whole text and no ``details``: nothing rule 5 moves is lost to it.
+
+    The fold is decided once per answer, by the first exit pass that folds,
+    and the decision rides out on the event as ``folded`` (True: ``content``
+    is the lead and ``details`` the rest; False: read whole). One event can
+    pass the exit more than once (the agent's own end check, then the
+    route's), and a later pass may sit in another task whose turn does not
+    know the answer was cut; so a later pass keeps the recorded decision
+    instead of folding again what is already a lead."""
     from app.agents import answer_contract
 
     text = env.get(key)
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
+    decided = fold and isinstance(env.get("folded"), bool)
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
-                                 evidence=_handed_evidence(turn, rows))
+                                 evidence=_handed_evidence(turn, rows),
+                                 lead=fold and not decided and not (turn is not None and turn.cut))
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations
@@ -1812,6 +1840,10 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
         env["coverage"] = done.coverage
     if done.conflicts:
         env["conflicts"] = done.conflicts
+    if done.details:
+        env["details"] = done.details
+    if fold and not decided:
+        env["folded"] = bool(done.details)
     return env
 
 
@@ -1892,7 +1924,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
-            fixed = _apply_contract(fixed, "content", rows, turn)
+            fixed = _apply_contract(fixed, "content", rows, turn, fold=True)
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
     # The turn's awaiting-inputs STATE rides out on the end event: the field
