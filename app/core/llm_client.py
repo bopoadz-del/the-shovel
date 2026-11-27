@@ -320,8 +320,14 @@ async def complete(
     timeout: Optional[float] = None,
     user_id: Optional[str] = None,
     agent_name: str = "",
+    plain_reply: bool = False,
 ) -> str:
     """Return the assistant message text for a tool-less completion.
+
+    ``plain_reply`` asks the provider to answer without hidden reasoning, with
+    whatever request fields its config declares for that (``plain_reply``; a
+    provider that declares none is sent nothing extra). For a transcription --
+    a page image read line by line -- the reply is then the whole allowance.
 
     Mirrors ``Agent._call_llm``'s provider fallback: on a RETRYABLE failure
     from the primary (402/408/413/429/5xx or a network/timeout error) it retries
@@ -364,6 +370,8 @@ async def complete(
             "max_tokens": _provider_max_tokens(a_cfg, int(max_tokens)),
             "stream": False,
         }
+        if plain_reply:
+            payload.update(a_cfg.get("plain_reply") or {})
         headers = {"Content-Type": "application/json"}
         if a_key:
             headers["Authorization"] = f"Bearer {a_key}"
@@ -375,22 +383,22 @@ async def complete(
                 user_id=user_id, agent_name=agent_name,
             )
             if r.status_code >= 400:
-                exc = httpx.HTTPStatusError(
+                last_exc = httpx.HTTPStatusError(
                     f"{a_cfg['provider']} HTTP {r.status_code}", request=r.request, response=r
                 )
                 if _http_status_is_retryable(r.status_code) and not is_last:
-                    last_exc = exc
                     continue
-                raise exc
+                break  # not retryable, or nothing left to try: raised below
             return ((data or {})["choices"][0]["message"].get("content") or "").strip()
-        except httpx.HTTPStatusError:
-            raise
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            break  # the egress refused outright: never retried, raised below
         except Exception as e:  # network / timeout / parse
             last_exc = e
             if not is_last:
                 continue
-            raise
-    # Unreachable in practice (loop always returns or raises), but keeps types honest.
+            break
+    # The one place a failed completion is raised from: the last failure seen.
     raise last_exc or RuntimeError("LLM completion failed")
 
 

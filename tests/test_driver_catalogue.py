@@ -71,8 +71,11 @@ def _registered_ids(kind):
     if kind == "skill":
         return {f"{h.discipline.value}.{p.id}" for h in catalog.list_hats()
                 for p in (h.playbook.procedures or [] if h.playbook else [])}
+    from app.blocks import _knowledge
+
     root = catalogue.knowledge_dir()
-    return {f[:-3] for f in os.listdir(root) if f.endswith(".md")}
+    return ({f[:-3] for f in os.listdir(root) if f.endswith(".md")}
+            | {e["id"] for e in _knowledge.load_knowledge()})
 
 
 @pytest.mark.parametrize("kind", ["formula", "tool", "workflow", "skill", "knowledge"])
@@ -426,7 +429,8 @@ def test_a_lookup_of_unknown_ids_is_told_to_the_model_not_the_user(monkeypatch, 
 @pytest.mark.parametrize("build,kind", [
     (catalogue._formula_entries, "formula"), (catalogue._tool_entries, "tool"),
     (catalogue._workflow_entries, "workflow"), (catalogue._skill_entries, "skill"),
-    (catalogue._knowledge_entries, "knowledge"),
+    # The knowledge kind has two builders: the knowledge files and the knowledge base.
+    (lambda: catalogue._knowledge_entries() + catalogue.kb_entries(), "knowledge"),
 ])
 def test_each_builder_returns_its_registry_kind(build, kind):
     built = build()
@@ -517,6 +521,16 @@ def test_workflow_entries_read_the_card(monkeypatch, card, needs, gaps):
     ("", ("", "")),
 ])
 def test_knowledge_summary_is_the_heading_and_first_prose(text, want):
+    assert catalogue._knowledge_summary(text) == want
+
+
+@pytest.mark.parametrize("text,want", [
+    ("#hashtag\n## Real\nProse.", ("Real", "Prose.")),                  # no space: not a heading
+    ("####### seven\n## Using C#\nBody.", ("Using C#", "Body.")),       # seven hashes; "#" kept
+    ("```\n# in code\n```\n# Shown ##\n\nAfter.", ("Shown", "After.")),  # fenced; closing run
+    ("#\n## ##\nOnly prose.", ("", "Only prose.")),                     # headings with no text
+])
+def test_knowledge_summary_title_is_the_first_real_heading(text, want):
     assert catalogue._knowledge_summary(text) == want
 
 
@@ -711,18 +725,25 @@ def test_a_reloaded_card_reaches_the_index_without_a_restart(monkeypatch, produc
     assert (before, after) == ("", produces)
 
 
+def _knowledge_file_entries():
+    """The knowledge entries built from the knowledge files (the knowledge
+    base's entries share the kind; they name their entry in ``source``)."""
+    return [e for e in catalogue.entries()
+            if e["kind"] == "knowledge" and "entry" not in e["source"]]
+
+
 @pytest.mark.parametrize("text", ["# Zz\n\ny", "# Zz\n\nOther words, longer."])  # the same size, then not
 def test_a_changed_or_added_knowledge_file_reaches_the_index_without_a_restart(monkeypatch, tmp_path, text):
     monkeypatch.setattr(catalogue, "knowledge_dir", lambda: str(tmp_path))
     catalogue._CACHE.clear()
-    assert not [e for e in catalogue.entries() if e["kind"] == "knowledge"]
+    assert not _knowledge_file_entries()
     path = tmp_path / "zz_k.md"
     path.write_text("# Zz\n\nx", encoding="utf-8")
-    assert next(e for e in catalogue.entries() if e["kind"] == "knowledge")["for"] == "x"
+    assert next(iter(_knowledge_file_entries()))["for"] == "x"
     path.write_text(text, encoding="utf-8")
     st = os.stat(path)
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # a later write, whatever the clock
-    got = next(e for e in catalogue.entries() if e["kind"] == "knowledge")["for"]
+    got = next(iter(_knowledge_file_entries()))["for"]
     catalogue._CACHE.clear()
     assert got == text.split("\n\n", 1)[1]
 

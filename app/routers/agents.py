@@ -422,6 +422,10 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
     resolved_project_id = project_id
     if project_id == store.MASTER_CORPUS_PROJECT_ID:
         resolved_project_id = store.MASTER_CORPUS_SOURCE_PROJECT_ID
+    if resolved_project_id:
+        # A project on the catalogue path (its profile's answer_path) takes
+        # the driver for this turn: marked before the routing gate below.
+        driver.mark_project(await _off_loop(driver.catalogue_path, resolved_project_id, auth.get("user_id")))
 
     # PR #78 — smart_orchestrator routing gate. See agent_chat above for the
     # full design rationale. Run BEFORE we enter the StreamingResponse so the

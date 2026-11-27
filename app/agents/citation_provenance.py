@@ -1727,6 +1727,10 @@ def figure_provenance(
         # A platform workflow's own result is a source too: the figures its
         # answer carries (an EVM's CV and EAC, a cash flow's month rows) were
         # produced by the run, not by the model.
+        sheets: list[dict[str, Any]] = []
+        # What the calculators returned, before the workflows are added: the
+        # given check below reads a workflow's answer itself, with its signs.
+        calculator_numbers = [set(nums) for nums, _meta in calc_entries]
         for rec in ev.records:
             if rec.kind != "tool_run":
                 continue
@@ -1740,10 +1744,52 @@ def figure_provenance(
                 if nums:
                     calc_entries.append((nums, {"source": pt.SOURCE_CALCULATOR,
                                                 "formula": str(payload["workflow"]), "inputs": {}}))
+            if isinstance(payload, dict) and isinstance(payload.get("sheet"), dict):
+                sheets.append(payload["sheet"])
+        # A working sheet handed back by a tool run carries the results code
+        # wrote on it (a step run by the formula registry). The step is code's
+        # arithmetic, but on numbers the model put on the sheet, so a result
+        # is a figure from code only when every number it rests on was given
+        # by the user (any turn), read from a retrieved passage, or produced
+        # by a calculator or workflow run. Otherwise it is the model's own
+        # number passed through a formula, and it gets no credit.
+        if sheets:
+            from app.agents.driver import sheet as working_sheet
+
+            users_gave, tools_gave, passages_gave = _given_sources(
+                ev, calculator_numbers, _workflow_answers(ev))
+            # A given code marked as the user's own (checked when it was
+            # written, possibly in an earlier turn whose message is not in
+            # front of this check) is the user's figure when the answer
+            # quotes it.
+            for sheet_payload in sheets:
+                user_vals |= {abs(v) for v in working_sheet.user_givens(sheet_payload)}
+
+            for sheet_payload in sheets:
+                for row in working_sheet.code_results(sheet_payload):
+                    rests = working_sheet.rests_quantities(sheet_payload, row["step"])
+                    if all(_quantity_given(n, unit, users_gave, tools_gave, passages_gave)
+                           for n, unit in rests):
+                        # The answer's figures are matched on size, so a
+                        # result is pooled by its size and credited only to
+                        # a figure written with the same sign.
+                        calc_entries.append(({abs(row["value"])}, {
+                            "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
+                            "step": row["step"], "unit": row["unit"],
+                            _RESULT_SIGN: row["value"] < 0}))
         calc_pool: set[float] = set()
         for nums, _meta in calc_entries:
             calc_pool |= nums
-        working = _working(_rescaled(calc_pool | user_vals)) if calc_entries else set()
+        # "Working" lets a substitution line through: a pairwise sum, product,
+        # difference or quotient of the sizes of grounded numbers. A turn that
+        # carries a working sheet has none: there every arithmetic step is a
+        # step code ran, so a figure is a tool's result, a passage's figure,
+        # the user's own, or a step's result written with the sign code
+        # wrote. A figure that is none of these is the model's own -- a step
+        # result with its sign turned, or the result of a step that ran on a
+        # quantity nobody gave -- and sizes worked pairwise would let exactly
+        # those back in (43 and 10 make 33 and 53 whatever the signs were).
+        working = _working(_rescaled(calc_pool | user_vals)) if calc_entries and not sheets else set()
 
         entries: list[dict[str, Any]] = []
         bad: list[re.Match] = []
@@ -1763,7 +1809,9 @@ def figure_provenance(
             # figure the user never typed can therefore never read user_input.
             for nums, meta in calc_entries:
                 if _match(value, _rescaled(nums)):
-                    entry = {"figure": fig, **meta}
+                    if _RESULT_SIGN in meta and meta[_RESULT_SIGN] != _written_negative(text, m):
+                        continue  # a step's result, stated with the other sign
+                    entry = {"figure": fig, **{k: v for k, v in meta.items() if k != _RESULT_SIGN}}
                     break
             if entry is None:
                 for rec in attrib_pool:
@@ -1827,6 +1875,204 @@ def figure_provenance(
     except Exception:  # noqa: BLE001 -- a gate must never break an answer
         _LOG.exception("figure_provenance failed; passing answer through")
         return text, []
+
+
+def _given_pools(ev: Any, produced: Iterable[Iterable[float]]) -> tuple[set[float], list[list[float]]]:
+    """What was given to the platform in ``ev``: the figures of every user
+    message, each with the sign it was written with, and of every
+    ``produced`` set (calculator and workflow results), rescaled, and the
+    figures of each retrieved passage."""
+    pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _given_figures(rec.text))
+    for nums in produced:
+        pool |= _rescaled(nums)
+    return pool, [_given_figures(r.text) for r in ev.records if r.kind == "retrieval" and r.text]
+
+
+#: On a sheet step's entry: whether its result is negative (not shown).
+_RESULT_SIGN = "_negative"
+
+
+def _written_negative(text: str, mention: re.Match) -> bool:
+    """True when the figure ``mention`` found in ``text`` is written with a
+    minus, by the formula registry's rule for a sign inside a sentence (a
+    hyphen after a digit or a word is a range or a compound, not a minus)."""
+    from app.lib import formula_registry
+
+    for start in {mention.start("num"), mention.start()}:
+        head = text[:start].replace("\u2212", "-")
+        sign = re.search(formula_registry.FIGURE_SIGN + r"$", head)
+        if sign and sign.group(0) == "-":
+            return True
+    return False
+
+
+def _given_figures(text: str) -> list[float]:
+    """The figures written in ``text``, each with its sign, read with the
+    formula registry's own rule for a sign inside a sentence (a hyphen after
+    a digit or a word is a range or a compound, not a minus); a decimal
+    written without its zero (".5") is read as one."""
+    from app.lib import formula_registry
+
+    figure = formula_registry.FIGURE_SIGN + r"(?:\d[\d,]*(?:\.\d+)?|(?<![\w.,])\.\d+)"
+    return [float(tok.replace(",", "")) for tok in re.findall(figure, (text or "").replace("−", "-"))]
+
+
+_FIGURE_WRITTEN = (r"(?:\d[\d,]*(?:\.\d+)?|(?<![\w.,])\.\d+)")
+_UNIT_WORD = r"[A-Za-z%\u00b0\u00b5\u03bc\u2030][^\s,;:()\[\]]*"
+_UNIT_AFTER_FIGURE = re.compile(rf"[ \t]?({_UNIT_WORD}(?:[ \t]{_UNIT_WORD}){{0,2}})")
+
+
+def _unit_written_after(tail: str) -> str:
+    """The unit written straight after a figure (``tail`` is the text that
+    follows it): the longest run of up to three words the unit converter
+    knows ("m", "kN/m2", "working days"); "" when the figure stands bare or
+    is followed by words that are no unit ("12 long", "67 per m3")."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    m = _UNIT_AFTER_FIGURE.match(tail or "")
+    if not m:
+        return ""
+    words = m.group(1).split()
+    for end in range(len(words), 0, -1):
+        head = " ".join(words[:end]).rstrip(".")
+        if head and parse_unit(head) is not None:
+            return head
+    return ""
+
+
+_UNIT_LETTERS_BEFORE = re.compile(r"[A-Za-z\u00b0\u00b5\u03bc/]+$")
+
+
+def _part_of_a_unit(source: str, start: int, end: int) -> bool:
+    """True when the figure at [start, end) is the tail of a written unit:
+    the 3 of "m3", the 2 of "kN/m2". It is read as a figure (as
+    ``_given_figures`` reads it) but nobody gave it as a number."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    lead = _UNIT_LETTERS_BEFORE.search(source[max(0, start - 16):start])
+    return bool(lead) and parse_unit(lead.group(0) + source[start:end].rstrip(",")) is not None
+
+
+def _given_quantities(text: str) -> list[tuple[float, str | None]]:
+    """The quantities written in ``text``: each figure with its sign (as
+    ``_given_figures`` reads it) and the unit written straight after it --
+    "" for a bare figure, None for a figure that is itself part of a unit
+    ("m3")."""
+    from app.lib import formula_registry
+
+    source = (text or "").replace("\u2212", "-")
+    out: list[tuple[float, str | None]] = []
+    for m in re.finditer(formula_registry.FIGURE_SIGN + _FIGURE_WRITTEN, source):
+        unit = (None if _part_of_a_unit(source, m.start(), m.end())
+                else _unit_written_after(source[m.end():m.end() + 48]))
+        out.append((float(m.group(0).replace(",", "")), unit))
+    return out
+
+
+def _unit_kind(unit: str) -> tuple[str, float] | None:
+    """What kind of quantity a written unit measures and its scale to that
+    kind's base unit ("mm" -> length, 0.001). None for no unit, for one the
+    converter does not know, and for one a scale alone does not convert (an
+    offset, or a conversion that needs another input): such a figure is held
+    to the number check alone."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    head = str(unit or "").strip()
+    parsed = parse_unit(head) if head else None
+    if parsed is None or parsed.needs or parsed.offset or not parsed.scale:
+        return None
+    return parsed.dimension, float(parsed.scale)
+
+
+def _workflow_answers(ev: Any) -> list[str]:
+    """The answer text of every platform workflow that ran in ``ev``."""
+    out: list[str] = []
+    for rec in ev.records:
+        if rec.kind != "tool_run":
+            continue
+        try:
+            payload = json.loads(rec.text or "")
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(payload, dict) and payload.get("ok") and payload.get("workflow")
+                and isinstance(payload.get("answer"), str)):
+            out.append(payload["answer"])
+    return out
+
+
+def _given_sources(ev: Any, produced: Iterable[Iterable[float]], produced_texts: Iterable[str] = ()
+                   ) -> tuple[list[tuple[float, str]], list[tuple[float, str]], list[list[tuple[float, str]]]]:
+    """What was given to the platform in ``ev``, as quantities: the users'
+    messages; what the tools gave (each ``produced`` number, bare, and the
+    quantities written in each of ``produced_texts`` -- a workflow's answer,
+    read with its signs); and each retrieved passage."""
+    users = [q for rec in ev.records if rec.kind == "user" for q in _given_quantities(rec.text)]
+    tools = [(float(n), "") for nums in produced for n in nums]
+    tools += [q for text in produced_texts for q in _given_quantities(text)]
+    passages = [_given_quantities(r.text) for r in ev.records if r.kind == "retrieval" and r.text]
+    return users, tools, passages
+
+
+def _quantity_given(number: float, unit: str, users: list[tuple[float, str]],
+                    tools: list[tuple[float, str]], passages: list[list[tuple[float, str]]]) -> bool:
+    """True when the quantity ``number unit`` was given to the platform.
+
+    A number with no unit (or one whose kind the converter cannot compare) is
+    held to the number check alone, as ``_given_to_us`` does it. A number
+    WITH a unit is a quantity, and it was given only when
+    * a source wrote that very quantity -- the same kind of unit and, at this
+      unit's scale, the same number ("12 m" for 12 m, for 12,000 mm), or
+    * a source wrote the number bare, so the unit is a reading of it.
+    A number the sources wrote only with another unit is another quantity:
+    12 mm is not the user's when the user wrote 12 m, and nor is 12,000 m."""
+    kind = _unit_kind(unit)
+    if kind is None:
+        return _given_to_us(number, _rescaled(n for n, _u in list(users) + list(tools)),
+                            [[n for n, _u in passage] for passage in passages])
+    written = list(users) + list(tools) + [q for passage in passages for q in passage]
+    for n, u in written:
+        other = _unit_kind(u or "")
+        if other is not None and other[0] == kind[0] and _close(n * other[1] / kind[1], number):
+            return True
+    bare = _rescaled(n for n, u in list(users) + list(tools) if _bare(u))
+    return _given_to_us(number, bare, [[n for n, u in passage if _bare(u)] for passage in passages])
+
+
+def _bare(unit: str | None) -> bool:
+    """A figure written with no unit the converter can compare -- and not a
+    digit inside a unit ("m3"), which is no figure of its own."""
+    return unit is not None and _unit_kind(unit) is None
+
+
+def given_check(messages: list[dict[str, Any]] | None, *, tool_passages: bool = True):
+    """A check ``(number, unit="") -> str`` for a turn's messages so far: who
+    gave the quantity -- ``"user"`` (a user message), ``"calculator"`` (a
+    calculator's result or a workflow's answer), ``"passage"`` (a retrieved
+    passage) -- or ``""`` when nobody did (``_quantity_given``). The working
+    sheet marks a given with it when the given is written, so a given checked
+    in one turn stays checked in the next, where the message that carried it
+    is no longer in front of the check."""
+    ev = build_evidence(None, messages, tool_passages=tool_passages)
+    users, tools, passages = _given_sources(
+        ev, [set(c.result_numbers) for c in _calculator_credits(ev)], _workflow_answers(ev))
+
+    def check(number: float, unit: str = "") -> str:
+        if _quantity_given(number, unit, users, [], []):
+            return "user"
+        if _quantity_given(number, unit, [], tools, []):
+            return "calculator"
+        return "passage" if _quantity_given(number, unit, [], [], passages) else ""
+
+    return check
+
+
+def _given_to_us(number: float, given_pool: set[float], passages: list[list[float]]) -> bool:
+    """True when ``number`` was given to the platform, with its sign: it is in
+    ``given_pool`` (the users' messages and the calculator and workflow
+    results, rescaled) or in one of the retrieved ``passages``. A number
+    found in neither is the model's own -- and so is a given figure with its
+    sign turned (-43 written as 43)."""
+    return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
 
 
 def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:
