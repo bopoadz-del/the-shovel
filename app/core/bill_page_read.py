@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -199,11 +200,15 @@ PAGE_READ_PROMPT = (
     "This image is one page of a priced table of quantities. Read every line of "
     "the table and return ONLY a JSON object: {\"lines\": [{\"type\": one of "
     "\"item\", \"carried\", \"brought_forward\", \"subtotal\", \"total\", "
-    "\"heading\", \"ref\": string or null, \"description\": string, \"unit\": "
+    "\"heading\", \"summary\", \"bill\": string or null, \"ref\": string or "
+    "null, \"description\": string, \"unit\": "
     "string or null, \"quantity\": number or null, \"rate\": number or null, "
     "\"amount\": number or null, \"figures\": object or null}]}. An item is a "
     "work line with its own quantity. A carried, brought_forward, subtotal or "
-    "total line is a sum of other lines. When the page prints money columns "
+    "total line is a sum of other lines. bill is the number or name of the bill "
+    "the line belongs to, as the page prints it, or null when the page does not "
+    "say. A summary line is a line of a summary page that lists the total of a "
+    "whole bill: give that bill in bill and its total in amount. When the page prints money columns "
     "other than rate and amount, give each one in figures under the label the "
     "page prints. Copy figures exactly as printed, without thousands "
     "separators. Use null for anything not printed; never calculate or guess "
@@ -417,3 +422,86 @@ def bill_states(
                     "items_sum": items_sum, "printed_total": printed, "diff": diff,
                     "pages_not_read": not_read, "state": state})
     return {"bills": out, "rows_unassigned": len(rows) - len(placed)}
+
+
+SUMMARY = "summary"
+BILL_KEY = "bill"
+
+
+def _bill_key(value: Any) -> str:
+    """A bill's identifier compared without case, spacing or punctuation."""
+    return " ".join(re.findall(r"[^\W_]+", _text(value).casefold()))
+
+
+@dataclass
+class SpanRead:
+    """Bill spans from the page reads, and every page or bill they could not place."""
+
+    spans: list[BillSpan] = field(default_factory=list)
+    #: Pages whose lines name more than one bill (not a member of any span).
+    pages_split: list[int] = field(default_factory=list)
+    #: Bills whose page range holds a page of another bill (no span is given).
+    bills_interleaved: list[str] = field(default_factory=list)
+    #: Bills the summary lists with two different totals (span total ``None``).
+    totals_conflicting: list[str] = field(default_factory=list)
+    #: Bills the summary lists that no read page belongs to.
+    summary_without_pages: list[str] = field(default_factory=list)
+
+
+def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
+    """Each bill's page range and printed total, from the model's own page reads.
+
+    The model names, per line, the bill it belongs to (``bill``) and types the
+    lines of a summary page that list a whole bill's total ``summary``. Code
+    only groups: a page belongs to the one bill its non-summary lines name; a
+    bill's span runs from its first to its last page, so a page not read or
+    naming no bill inside that range is inside the bill (and ``bill_states``
+    says NOT READ for it); the printed total is the amount the summary lists
+    for the bill, ``None`` when it lists none. Nothing is guessed: a page
+    naming two bills, a bill whose range holds another bill's page, and a bill
+    the summary lists twice with different totals are reported, not resolved.
+    Bills are compared without case, spacing or punctuation; the label kept is
+    the first one the reads print."""
+    out = SpanRead()
+    label: dict[str, str] = {}
+    members: dict[str, list[int]] = {}
+    totals: dict[str, set[float]] = {}
+    for key, lines in pages.items():
+        name = _text(key)
+        if not name.isdecimal() or not isinstance(lines, list):
+            continue
+        page = int(name)
+        named: set[str] = set()
+        for line in lines:
+            if not isinstance(line, Mapping):
+                continue
+            bill = _bill_key(line.get(BILL_KEY))
+            if not bill:
+                continue
+            label.setdefault(bill, _text(line.get(BILL_KEY)))
+            if _text(line.get("type")).lower() == SUMMARY:
+                text, ok = _figure(line.get("amount"))
+                amount = g.parse_number(text) if ok and text else None
+                if amount is not None:
+                    totals.setdefault(bill, set()).add(amount)
+                continue
+            named.add(bill)
+        if len(named) > 1:
+            out.pages_split.append(page)
+        elif named:
+            members.setdefault(next(iter(named)), []).append(page)
+    out.pages_split.sort()
+    ranges = {b: (min(ps), max(ps)) for b, ps in members.items()}
+    for bill, (first, last) in sorted(ranges.items(), key=lambda kv: kv[1]):
+        inside = any(first <= p <= last for other, ps in members.items()
+                     if other != bill for p in ps)
+        if inside or any(first <= p <= last for p in out.pages_split):
+            out.bills_interleaved.append(label[bill])
+            continue
+        found = totals.get(bill, set())
+        if len(found) > 1:
+            out.totals_conflicting.append(label[bill])
+        printed = next(iter(found)) if len(found) == 1 else None
+        out.spans.append(BillSpan(label[bill], first, last, printed))
+    out.summary_without_pages = sorted(label[b] for b in totals if b not in members)
+    return out

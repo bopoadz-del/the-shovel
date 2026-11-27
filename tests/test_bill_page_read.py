@@ -456,3 +456,137 @@ def test_render_page_png_renders_the_asked_page(tmp_path, index, dpi):
     pix = fitz.Pixmap(png)
     want = ((200, 100), (100, 300))[index]
     assert (pix.width, pix.height) == (round(want[0] * dpi / 72), round(want[1] * dpi / 72))
+
+
+# --- bill spans from the page reads ------------------------------------------
+
+def _line(bill, kind="item", amount=None, **kw):
+    return {"type": kind, "bill": bill, "description": kw.pop("description", "x"),
+            "amount": amount, **kw}
+
+
+@pytest.mark.parametrize("one, two, pages_one, pages_two", [
+    ("A", "B", (3, 4), (5, 7)),
+    ("Section 9", "Section 10", (10, 12), (13, 13)),
+])
+def test_each_bill_spans_its_first_to_last_page(one, two, pages_one, pages_two):
+    pages = {}
+    for p in range(pages_one[0], pages_one[1] + 1):
+        pages[str(p)] = [_line(one, amount=1)]
+    for p in range(pages_two[0], pages_two[1] + 1):
+        pages[str(p)] = [_line(two, amount=1)]
+    got = bpr.spans_from_page_reads(pages)
+    assert got.spans == [bpr.BillSpan(one, *pages_one, None),
+                         bpr.BillSpan(two, *pages_two, None)]
+    assert not (got.pages_split or got.bills_interleaved or got.summary_without_pages)
+
+
+@pytest.mark.parametrize("on_page, on_summary, total", [
+    ("Bill No. 2", "BILL NO 2", 32882840),
+    ("bill 7 - roads", "Bill 7 Roads", "1500.5"),
+])
+def test_summary_line_gives_the_printed_total_whatever_the_case_or_punctuation(
+        on_page, on_summary, total):
+    pages = {"5": [_line(on_page, amount=10)], "6": [_line(on_page, amount=20)],
+             "1": [_line(on_summary, kind="summary", amount=total)]}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.spans == [bpr.BillSpan(on_page, 5, 6, float(total))]
+    assert got.summary_without_pages == []
+
+
+@pytest.mark.parametrize("amount", [None, "n/a"])
+def test_summary_line_without_a_number_gives_no_total(amount):
+    pages = {"2": [_line("A", amount=3)], "1": [_line("A", kind="summary", amount=amount)]}
+    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("A", 2, 2, None)]
+
+
+@pytest.mark.parametrize("bill", ["A", "Bill 4"])
+def test_summary_page_is_not_a_page_of_the_bill_it_lists(bill):
+    pages = {"1": [_line(bill, kind="summary", amount=9)],
+             "8": [_line(bill, amount=9)]}
+    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan(bill, 8, 8, 9.0)]
+
+
+@pytest.mark.parametrize("gap", [{"4": None}, {"4": [{"type": "heading", "description": "h"}]}])
+def test_page_not_read_or_naming_no_bill_inside_a_range_is_inside_the_bill(gap):
+    pages = {"3": [_line("A", amount=1)], **gap, "5": [_line("A", amount=1)]}
+    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("A", 3, 5, None)]
+
+
+@pytest.mark.parametrize("before, after", [(2, 4), (10, 30)])
+def test_page_naming_two_bills_is_reported_and_in_no_span(before, after):
+    mid = before + 1
+    pages = {str(before): [_line("A")], str(mid): [_line("A"), _line("B")],
+             str(after): [_line("B")]}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.pages_split == [mid]
+    assert got.spans == [bpr.BillSpan("A", before, before), bpr.BillSpan("B", after, after)]
+
+
+@pytest.mark.parametrize("split_page", [5, 6])
+def test_bill_whose_range_holds_a_split_page_gets_no_span(split_page):
+    pages = {"4": [_line("A")], str(split_page): [_line("A"), _line("B")], "7": [_line("A")]}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.bills_interleaved == ["A"]
+    assert got.spans == []
+
+
+@pytest.mark.parametrize("order", [("A", "B", "A"), ("X", "Y", "X")])
+def test_bill_whose_range_holds_another_bills_page_gets_no_span(order):
+    pages = {str(i + 1): [_line(b)] for i, b in enumerate(order)}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.bills_interleaved == [order[0]]
+    assert got.spans == [bpr.BillSpan(order[1], 2, 2)]
+
+
+@pytest.mark.parametrize("first, second, want_total, want_conflict", [
+    (100, 200, None, ["A"]),
+    (100, "100", 100.0, []),
+])
+def test_bill_listed_twice_with_different_totals_has_no_total(first, second,
+                                                               want_total, want_conflict):
+    pages = {"1": [_line("A", kind="summary", amount=first),
+                   _line("A", kind="summary", amount=second)],
+             "3": [_line("A", amount=1)]}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.spans == [bpr.BillSpan("A", 3, 3, want_total)]
+    assert got.totals_conflicting == want_conflict
+
+
+@pytest.mark.parametrize("listed", [["Q"], ["Q", "R"]])
+def test_summary_bill_with_no_pages_is_listed(listed):
+    pages = {"1": [_line(b, kind="summary", amount=5) for b in listed],
+             "2": [_line("A", amount=5)]}
+    got = bpr.spans_from_page_reads(pages)
+    assert got.summary_without_pages == sorted(listed)
+    assert got.spans == [bpr.BillSpan("A", 2, 2)]
+
+
+@pytest.mark.parametrize("pages", [
+    {"cover": [_line("A")], "2": [_line("B")]},
+    {"1": {"not_read": True}, "2": [_line("B")], "3": ["not a line"]},
+])
+def test_keys_that_are_not_pages_and_reads_that_are_not_lists_place_nothing(pages):
+    assert bpr.spans_from_page_reads(pages).spans == [bpr.BillSpan("B", 2, 2)]
+
+
+@pytest.mark.parametrize("bill", [None, "", " - "])
+def test_line_naming_no_bill_places_no_page(bill):
+    assert bpr.spans_from_page_reads({"1": [_line(bill)]}).spans == []
+
+
+def test_page_read_prompt_asks_for_the_bill_and_summary_lines():
+    assert '\\"bill\\"' in json.dumps(bpr.PAGE_READ_PROMPT)
+    assert '\\"summary\\"' in json.dumps(bpr.PAGE_READ_PROMPT)
+
+
+@pytest.mark.parametrize("printed, want", [(30, "RECONCILED"), (31, "FAILED")])
+def test_spans_from_reads_feed_the_bill_check(printed, want):
+    pages = {"1": [_line("A", kind="summary", amount=printed)],
+             "2": [_line("A", quantity=1, rate=10, amount=10)],
+             "3": [_line("A", quantity=2, rate=10, amount=20)]}
+    got = bpr.rows_from_page_reads(pages)
+    span = bpr.spans_from_page_reads(pages)
+    states = bpr.bill_states(got.rows, got.pages_not_read, spans=span.spans, tolerance=0)
+    assert [b["state"] for b in states["bills"]] == [want]
+    assert states["bills"][0]["pages"] == [2, 3]
