@@ -14,6 +14,8 @@ import json
 import re
 from typing import Any, Dict, List
 
+from app.agents.core.tool_registry import is_notes
+
 #: Retrieval and navigation tools: their results are passages, not figures.
 RETRIEVAL_TOOLS = frozenset({"search_project_documents", "search_general_knowledge",
                              "fetch_document", "list_project_documents"})
@@ -190,7 +192,7 @@ def cited_entry_rows(trail: List[Dict[str, Any]], answer: str) -> List[Dict[str,
     written = _numbers(answer)
     entries: List[Dict[str, Any]] = []
     for m in trail:
-        if m.get("role") != "tool" or m.get("name") in RETRIEVAL_TOOLS:
+        if m.get("role") != "tool" or m.get("name") in RETRIEVAL_TOOLS or is_notes(m.get("name")):
             continue
         try:
             payload = json.loads(m.get("content") or "")
@@ -291,7 +293,8 @@ def tool_credit_lines(calls: List[Dict[str, Any]]) -> str:
 
     lines = []
     for name, args in calls:
-        if name in RETRIEVAL_TOOLS or name in _NO_CREDIT_LINE or name.startswith("run_workflow"):
+        if (name in RETRIEVAL_TOOLS or name in _NO_CREDIT_LINE or name.startswith("run_workflow")
+                or is_notes(name)):
             continue
         shown = {k: v for k, v in args.items() if k not in ("message", "user_message", "text", "brief")}
         line = "Calculated with: " + tool_label(name, shown)

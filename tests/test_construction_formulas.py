@@ -209,6 +209,10 @@ _SMOKE_INPUTS = {
     "productivity_manpower_duration": dict(
         quantity_executed=100, man_hours=50, quantity=200, daily_production=20,
     ),
+    "monte_carlo_percentiles": dict(low=[3, 5], most_likely=[4, 6], high=[8, 9],
+                                    iterations=500, seed=2),
+    "monte_carlo_cost_percentiles": dict(low=[300, 500], most_likely=[400, 600],
+                                         high=[800, 900], iterations=500, seed=2),
     "pe_unit_convert": dict(value=10, from_unit="m", to_unit="ft"),
     "material_consumption": dict(quantity_of_work=100, output_per_unit=10, waste_percent=5),
     "concrete_mix_proportions": dict(

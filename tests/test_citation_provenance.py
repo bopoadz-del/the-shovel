@@ -615,3 +615,26 @@ def test_a_workflows_answer_is_read_with_its_signs_for_the_given_check(answer, n
          "content": json.dumps({"ok": True, "workflow": "survey_levels", "answer": answer})},
     ]
     assert given_check(messages)(number, unit) == expected
+
+
+@pytest.mark.parametrize("tool,payload", [
+    ("read_memory", {"ok": True, "result": {"name": "datum", "data": {"level_m": 99.5}}}),
+    ("list_memory", {"ok": True, "result": {"notes": [{"name": "datum", "summary": "level 99.5 m"}]}}),
+    ("write_memory", {"ok": True, "result": {"name": "datum", "saved": True, "data": {"level_m": 99.5}}}),
+])
+def test_a_number_only_in_the_models_own_note_is_not_given(tool, payload):
+    """The model's own notes back no figure: a number that is only in a note
+    it wrote or read was given by nobody."""
+    import json
+
+    from app.agents.citation_provenance import given_check
+
+    messages = [
+        {"role": "user", "content": "What is the datum level?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "n1", "type": "function", "function": {"name": tool, "arguments": "{}"}}]},
+        {"role": "tool", "name": tool, "tool_call_id": "n1", "content": json.dumps(payload)},
+    ]
+    check = given_check(messages)
+    assert check(99.5, "m") == "" and check(99.5) == ""
+

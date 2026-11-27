@@ -632,6 +632,16 @@ def admin_list_archived_projects(auth: dict = Depends(require_api_key)):
     return {"archived": out, "count": len(out)}
 
 
+@router.get("/v1/admin/projects/{project_id}/memory")
+def admin_project_memory(project_id: str, auth: dict = Depends(require_api_key)):
+    """The model's own notes in one project (``app.core.llm_memory``), whole,
+    so the owner can read what it taught itself. Read-only."""
+    _require_admin(auth)
+    from app.core import llm_memory
+    notes = llm_memory.listing(project_id, with_data=True)
+    return {"project_id": project_id, "notes": notes, "count": len(notes)}
+
+
 @router.post("/v1/admin/projects/{project_id}/restore")
 def admin_restore_archived_project(project_id: str,
                                    hide_from_sidebar: bool = False,

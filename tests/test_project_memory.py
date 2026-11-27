@@ -85,11 +85,15 @@ def test_remember_then_recall_across_documents():
     # document 2 — a drawing
     remember_from_result(pid, {"drawing_number": "A-101", "revision": "C"},
                          source_document="plan.pdf")
-    # later: ask about the LD rate — answered from memory, no contract re-attached
-    ctx = build_memory_context(pid, "ld rate")
-    assert "0.1%/day" in ctx
     # all four facts accumulated across both documents
     assert len(store.list_facts(pid)) == 4
+    # ...but the app extracted them by itself: nobody confirmed them, so none
+    # is prompt material until someone does.
+    assert build_memory_context(pid, "ld rate") == ""
+    store.set_fact(pid, "ld_rate", "0.1%/day", verified_by="reviewer")
+    ctx = build_memory_context(pid, "ld rate")
+    assert "0.1%/day" in ctx
+    assert "A-101" not in ctx
 
 
 def test_build_memory_context_empty_when_no_facts():
@@ -128,7 +132,7 @@ def test_chat_injects_project_memory():
     from app.routers.chat import _with_project_memory
     store.init_db()
     proj = store.create_project("Chat Memory Test")  # owner defaults to "system"
-    store.set_fact(proj["id"], "ld_rate", "0.1%/day")
+    store.set_fact(proj["id"], "ld_rate", "0.1%/day", verified_by="system")
     # The project owner sees its memory injected into the prompt.
     out = _with_project_memory("what is the LD rate?", proj["id"], "system")
     assert "0.1%/day" in out
