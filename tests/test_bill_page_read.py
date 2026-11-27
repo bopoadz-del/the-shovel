@@ -590,3 +590,55 @@ def test_spans_from_reads_feed_the_bill_check(printed, want):
     states = bpr.bill_states(got.rows, got.pages_not_read, spans=span.spans, tolerance=0)
     assert [b["state"] for b in states["bills"]] == [want]
     assert states["bills"][0]["pages"] == [2, 3]
+
+
+@pytest.mark.parametrize("pages, tolerance, want_states, want_split, want_conflict, want_listed", [
+    # the printed total is 0.5 off the items: the stated tolerance decides
+    ({0: [_line("A", kind="summary", amount=30.5)],
+      1: [_line("A", quantity=1, rate=10, amount=10)],
+      2: [_line("A", quantity=2, rate=10, amount=20)]},
+     0.5, ["RECONCILED"], [], [], []),
+    ({0: [_line("A", kind="summary", amount=30.5)],
+      1: [_line("A", quantity=1, rate=10, amount=10)],
+      2: [_line("A", quantity=2, rate=10, amount=20)]},
+     0.0, ["FAILED"], [], [], []),
+    ({0: [_line("A", kind="summary", amount=30), _line("A", kind="summary", amount=31),
+          _line("C", kind="summary", amount=5)],
+      1: [_line("A", quantity=1, rate=10, amount=10)],
+      2: [_line("A", quantity=2, rate=10, amount=20), _line("B", quantity=1, rate=1, amount=1)]},
+     0.5, ["UNCHECKED"], [3], ["A"], ["C"]),
+])
+def test_model_bill_read_states_check_the_spans_of_the_same_reads(
+    pages, tolerance, want_states, want_split, want_conflict, want_listed,
+):
+    from types import SimpleNamespace
+
+    rows, states = bpr.model_bill_read(lambda p: pages[p.index], tolerance=tolerance)
+    got_rows, not_read, raw = rows([SimpleNamespace(index=i) for i in sorted(pages)])
+    assert raw == {str(i + 1): pages[i] for i in pages}
+    out = states(got_rows, not_read)
+    assert [b["state"] for b in out["bills"]] == want_states
+    assert out["tolerance"] == tolerance
+    assert out["pages_split"] == want_split
+    assert out["totals_conflicting"] == want_conflict
+    assert sorted(out["summary_without_pages"]) == want_listed
+
+
+@pytest.mark.parametrize("first, second", [(30, 31), (31, 30)])
+def test_model_bill_read_states_use_the_latest_reads_only(first, second):
+    from types import SimpleNamespace
+
+    # the first run read one page more: its bill must not reach the second states
+    runs = [{0: [_line("A", kind="summary", amount=first)],
+             1: [_line("A", quantity=3, rate=10, amount=30)],
+             2: [_line("B", quantity=1, rate=1, amount=1)]},
+            {0: [_line("A", kind="summary", amount=second)],
+             1: [_line("A", quantity=3, rate=10, amount=30)]}]
+    current: list[dict] = []
+    rows, states = bpr.model_bill_read(lambda p: current[0][p.index], tolerance=0)
+    for run in runs:
+        current[:] = [run]
+        got_rows, not_read, _ = rows([SimpleNamespace(index=i) for i in sorted(run)])
+    out = states(got_rows, not_read)
+    assert [b["state"] for b in out["bills"]] == ["RECONCILED" if second == 30 else "FAILED"]
+    assert out["bills"][0]["printed_total"] == second
