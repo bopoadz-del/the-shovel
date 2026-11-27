@@ -40,15 +40,19 @@ const CASES = [
   {
     project: 'proj-object',
     notes: [{ name: 'paths', data: { ask_first: 'which bill', tool_for: { rates: 'rows_aggregate' } },
-      turn: 'conv-a#2', written_at: '2026-11-20T08:15:00+00:00' }],
+      ref: 'ws-proj-object-1763626500000#2', label: { conversation: 'Bill rates check', message: 2 },
+      words: 'message 2 of “Bill rates check”', written_at: '2026-11-20T08:15:00+00:00' }],
     shows: 'ask_first',
   },
   {
     project: 'proj-array',
     notes: [
       { name: 'how-to', data: [{ kind: 'schedule', start_with: 'list_documents' }],
-        turn: 'conv-b#5', written_at: '2026-11-25T17:40:00+00:00' },
-      { name: 'other', data: { keep: true }, turn: 'conv-b#6', written_at: '2026-11-26T09:00:00+00:00' },
+        ref: 'ws-proj-array-1764092400000#5', label: { conversation: null, message: 5 },
+        words: 'message 5 of a conversation', written_at: '2026-11-25T17:40:00+00:00' },
+      { name: 'other', data: { keep: true }, ref: 'ws-proj-array-1764147600000#6',
+        label: { conversation: 'Pour dates', message: 6 }, words: 'message 6 of “Pour dates”',
+        written_at: '2026-11-26T09:00:00+00:00' },
     ],
     shows: 'start_with',
   },
@@ -65,7 +69,7 @@ function reset() {
   for (const c of CASES) {
     store[c.project] = {
       notes: c.notes.map((n) => ({ name: n.name, data: n.data, bytes: 10, written_at: n.written_at,
-        written_by_turn: n.turn, review: '', reviewed_at: '', reviewed_by: '',
+        written_by_turn: n.ref, turn: n.label, review: '', reviewed_at: '', reviewed_by: '',
         version: `v1-${c.project}-${n.name}` })),
       reviews: [],
     }
@@ -152,7 +156,9 @@ for (const c of CASES) {
       for (const n of c.notes) {
         const text = v.note(n.name).textContent
         assert.ok(text.includes(n.name), text)
-        assert.ok(text.includes(n.turn), text)
+        assert.ok(text.includes(n.words), text)
+        // The stored turn reference is an internal id: never on screen.
+        assert.equal(text.includes(n.ref.split('#')[0]), false, text)
         assert.ok(text.includes(n.written_at.slice(0, 10)), text)
         assert.ok(text.includes('Not reviewed'), text)
         assert.deepEqual(JSON.parse(v.note(n.name).querySelector('pre').textContent), n.data)
@@ -300,3 +306,13 @@ for (const [from, to] of [['proj-object', 'proj-array'], ['proj-array', 'proj-ob
     } finally { v.unmount() }
   })
 }
+
+const { turnWords } = await server.ssrLoadModule('/src/pages/memoryTurn.ts')
+
+test('a turn reads as message and conversation title, or as little as is known', () => {
+  assert.equal(turnWords({ conversation: 'Bill rates', message: 3 }), 'message 3 of “Bill rates”')
+  assert.equal(turnWords({ conversation: null, message: 7 }), 'message 7 of a conversation')
+  assert.equal(turnWords({ conversation: 'Pour dates', message: null }), 'in “Pour dates”')
+  assert.equal(turnWords({ conversation: null, message: null }), '')
+  assert.equal(turnWords(undefined), '')
+})

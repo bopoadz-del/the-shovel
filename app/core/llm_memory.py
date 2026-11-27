@@ -35,7 +35,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionLocal, engine, get_database_url
-from app.core.models import LlmMemory, LlmMemoryReview
+from app.core.models import Conversation, LlmMemory, LlmMemoryReview
 
 DEFAULT_MAX_BYTES = 16384
 DEFAULT_MAX_DOCS = 50
@@ -250,9 +250,25 @@ def listing(project_id: str, with_data: bool = False,
                 entry["data"] = json.loads(row.data)
             if with_review:
                 entry.update(review=row.review, reviewed_at=row.reviewed_at,
-                             reviewed_by=row.reviewed_by, version=version_of(row))
+                             reviewed_by=row.reviewed_by, version=version_of(row),
+                             turn=turn_label(s, project_id, row.written_by_turn))
             out.append(entry)
         return out
+
+
+def turn_label(session: Any, project_id: str, ref: str) -> Dict[str, Any]:
+    """The turn a note was written in, as a person reads it: the
+    conversation's title (only when that conversation is in the same project)
+    and the number of the user's message in it. The stored reference is an
+    internal id and is not part of the label."""
+    conv_id, sep, number = (ref or "").rpartition("#")
+    message = int(number) if sep and number.isdigit() and int(number) > 0 else None
+    title = None
+    if conv_id:
+        conv = session.get(Conversation, conv_id)
+        if conv is not None and conv.project_id == project_id:
+            title = (conv.title or "").strip() or None
+    return {"conversation": title, "message": message}
 
 
 def version_of(row: Any) -> str:

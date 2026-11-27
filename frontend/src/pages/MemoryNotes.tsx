@@ -18,6 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, ApiError } from '../lib/api'
+import { turnWords, type TurnLabel } from './memoryTurn'
 
 export interface MemoryNote {
   name: string
@@ -25,6 +26,7 @@ export interface MemoryNote {
   bytes: number
   written_at: string
   written_by_turn: string
+  turn?: TurnLabel
   review: string
   reviewed_at: string
   reviewed_by: string
@@ -151,7 +153,7 @@ export default function MemoryNotes({ initialProjectId = '' }: { initialProjectI
               <div className="memory-note__head">
                 <strong>{n.name}</strong>
                 <span> · written {day(n.written_at)}</span>
-                {n.written_by_turn && <span> · turn {n.written_by_turn}</span>}
+                {turnWords(n.turn) && <span> · {turnWords(n.turn)}</span>}
                 <span className="memory-note__mark"> · {MARK_WORDS[n.review] ?? n.review}</span>
               </div>
               <pre className="memory-note__data">{JSON.stringify(n.data, null, 2)}</pre>

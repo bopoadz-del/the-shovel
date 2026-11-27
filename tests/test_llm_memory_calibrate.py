@@ -396,3 +396,61 @@ def test_the_version_changes_with_each_write_and_holds_across_reads(first, secon
     # A decision does not change the version: the note's content is the same.
     llm_memory.review(pid, "paths", "keep", v2)
     assert _ver(pid, "paths") == v2
+
+
+def _put_conversation(conv_id, project_id, title):
+    """The conversation row as the app keeps it; created when the route kept none."""
+    from app.core.db import SessionLocal
+    from app.core.models import Conversation
+    with SessionLocal() as s:
+        row = s.get(Conversation, conv_id)
+        if row is None:
+            row = Conversation(id=conv_id, agent_name="project-assistant", project_id=project_id,
+                               created_at="2026-11-27T00:00:00+00:00",
+                               updated_at="2026-11-27T00:00:00+00:00")
+            s.add(row)
+        row.project_id, row.title = project_id, title
+        s.commit()
+
+
+@pytest.mark.parametrize("name,data,title", [
+    ("paths", {"ask_first": "which bill"}, "Bill rates check"),
+    ("how-to.json", [{"start_with": "list_project_documents"}], "Pour dates"),
+])
+def test_the_owner_reads_the_turn_as_conversation_title_and_message_never_the_stored_id(
+        client, monkeypatch, name, data, title):
+    h = _user(client, "turnlbl")
+    pid = _project(client, h, "Calibrate turn label")
+    _write(client, monkeypatch, h, pid, name, data)
+    with _Admin():
+        ref = _admin_notes(client, pid)[_stem(name)]["written_by_turn"]
+        conv_id = ref.rpartition("#")[0]
+        assert conv_id.startswith(f"ws-{pid}-"), ref
+        _put_conversation(conv_id, pid, title)
+        note = _admin_notes(client, pid)[_stem(name)]
+        assert note["turn"] == {"conversation": title, "message": 1}
+        assert conv_id not in json.dumps(note["turn"])
+        # The same conversation id, filed under another project: its title is not shown here.
+        _put_conversation(conv_id, f"other-{uuid.uuid4().hex[:8]}", title)
+        assert _admin_notes(client, pid)[_stem(name)]["turn"] == {"conversation": None, "message": 1}
+
+
+@pytest.mark.parametrize("ref,message", [
+    ("", None), ("no-number-here", None), ("c#0", None), ("c#x", None), ("c#-2", None),
+    ("c#3", 3), ("ws-p-1#12", 12), ("#4", 4), ("a#b#7", 7),
+])
+def test_a_turn_label_reads_only_a_positive_message_number(ref, message):
+    from app.core.db import SessionLocal
+    with SessionLocal() as s:
+        assert llm_memory.turn_label(s, "proj-x", ref) == {"conversation": None, "message": message}
+
+
+@pytest.mark.parametrize("title,shown", [("  Night pour  ", "Night pour"), ("   ", None), (None, None)])
+def test_a_blank_conversation_title_is_no_title(title, shown):
+    from app.core.db import SessionLocal
+    pid, conv_id = f"p-{uuid.uuid4().hex[:8]}", f"ws-x-{uuid.uuid4().int % 10**13}"
+    llm_memory.init_db()
+    _put_conversation(conv_id, pid, title)
+    with SessionLocal() as s:
+        assert llm_memory.turn_label(s, pid, f"{conv_id}#2") == {"conversation": shown, "message": 2}
+        assert llm_memory.turn_label(s, "another", f"{conv_id}#2") == {"conversation": None, "message": 2}
