@@ -481,7 +481,8 @@ def test_a_price_unit_written_after_a_slash_is_kept(price, total):
 
 @pytest.mark.parametrize("rate,price,quoted,never", [
     ("22 L/m2", "-310 per m3", "-310 per m3", "-0.31"),
-    ("0.022 m3/m2", "900000000 per L", "900000000 per L", "900,000,000,000"),
+    ("0.022 m3/m2", "900000000 per L", "900,000,000 per L", "900,000,000,000"),
+    ("22 L/m2", "-310/m3", "(-310/m3)", "-0.31"),
 ])
 def test_a_refusal_after_a_conversion_quotes_the_users_figure(rate, price, quoted, never):
     out = _chat({"quantity": "640 m2", "consumption_per_unit": rate,
@@ -497,3 +498,28 @@ def test_a_rate_whose_unit_cannot_be_read_is_refused_by_name(rate):
                  "price_per_resource_unit": "310 per m3"})
     assert out["status"] == "error"
     assert "resource consumed per unit of work" in out["question"]
+
+
+# --- the question quotes a converted input as figure + the unit written with it
+@pytest.mark.parametrize("written,shown", [
+    ([150.0, "%"], "(150%)"),
+    ([-310.0, "per m3"], "(-310 per m3)"),
+    ([310.0, "/m3"], "(310/m3)"),
+    ([2500.5, "kg"], "(2500.5 kg)"),
+])
+def test_an_out_of_range_question_shows_the_written_figure_and_unit(written, shown):
+    from app.lib import source_labels
+    row = {"parameter": "price_per_resource_unit", "label": "price", "unit": "currency/count",
+           "value": "as typed", "reason": "out_of_range", "lo": 0, "hi": 1e9,
+           "kind": "number", "written": written}
+    question = source_labels.input_question("resource_cost_line", [row])
+    assert f" given {shown} is outside" in question
+    assert "as typed" not in question
+
+
+@pytest.mark.parametrize("value,shown", [(-0.31, "(-0.31 "), (2e9, "(2,000,000,000 ")])
+def test_an_out_of_range_question_without_a_written_pair_shows_the_checked_value(value, shown):
+    from app.lib import source_labels
+    row = {"parameter": "price_per_resource_unit", "label": "price", "unit": "currency/count",
+           "value": value, "reason": "out_of_range", "lo": 0, "hi": 1e9, "kind": "number"}
+    assert shown in source_labels.input_question("resource_cost_line", [row])

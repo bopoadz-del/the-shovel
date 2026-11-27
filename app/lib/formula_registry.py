@@ -1084,7 +1084,9 @@ def check_inputs(name: str, values: Dict[str, Any],
             if stated is not None and stated[0] != number:
                 # Converted from the unit the user wrote: quote that, and
                 # offer no rescaling of a figure the user never saw.
-                rejected.append(_rejection(p, given, "out_of_range"))
+                row = _rejection(p, given, "out_of_range")
+                row["written"] = [stated[0], stated[1]]
+                rejected.append(row)
                 continue
             row = _rejection(p, value, "out_of_range")
             hint = scale_hint(p, number)

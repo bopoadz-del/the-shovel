@@ -176,6 +176,16 @@ def _shown_quantity(value: Any, row: Dict[str, Any]) -> str:
 _NAMED_KINDS = frozenset({"ratio", "count", "fraction"})
 
 
+def _written_quantity(written: Any) -> str:
+    """A figure and the unit the user wrote with it, in their order: the
+    unit after a space, except a percent sign or a unit written as "/...",
+    which follow the figure directly."""
+    number, unit = written
+    unit = str(unit or "").strip()
+    joined = _norm(unit) == "%" or unit.startswith("/")
+    return f"{_fmt_value(number)}{'' if joined or not unit else ' '}{unit}"
+
+
 def _accepted_range(row: Dict[str, Any]) -> str:
     if row.get("above_lo"):
         # The lower bound is not itself accepted: said as it is meant.
@@ -225,7 +235,9 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
                 f"{_with_article(_dimension_words(row.get('per_dimension')))}, so the two do not go together.")
         elif reason == "out_of_range":
             verb = "are" if row.get("kind") == "series" else "is"
-            sentences.append(f"The {label} given ({_shown_quantity(value, row)}) {verb} outside what the "
+            shown = (_written_quantity(row["written"]) if row.get("written")
+                     else _shown_quantity(value, row))
+            sentences.append(f"The {label} given ({shown}) {verb} outside what the "
                              f"{display} calculator accepts ({_accepted_range(row)}).")
             scale = row.get("scale")
             if scale:

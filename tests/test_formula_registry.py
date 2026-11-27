@@ -235,7 +235,15 @@ def test_an_out_of_range_refusal_after_a_conversion_quotes_the_written_figure(wr
                                   {**values, "price_per_resource_unit": written})
     assert [(r["parameter"], r["reason"], r["value"]) for r in rejected] == [
         ("price_per_resource_unit", "out_of_range", written)]
+    assert rejected[0]["written"] == list(fr.value_and_unit(written))
     assert "scale" not in rejected[0]
+
+
+@pytest.mark.parametrize("values", [{"a": 1, "b": "2 m"}, {"x": -5.5}])
+def test_check_inputs_passes_the_values_of_an_unregistered_formula_through(values):
+    out, rejected = fr.check_inputs("no_formula_of_this_name", values, values)
+    assert (out, rejected) == (values, [])
+    assert out is not values
 
 
 @pytest.mark.parametrize("written", [None, "-0.31", "-0.31 per count", -0.31])
@@ -244,6 +252,7 @@ def test_an_out_of_range_refusal_without_a_conversion_quotes_the_checked_value(w
     given = None if written is None else {**values, "price_per_resource_unit": written}
     _, rejected = fr.check_inputs("resource_cost_line", values, given)
     assert [(r["reason"], r["value"]) for r in rejected] == [("out_of_range", -0.31)]
+    assert "written" not in rejected[0]
 
 
 @pytest.mark.parametrize("values", [
