@@ -174,9 +174,15 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
            "review": "", "reviewed_at": "", "reviewed_by": ""}
     with SessionLocal() as s:
         with s.begin():
-            prev = s.scalar(select(LlmMemory.review)
-                            .where(LlmMemory.project_id == project_id, LlmMemory.name == stem))
-            if prev is None or prev == DISCARDED:
+            # A note in the model's sight is replaced in place. This write
+            # comes first: on SQLite it takes the one writer's lock, so the
+            # count below is the count the insert is made against.
+            revived = 0
+            done = s.execute(update(LlmMemory)
+                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem,
+                                    LlmMemory.review != DISCARDED)
+                             .values(**row)).rowcount
+            if not done:
                 _one_new_note_at_a_time(s, project_id)
                 # Discarded notes are out of the model's sight, so they do not
                 # take a place it could only free by replacing them; writing
@@ -187,12 +193,12 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                 if count >= max_docs():
                     raise MemoryRefused(f"this project already holds {count} notes (the limit); "
                                        "replace or reuse one of them (list_memory shows them)")
-            done = s.execute(update(LlmMemory)
-                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
-                             .values(**row)).rowcount
-            if not done:
-                s.add(LlmMemory(project_id=project_id, name=stem, **row))
-        created = not done
+                revived = s.execute(update(LlmMemory)
+                                    .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
+                                    .values(**row)).rowcount
+                if not revived:
+                    s.add(LlmMemory(project_id=project_id, name=stem, **row))
+        created = not (done or revived)
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
 
 
