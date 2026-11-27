@@ -62,13 +62,14 @@ own outcome unchanged.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,7 @@ SUMMARY_KEYS = (
     "private_plan_saved", "work_dir_durable", "geometry",
     "mode", "execute_hash", "gates", "refused", "derived_document_id", "superseded",
     "rows_written", "chunks_added", "chunks_over_window", "document_status", "index_status",
+    "reader", "pages_not_read", "bill_state_counts", "rows_unassigned",
 )
 #: Error codes (the summary never carries a message).
 ERR_MISSING_IDS = "missing_ids"
@@ -127,6 +129,41 @@ ERR_NOT_SAVED = "plan_not_saved"
 ERR_BAD_EXECUTE = "bad_execute_params"
 ERR_REFUSED = "execute_refused"
 ERR_NOT_DERIVED = "not_derived"
+ERR_BAD_READER = "bad_reader_params"
+
+#: ``BILL_PLAN_READER``: the row reader of the run. Unset or ``geometry`` =
+#: the page word geometry (unchanged); ``model`` = the model reads each page
+#: image (``bill_page_read``), and each bill is checked against the span and
+#: printed total the same reads give, to ``BILL_PLAN_TOTAL_TOLERANCE``.
+READER_GEOMETRY = "geometry"
+READER_MODEL = "model"
+
+
+@dataclass(frozen=True)
+class Reader:
+    """The run's row reader and, for the model reader, the stated tolerance of
+    a bill's item sum against its printed total (from the bill's own rounding)."""
+
+    name: str = READER_GEOMETRY
+    tolerance: float = 0.0
+
+
+def parse_reader(env: Mapping[str, str]) -> Reader:
+    """The reader the env asks for. Raises ValueError on an unknown reader, a
+    tolerance that is not a finite number >= 0, or a tolerance given without
+    the model reader (it would be silently ignored)."""
+    name = (env.get("BILL_PLAN_READER") or "").strip().lower() or READER_GEOMETRY
+    raw = (env.get("BILL_PLAN_TOTAL_TOLERANCE") or "").strip()
+    if name not in (READER_GEOMETRY, READER_MODEL):
+        raise ValueError("unknown reader")
+    if name == READER_GEOMETRY:
+        if raw:
+            raise ValueError("a tolerance needs the model reader")
+        return Reader()
+    tolerance = float(raw) if raw else 0.0
+    if not (0.0 <= tolerance < float("inf")):
+        raise ValueError("tolerance must be a finite number >= 0")
+    return Reader(READER_MODEL, tolerance)
 
 MODE_EXECUTE = "execute"
 #: An execute hash is exactly a lowercase sha256 hex digest.
@@ -256,6 +293,9 @@ class Deps:
     #: EXECUTE only: the length summary of one document's stored chunks
     #: ``(project_id, document_id)`` (``chunk_bounds.bounds_summary``).
     chunk_bounds: Callable[[str, str], dict[str, Any]] | None = None
+    #: MODEL reader only: ``(document_id, work_dir, tolerance)`` -> the
+    #: ``(rows_of_reads, states_of_rows)`` pair handed to plan and derive.
+    model_read: Callable[[str, str, float], tuple[Any, Any]] | None = None
 
 
 def parse_pages(raw: str | None) -> tuple[int, int] | None:
@@ -368,6 +408,38 @@ def private_plan_name(plan: Mapping[str, Any]) -> str:
     return f"plan_{int(first)}_{int(stop)}.json"
 
 
+def state_counts(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Counts of a model-reader plan: pages not read, bills per state (the state
+    as a code token), rows under no bill. Empty for a plan without states."""
+    states = plan.get("bill_states")
+    if not isinstance(states, Mapping):
+        return {}
+    counts: dict[str, int] = {}
+    for bill in states.get("bills") or []:
+        code = str(bill.get("state") or "").lower().replace(" ", "_")
+        counts[code] = counts.get(code, 0) + 1
+    return {"pages_not_read": len(plan.get("pages_not_read") or []),
+            "bill_state_counts": counts,
+            "rows_unassigned": states.get("rows_unassigned")}
+
+
+def with_reader(deps: Deps, reader: Reader, document_id: str, work_dir: str) -> Deps:
+    """``deps`` whose plan and derive read rows with ``reader``. The geometry
+    reader gives ``deps`` back as it is. The model reader needs ``model_read``;
+    plan and derive get one shared pair, so an execute sees the plan's reads."""
+    if reader.name == READER_GEOMETRY:
+        return deps
+    if deps.model_read is None:
+        raise ValueError("the model reader is not wired")
+    rows_of_reads, states_of_rows = deps.model_read(document_id, work_dir, reader.tolerance)
+    seam = {"rows_of_reads": rows_of_reads, "states_of_rows": states_of_rows}
+    return replace(
+        deps,
+        plan=functools.partial(deps.plan, **seam),
+        derive=None if deps.derive is None else functools.partial(deps.derive, **seam),
+    )
+
+
 def plan_one(
     project_id: str,
     document_id: str,
@@ -415,6 +487,7 @@ def plan_one(
     for name in (*PLAN_FIELDS, *SOURCE_FIELDS):
         if name in plan:
             report[name] = plan[name]
+    report.update(state_counts(plan))
     sections = plan.get("sections")
     if sections is None:  # a skip: the plan carries only its reason
         report["error"] = ERR_NO_PLAN
@@ -488,6 +561,7 @@ def execute_one(
     for name in (*PLAN_FIELDS, *SOURCE_FIELDS):
         if name in plan:
             report[name] = plan[name]
+    report.update(state_counts(plan))
     refused = gate_refusals(plan, execute_hash, gates)
     report["refused"] = refused
     if refused:
@@ -558,6 +632,27 @@ def _peak_rss_mb() -> float | None:
     return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
 
 
+def production_model_read(document_id: str, work_dir: str, tolerance: float):
+    """The model reader inside the ingest task: each page image is rendered
+    from the document's bytes and sent through the product's provider client;
+    its lines are saved under ``work_dir`` and given back on a later run."""
+    from app.core import bill_page_read as bpr
+    from app.core import projects
+
+    path: list[str] = []
+
+    def render(index: int) -> bytes:
+        if not path:
+            found = projects.materialize_document_path(projects.get_document(document_id) or {})
+            if not found:
+                raise OSError("document bytes not found")
+            path.append(found)
+        return bpr.render_page_png(path[0], index)
+
+    reader = bpr.model_page_reader(bpr.provider_ask(), render)
+    return bpr.model_bill_read(bpr.saved_page_reader(reader, work_dir), tolerance=tolerance)
+
+
 def production_deps() -> Deps:
     from app.core import bill_classify, bill_derived, byte_store, projects
     from app.routers import health as _health
@@ -572,6 +667,7 @@ def production_deps() -> Deps:
         geometry=saved_geometry,
         derive=bill_derived.derive_bill_sheet,
         chunk_bounds=_document_chunk_bounds,
+        model_read=production_model_read,
     )
 
 
@@ -603,15 +699,26 @@ def main_from_env(
     if execute is not None and pages is not None:  # a write is whole-document only
         log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_EXECUTE}))
         return 2
+    try:
+        reader = parse_reader(env)
+    except ValueError:
+        log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_READER}))
+        return 2
     work_dir = (env.get("BILL_PLAN_WORK_DIR") or "").strip() or default_work_dir(
         document_id, env.get("DATA_DIR"))
     deps = deps or production_deps()
+    try:
+        deps = with_reader(deps, reader, document_id, work_dir)
+    except ValueError:
+        log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_READER}))
+        return 2
     if execute is not None:
         execute_hash, gates = execute
         report = execute_one(project_id, document_id, execute_hash=execute_hash,
                              gates=gates, work_dir=work_dir, deps=deps)
     else:
         report = plan_one(project_id, document_id, pages=pages, work_dir=work_dir, deps=deps)
+    report["reader"] = reader.name
     deps.log(SUMMARY_PREFIX + json.dumps(public_summary(report), sort_keys=True))
     return 0 if report["ok"] else 1
 

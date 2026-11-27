@@ -17,6 +17,7 @@ import pytest
 
 from app.core import bill_classify as bc
 from app.core import bill_derived as bd
+from app.core import bill_page_read as bpr
 from scripts import bill_plan_once as bpo
 from tests.test_bill_derived import _BILL, _bill_a, _bill_b, _by_page, _Docs, _source
 
@@ -404,3 +405,241 @@ def test_a_refused_verdict_still_reports_what_its_pages_were_read_from(tmp_path,
     for name, value in counts.items():
         assert rep["verdict"][name] == value
     assert set(counts) <= set(bpo.VERDICT_FIELDS)
+
+
+# --- the model reader (BILL_PLAN_READER=model) ------------------------------
+
+
+
+
+@pytest.mark.parametrize("env,want", [
+    ({}, bpo.Reader()),
+    ({"BILL_PLAN_READER": " geometry "}, bpo.Reader()),
+    ({"BILL_PLAN_READER": "model"}, bpo.Reader(bpo.READER_MODEL, 0.0)),
+    ({"BILL_PLAN_READER": " MODEL ", "BILL_PLAN_TOTAL_TOLERANCE": "0.5"},
+     bpo.Reader(bpo.READER_MODEL, 0.5)),
+    ({"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "0"},
+     bpo.Reader(bpo.READER_MODEL, 0.0)),
+])
+def test_parse_reader_reads_the_reader_and_its_tolerance(env, want):
+    assert bpo.parse_reader(env) == want
+
+
+@pytest.mark.parametrize("env", [
+    {"BILL_PLAN_READER": "ocr"},
+    {"BILL_PLAN_TOTAL_TOLERANCE": "0.5"},
+    {"BILL_PLAN_READER": "geometry", "BILL_PLAN_TOTAL_TOLERANCE": "1"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "-0.01"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "nan"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "inf"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "half"},
+])
+def test_parse_reader_rejects_a_bad_reader_or_tolerance(env):
+    with pytest.raises(ValueError):
+        bpo.parse_reader(env)
+
+
+@pytest.mark.parametrize("env", [
+    {"BILL_PLAN_READER": "ocr"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "-1"},
+])
+def test_main_rejects_a_bad_reader_before_any_io(env):
+    calls: list = []
+    lines: list[str] = []
+    deps = _deps({"d1": {"project_id": "p1"}}, lambda *a, **k: calls.append(a), lines)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1", **env}
+    assert bpo.main_from_env(env, deps=deps) == 2
+    assert calls == [] and _summary(lines) == {"ok": False, "error": bpo.ERR_BAD_READER}
+
+
+@pytest.mark.parametrize("tolerance", ["", "0.5"])
+def test_main_refuses_the_model_reader_when_it_is_not_wired(tolerance):
+    calls: list = []
+    lines: list[str] = []
+    deps = _deps({"d1": {"project_id": "p1"}}, lambda *a, **k: calls.append(a), lines)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": tolerance}
+    assert bpo.main_from_env(env, deps=deps) == 2
+    assert calls == [] and _summary(lines)["error"] == bpo.ERR_BAD_READER
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.5])
+def test_model_reader_hands_one_pair_to_plan_and_derive(tolerance):
+    got: list = []
+    pair = (object(), object())
+
+    def model_read(doc, wd, tol):
+        got.append((doc, wd, tol))
+        return pair
+
+    def plan(*a, **k):
+        return k
+
+    def derive(*a, **k):
+        return k
+
+    deps = bpo.Deps(get_document={}.get, plan=plan, derive=derive, model_read=model_read)
+    out = bpo.with_reader(deps, bpo.Reader(bpo.READER_MODEL, tolerance), "d9", "/w")
+    assert got == [("d9", "/w", tolerance)]
+    want = {"rows_of_reads": pair[0], "states_of_rows": pair[1]}
+    assert out.plan() == want and out.derive() == want
+    no_derive = bpo.with_reader(
+        bpo.Deps(get_document={}.get, plan=plan, model_read=model_read),
+        bpo.Reader(bpo.READER_MODEL, tolerance), "d9", "/w")
+    assert no_derive.derive is None
+
+
+@pytest.mark.parametrize("reader", [bpo.Reader(), bpo.Reader(bpo.READER_GEOMETRY, 0.0)])
+def test_geometry_reader_leaves_deps_as_they_are(reader):
+    def model_read(*a):
+        raise AssertionError("model reader asked for")
+
+    deps = bpo.Deps(get_document={}.get, plan=lambda *a, **k: k, model_read=model_read)
+    assert bpo.with_reader(deps, reader, "d1", "/w") is deps
+
+
+@pytest.mark.parametrize("plan,want", [
+    ({"rows": 3}, {}),
+    ({"bill_states": None}, {}),
+    ({"pages_not_read": [2, 5], "bill_states": {
+        "rows_unassigned": 4,
+        "bills": [{"state": "RECONCILED"}, {"state": "NOT READ"}, {"state": "RECONCILED"}]}},
+     {"pages_not_read": 2, "rows_unassigned": 4,
+      "bill_state_counts": {"reconciled": 2, "not_read": 1}}),
+    ({"bill_states": {"rows_unassigned": 0, "bills": [{"state": "TOTAL ONLY"}]}},
+     {"pages_not_read": 0, "rows_unassigned": 0, "bill_state_counts": {"total_only": 1}}),
+])
+def test_state_counts_are_counts_of_the_plan_states(plan, want):
+    assert bpo.state_counts(plan) == want
+
+
+class _Page:
+    def __init__(self, index):
+        self.index = index
+
+
+@pytest.mark.parametrize("first,second", [
+    ([{"type": "item", "amount": "5"}], [{"type": "item", "amount": "7"}]),
+    ([{"type": "heading", "description": "x"}], []),
+])
+def test_saved_page_reader_saves_lines_and_gives_them_back(tmp_path, first, second):
+    replies = [first, second]
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return replies.pop(0)
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    assert read(_Page(3)) == first
+    assert read(_Page(3)) == first  # given back, not asked again
+    assert read(_Page(4)) == second
+    assert asked == [3, 4]
+    assert (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=3)).is_file()
+
+
+@pytest.mark.parametrize("not_read", [
+    {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": ["", "x"]},
+    None,
+])
+def test_saved_page_reader_asks_a_page_not_read_again(tmp_path, not_read):
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return not_read
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    assert read(_Page(0)) == not_read and read(_Page(0)) == not_read
+    assert asked == [0, 0]
+    assert not (tmp_path / "wd").exists() or not any((tmp_path / "wd").iterdir())
+
+
+def _line(kind, bill, amount, **kw):
+    return {"type": kind, "bill": bill, "amount": amount, **kw}
+
+
+def _two_bill_reads(total_b: str):
+    """Two bills over three pages; the summary on page 3 prints each total."""
+    return {
+        0: [_line("heading", "Bill A", None, description="h"),
+            _line("item", "Bill A", "10", quantity="2", rate="5", ref="1")],
+        1: [_line("item", "Bill B", "6", quantity="3", rate="2", ref="1"),
+            _line("item", "Bill B", "4", quantity="1", rate="4", ref="2")],
+        2: [_line("summary", "Bill A", "10"), _line("summary", "Bill B", total_b)],
+    }
+
+
+@pytest.mark.parametrize("total_b,tolerance,want_counts", [
+    ("10", 0.0, {"reconciled": 2}),
+    ("10.5", 0.0, {"reconciled": 1, "failed": 1}),
+    ("10.5", 0.5, {"reconciled": 2}),
+])
+def test_main_plans_with_the_model_reader_and_checks_each_bill(
+    tmp_path, monkeypatch, total_b, tolerance, want_counts,
+):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=3)
+    docs.install(monkeypatch, tmp_path)
+    reads = _two_bill_reads(total_b)
+    asked: list[int] = []
+
+    def model(page):
+        asked.append(page.index)
+        return reads[page.index]
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(bpr.saved_page_reader(model, wd), tolerance=tol)
+
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_READER": "model",
+           "BILL_PLAN_TOTAL_TOLERANCE": str(tolerance)}
+    reports = []
+    for _ in range(2):
+        lines: list[str] = []
+        deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL,
+                     model_read=model_read)
+        assert bpo.main_from_env(env, deps=deps) == 0
+        reports.append(_summary(lines))
+
+    rep = reports[0]
+    assert rep["reader"] == bpo.READER_MODEL
+    # every non-heading line is a row with its line type; only items are summed
+    assert rep["rows"] == 5
+    assert rep["bill_state_counts"] == want_counts
+    # the summary page belongs to no bill: its 2 lines are counted, never moved
+    assert rep["pages_not_read"] == 0 and rep["rows_unassigned"] == 2
+    assert asked == [0, 1, 2]  # the second run gave the saved reads back
+    assert reports[1]["plan_hash"] == rep["plan_hash"]
+    assert docs.added == [] and docs.indexed == []
+    saved = json.loads((tmp_path / "wd" / "plan_0_3.json").read_text(encoding="utf-8"))
+    assert [b["label"] for b in saved["bill_states"]["bills"]] == ["Bill A", "Bill B"]
+    assert saved["bill_states"]["tolerance"] == tolerance
+    _assert_public(rep, ["Bill A", "Bill B"])
+
+
+@pytest.mark.parametrize("bad_page", [0, 1])
+def test_model_reader_page_not_read_is_counted_and_asked_again(tmp_path, monkeypatch, bad_page):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=3)
+    docs.install(monkeypatch, tmp_path)
+    reads = _two_bill_reads("10")
+    # The bill of the page not read has no page left: no span, its summary
+    # total is listed as a bill without pages; the other bill still checks.
+    reads[bad_page] = {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": []}
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(bpr.saved_page_reader(lambda p: reads[p.index], wd),
+                                   tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_READER": "model"}
+    assert bpo.main_from_env(env, deps=deps) == 0
+    rep = _summary(lines)
+    assert rep["pages_not_read"] == 1
+    assert rep["bill_state_counts"] == {"reconciled": 1}
+    saved = json.loads((tmp_path / "wd" / "plan_0_3.json").read_text(encoding="utf-8"))
+    assert saved["bill_states"]["summary_without_pages"] == [["Bill A", "Bill B"][bad_page]]
+    assert not (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=bad_page)).exists()

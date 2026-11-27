@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -505,3 +506,62 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
         out.spans.append(BillSpan(label[bill], first, last, printed))
     out.summary_without_pages = sorted(label[b] for b in totals if b not in members)
     return out
+
+
+#: One page's saved reply under the run's work directory (0-based index).
+SAVED_READ_NAME = "model_page_{index:05d}.json"
+
+
+def saved_page_reader(read_page: Callable[[Any], Any], work_dir: str) -> Callable[[Any], Any]:
+    """``read_page`` that keeps each page's lines in ``work_dir`` and gives the
+    saved lines back on a later run, so the plan and its execute see the same
+    reads and the same plan hash. Only a list of lines is saved: a not-read
+    entry is returned as it is and the page is asked again on the next run."""
+
+    def read(page_read: Any) -> Any:
+        path = os.path.join(work_dir, SAVED_READ_NAME.format(index=page_read.index))
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        got = read_page(page_read)
+        if isinstance(got, list):
+            os.makedirs(work_dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(got, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+        return got
+
+    return read
+
+
+def model_bill_read(
+    read_page: Callable[[Any], Any], *, tolerance: float,
+) -> tuple[Callable[[Sequence[Any]], Any], Callable[[Sequence[g.BillRow], Sequence[int]], dict[str, Any]]]:
+    """The ``rows_of_reads`` and ``states_of_rows`` pair for ``bill_derived``.
+
+    The rows come from the model's page reads; the states check them against
+    the bill spans :func:`spans_from_page_reads` takes from the same reads, so
+    the page ranges and printed totals are the document's own. What the spans
+    could not place (pages naming two bills, interleaved bills, conflicting
+    totals, summary bills with no page) is stored with the states."""
+    seen: dict[str, Any] = {}
+    rows_of = rows_of_model_reads(read_page)
+
+    def rows(page_reads: Sequence[Any]) -> tuple[list[g.BillRow], list[int], dict[str, Any]]:
+        got_rows, not_read, pages = rows_of(page_reads)
+        seen.clear()
+        seen.update(pages)
+        return got_rows, not_read, pages
+
+    def states(got_rows: Sequence[g.BillRow], not_read: Sequence[int]) -> dict[str, Any]:
+        found = spans_from_page_reads(seen)
+        out = bill_states(got_rows, not_read, spans=found.spans, tolerance=tolerance)
+        out["tolerance"] = tolerance
+        out["pages_split"] = list(found.pages_split)
+        out["bills_interleaved"] = list(found.bills_interleaved)
+        out["totals_conflicting"] = list(found.totals_conflicting)
+        out["summary_without_pages"] = list(found.summary_without_pages)
+        return out
+
+    return rows, states
