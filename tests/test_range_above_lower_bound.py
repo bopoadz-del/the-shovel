@@ -9,6 +9,7 @@ import math
 
 import pytest
 
+from app.agents.driver import catalogue
 from app.agents.driver import tools as driver_tools
 from app.agents.hats.qaqc import validation as qaqc_validation
 from app.blocks import _knowledge
@@ -193,4 +194,29 @@ def test_a_range_with_one_bound_missing_checks_the_bound_it_has(lo, hi, above, v
     if not above:
         # main's own expression for an ordinary range
         assert inside is ((lo is None or value >= lo) and (hi is None or value <= hi))
+
+
+# The catalogue entry the model reads states the same declaration.
+
+@pytest.mark.parametrize("lo, hi, above, want", [
+    (0, 50, True, True), (2.5, 1e6, True, True), (0, None, True, True),
+    (0, 50, False, False), (None, 50, True, False), (None, None, True, False),
+])
+def test_the_catalogue_input_says_when_the_lower_bound_is_not_accepted(lo, hi, above, want):
+    got = catalogue._input("span", _spec(lo, hi, above))
+    assert got["range"] == ([lo, hi] if lo is not None or hi is not None else None)
+    assert (got.get(catalogue.LOWER_BOUND_EXCLUDED) is True) is want
+    assert (catalogue.LOWER_BOUND_EXCLUDED in got) is want       # absent, not false, on an ordinary range
+
+
+@pytest.mark.parametrize("name, excluded", [("near_critical_band_days", True), ("activities", False),
+                                            ("project_start", False)])
+def test_the_catalogue_entry_of_a_registered_calculator_carries_it(name, excluded):
+    entry = next(e for e in catalogue.entries() if e["id"] == "formula:cpm_network")
+    row = next(i for i in entry["inputs"] if i["name"] == name)
+    assert (row.get(catalogue.LOWER_BOUND_EXCLUDED) is True) is excluded
+    if excluded:
+        assert row["range"] == [0, 100000]
+    others = [i for e in catalogue.entries() if e["id"] != "formula:cpm_network" for i in e.get("inputs") or []]
+    assert others and not any(catalogue.LOWER_BOUND_EXCLUDED in i for i in others)
 
