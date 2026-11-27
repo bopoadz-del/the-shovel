@@ -11,7 +11,8 @@ an entry's registry does not carry yet is listed in that entry's ``gaps``.
 Entry fields: ``id`` (``<kind>:<registry name>``), ``kind``, ``name``,
 ``for`` (one line; also the index line), ``inputs`` (name, label, type,
 unit, range ``[lo, hi]`` with either bound null when not declared, required,
-basis), ``outputs`` (name, unit, main),
+basis; ``lower_bound_excluded: true`` only on an input whose range begins
+above its lower bound), ``outputs`` (name, unit, main),
 ``when_to_use``, ``when_not``, ``standard``, ``examples`` (invented figures
 only), ``feeds`` / ``fed_by`` (formulas: an output that is another formula's
 input of the same name and unit), ``code`` (how the entry is called),
@@ -73,15 +74,25 @@ def _source_file(obj: Any) -> str:
     return os.path.relpath(path, _ROOT).replace(os.sep, "/") if path else ""
 
 
+#: On an input whose declared range does not include its lower bound
+#: ("more than 0"): present and true only then.
+LOWER_BOUND_EXCLUDED = "lower_bound_excluded"
+
+
 def _input(name: str, p: Any) -> Dict[str, Any]:
     unit = getattr(p, "unit", "") or ""
     lo, hi = getattr(p, "lo", None), getattr(p, "hi", None)
-    return {"name": name, "label": getattr(p, "label", "") or name.replace("_", " "),
-            "type": getattr(p, "kind", "") or "",
-            "unit": "" if unit == "-" else unit,
-            "range": [lo, hi] if lo is not None or hi is not None else None,
-            "required": bool(getattr(p, "required", False)),
-            "basis": getattr(p, "basis", "") or ""}
+    entry = {"name": name, "label": getattr(p, "label", "") or name.replace("_", " "),
+             "type": getattr(p, "kind", "") or "",
+             "unit": "" if unit == "-" else unit,
+             "range": [lo, hi] if lo is not None or hi is not None else None,
+             "required": bool(getattr(p, "required", False)),
+             "basis": getattr(p, "basis", "") or ""}
+    if lo is not None and getattr(p, "above_lo", False):
+        # The range begins ABOVE its lower bound: said in the entry, so the
+        # reader of "range": [0, 5] is not told that 0 is accepted.
+        entry[LOWER_BOUND_EXCLUDED] = True
+    return entry
 
 
 def _gaps(entry: Dict[str, Any], extra: Tuple[str, ...] = ()) -> List[str]:

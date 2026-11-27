@@ -181,7 +181,7 @@ class PrimaveraParserBlock(UniversalBlock):
         # The CPM output below therefore references task_codes — callers can
         # join via the "code" field on each activity dict.
         try:
-            from app.lib.pm_computations import compute_cpm, parse_xer_full
+            from app.lib.pm_computations import run_cpm, parse_xer_full
             from app.schemas.cpm import CPMInput
 
             parsed = parse_xer_full(xer_text)
@@ -189,7 +189,7 @@ class PrimaveraParserBlock(UniversalBlock):
             if cpm_activities:
                 cpm_input = CPMInput(activities=cpm_activities,
                                      near_critical_band_days=near_band)
-                cpm_out = compute_cpm(cpm_input)
+                cpm_out = run_cpm(cpm_input)
                 per_activity_float = {
                     r.id: r.total_float for r in cpm_out.results
                 }

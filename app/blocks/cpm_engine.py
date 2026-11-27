@@ -2,7 +2,7 @@
 
 The L2 Schedule Engine roadmap expected ``app/blocks/cpm_engine.py``. The real
 forward/backward pass, float, and critical-path logic lives in
-``app.lib.pm_computations.compute_cpm``. This block is a thin wrapper that
+``app.lib.pm_computations.run_cpm``. This block is a thin wrapper that
 exposes the same capability under the roadmap name.
 """
 
@@ -50,7 +50,7 @@ class CPMEngineBlock(UniversalBlock):
             return {"status": "error", "error": str(exc)}
 
         try:
-            from app.lib.pm_computations import compute_cpm
+            from app.lib.pm_computations import run_cpm
             from app.schemas.cpm import Activity, CPMInput, WorkCalendar
 
             cpm_activities = [
@@ -67,7 +67,7 @@ class CPMEngineBlock(UniversalBlock):
                 calendar=cal,
                 near_critical_band_days=band,
             )
-            output = compute_cpm(cpm_input)
+            output = run_cpm(cpm_input)
             return {
                 "status": "success",
                 "project_duration": output.project_duration,
