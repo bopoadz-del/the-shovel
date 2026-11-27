@@ -21,6 +21,15 @@ def _money(x: float | Decimal) -> str:
     return f"{_cents(x):,.2f}"
 
 
+def _as_written_rate(rate: float) -> tuple[Decimal, str]:
+    """A rate as it is worked and as it is printed: the shortest decimal that
+    reads back as the same number, in full -- every digit, no exponent, no
+    trailing zeros ("3", "7.5", "4.1666667", "0.0000001"). The working prints
+    the very figure the arithmetic uses."""
+    exact = Decimal(repr(float(rate) + 0.0))
+    return exact, format(exact.normalize(), "f")
+
+
 @formula(
     owner='commercial',
     display_name='Interim payment to date',
@@ -91,7 +100,8 @@ def interim_payment_to_date(
         work_c, mos_c, prev_c = _cents(work), _cents(mos), _cents(prev)
         limit_c = None if retention_limit is None else _cents(float(retention_limit))
         gross = work_c + mos_c
-        retention_at_rate = _cents(work_c * Decimal(repr(rate)) / 100)
+        rate_exact, rate_shown = _as_written_rate(rate)
+        retention_at_rate = _cents(work_c * rate_exact / 100)
         capped = limit_c is not None and retention_at_rate > limit_c
         retention = limit_c if capped else retention_at_rate
         net = gross - retention
@@ -100,7 +110,7 @@ def interim_payment_to_date(
     working = [
         f"Gross to date = work done {_money(work_c)} + materials on site {_money(mos_c)} "
         f"= {_money(gross)}",
-        f"Retention = {rate:g}% x work done {_money(work_c)} = {_money(retention_at_rate)}"
+        f"Retention = {rate_shown}% x work done {_money(work_c)} = {_money(retention_at_rate)}"
         + (f", held at the retention limit {_money(limit_c)}" if capped
            else (f" (limit {_money(limit_c)} not reached)"
                  if limit_c is not None else " (no retention limit given)")),

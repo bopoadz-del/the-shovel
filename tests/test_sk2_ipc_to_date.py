@@ -367,9 +367,16 @@ def _adds_up(out: dict, rate: float) -> None:
     gross_line, retention_line, net_line, due_line = out["working"]
     work, mos, gross = _printed(gross_line)
     assert work + mos == gross
-    printed_work, at_rate = _printed(retention_line)[:2]
+    # the rate is read back from the line itself: the line adds up on what it prints
+    import re
+
+    stated = re.match(r"Retention = (\d+(?:\.\d+)?)% x work done ", retention_line)
+    assert stated, retention_line
+    printed_rate = Decimal(stated.group(1))
+    assert printed_rate == Decimal(repr(float(rate) + 0.0))
+    printed_work, at_rate = _printed(retention_line[stated.end():])[:2]
     assert printed_work == work
-    assert (work * Decimal(repr(float(rate))) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == at_rate
+    assert (work * printed_rate / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == at_rate
     net_gross, retention, net = _printed(net_line)
     assert net_gross == gross and gross - retention == net
     due_net, earlier, due = _printed(due_line)
@@ -450,4 +457,49 @@ def test_an_amount_of_minus_zero_prints_no_minus_sign(field):
     assert not any("-0.00" in line for line in out["working"])
     assert all(str(out[k]) != "-0.0" for k in ("gross_to_date", "retention_to_date", "net_to_date",
                                                "previously_certified", "amount_due"))
+
+
+@pytest.mark.parametrize("rate,work,shown,retention,due", [
+    # worked here in exact decimals: work x rate / 100, to the cent, half up
+    (4.1666667, 2_400_000, "4.1666667%", 100_000.00, 2_300_000.00),
+    (3.3333333, 1_000_000, "3.3333333%", 33_333.33, 966_666.67),
+    (12.3456789, 123_456.78, "12.3456789%", 15_241.58, 108_215.20),
+    (5.0000004, 10_000_000_000_000, "5.0000004%", 500_000_040_000.00, 9_499_999_960_000.00),
+    (1e-7, 1_000_000_000, "0.0000001%", 1.00, 999_999_999.00),          # never an exponent
+    (3.0, 500, "3%", 15.00, 485.00), (7.50, 200, "7.5%", 15.00, 185.00),  # no trailing zeros
+])
+def test_a_rate_with_many_digits_is_printed_in_full_and_the_line_adds_up(rate, work, shown, retention, due):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("interim_payment_to_date", {"work_value_to_date": work, "retention_percent": rate,
+                                                      "previously_certified": 0})
+    assert env["status"] == "success", env
+    out = env["result"]
+    line = out["working"][1]
+    assert line.startswith(f"Retention = {shown} x work done ")
+    assert "e-" not in line and "E-" not in line
+    assert out["retention_to_date"] == retention and out["amount_due"] == due
+    _adds_up(out, rate)
+
+
+@pytest.mark.parametrize("work,rate,retention,due", [
+    # twelve and fifteen digits of work: the arithmetic keeps every digit
+    (123_456_789_012.34, 3, 3_703_703_670.37, 119_753_085_341.97),
+    (987_654_321_098.76, 7.5, 74_074_074_082.41, 913_580_247_016.35),
+])
+def test_the_largest_amounts_keep_every_digit(work, rate, retention, due):
+    out = interim_payment_to_date(work, rate, previously_certified=0)
+    assert out["retention_to_date"] == retention and out["amount_due"] == due
+    _adds_up(out, rate)
+
+
+@pytest.mark.parametrize("work,rate,retention", [
+    # the exact product ends in half a cent or just above; a binary product rounds to the cent below
+    (545_816_949.80, 7.5, 40_936_271.24),
+    (2_204_918_978.20, 7.5, 165_368_923.37),
+])
+def test_retention_is_rounded_on_the_exact_product_not_a_binary_one(work, rate, retention):
+    out = interim_payment_to_date(work, rate, previously_certified=0)
+    assert out["retention_to_date"] == retention
+    _adds_up(out, rate)
 
