@@ -135,7 +135,10 @@ def _keyword_words_match(keyword: str, name: str) -> bool:
 
 def _best_match(rows: List[Dict[str, object]], name: str, want_unit: str) -> Optional[Dict[str, object]]:
     """The unit-matching row whose matched keyword has the most words (the
-    most specific trade wins); ties go to the earlier row. None if no row."""
+    most specific trade wins); ties go to the earlier row. None if no row.
+    A lookup needs an activity name: an empty one is a caller error."""
+    if not name.strip():
+        raise ValueError("a production-rate lookup needs an activity name")
     best: Optional[Dict[str, object]] = None
     best_len = 0
     for row in rows:

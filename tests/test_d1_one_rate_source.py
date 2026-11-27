@@ -24,12 +24,13 @@ def _row(work_item, keywords, rate, unit="m2", crew="crew of two"):
 
 # ---- one copy ---------------------------------------------------------------
 
-def test_the_calculator_keeps_no_table_of_its_own():
-    """The hat module holds no rate list; it imports the shared lookup."""
+@pytest.mark.parametrize("shared", ["benchmark_row", "TEMPLATE_PROVENANCE"])
+def test_the_calculator_keeps_no_table_of_its_own(shared):
+    """The hat module holds no rate list; what it uses is the shared object."""
     held = [k for k, v in vars(productivity_benchmarks).items()
             if not k.startswith("__") and isinstance(v, (list, dict)) and v]
-    assert held == []
-    assert productivity_benchmarks.benchmark_row is productivity_norms.benchmark_row
+    assert not held
+    assert getattr(productivity_benchmarks, shared) is getattr(productivity_norms, shared)
 
 
 @pytest.mark.parametrize("item,rate", [("widget laying", 17.0), ("gizmo fixing", 33.0)])
@@ -68,22 +69,27 @@ def test_norm_rate_for_reads_the_template_and_says_so(monkeypatch, desc, qty, ra
 
 
 @pytest.mark.asyncio
-async def test_boq_rows_without_a_rate_get_a_kernel_duration_from_the_table(monkeypatch):
+@pytest.mark.parametrize("widget_rate,gizmo_rate,widget_qty,gizmo_qty", [
+    (40.0, 15.0, 200, 45),
+    (25.0, 60.0, 75, 600),
+])
+async def test_boq_rows_without_a_rate_get_a_kernel_duration_from_the_table(
+        monkeypatch, widget_rate, gizmo_rate, widget_qty, gizmo_qty):
     monkeypatch.setattr(productivity_norms, "_TEMPLATE_RATES", [
-        _row("widget laying", ["widget"], 40.0),
-        _row("gizmo fixing", ["gizmo"], 15.0),
+        _row("widget laying", ["widget"], widget_rate),
+        _row("gizmo fixing", ["gizmo"], gizmo_rate),
     ])
     r = await ConstructionContainer().generate_wbs(
         {"brief": "WBS from the BOQ scope", "boq_items": [
-            {"item_key": "A1", "description": "Widget laying", "quantity": 200, "unit": "m2"},
-            {"item_key": "A2", "description": "Gizmo fixing", "quantity": 45, "unit": "m2"},
+            {"item_key": "A1", "description": "Widget laying", "quantity": widget_qty, "unit": "m2"},
+            {"item_key": "A2", "description": "Gizmo fixing", "quantity": gizmo_qty, "unit": "m2"},
             {"item_key": "A3", "description": "Sprocket polishing", "quantity": 45, "unit": "m2"},
         ]},
         {"target_count": 40},
     )
     acts = {a["boq"]["item_key"]: a for a in r["activities"] if a.get("boq")}
-    assert acts["A1"]["duration_days"] == math.ceil(200 / 40.0)
-    assert acts["A2"]["duration_days"] == math.ceil(45 / 15.0)
+    assert acts["A1"]["duration_days"] == math.ceil(widget_qty / widget_rate)
+    assert acts["A2"]["duration_days"] == math.ceil(gizmo_qty / gizmo_rate)
     assert "unverified" in acts["A1"]["duration_basis"]
     assert acts["A3"]["duration_days"] is None    # no row for this trade -> UNKNOWN
 
@@ -125,3 +131,28 @@ def test_keyword_words_match_only_whole_words(monkeypatch, desc):
         _row("render", ["render"], 10.0), _row("widget", ["widget"], 10.0),
     ])
     assert norm_rate_for(desc, "m2") is None
+
+
+# ---- helpers, directly ---------------------------------------------------
+
+@pytest.mark.parametrize("text,want", [
+    ("Blockwork (Walls)", "blockwork walls"),
+    ("  Ceramic-tiles,  FLOORS ", "ceramic tiles floors"),
+])
+def test_normalise_work_item(text, want):
+    assert productivity_norms.normalise_work_item(text) == want
+
+
+@pytest.mark.parametrize("keyword", ["", "   "])
+def test_an_empty_keyword_matches_nothing(keyword):
+    assert productivity_norms._keyword_words_match(keyword, "widget laying") is False
+    assert productivity_norms._keyword_words_match("widget", "widget laying") is True
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_an_empty_activity_name_gets_no_rate_and_is_refused_by_the_matcher(monkeypatch, name):
+    monkeypatch.setattr(productivity_norms, "_TEMPLATE_RATES",
+                        [_row("widget laying", ["widget"], 40.0)])
+    assert norm_rate_for(name, "m2") is None
+    with pytest.raises(ValueError):
+        productivity_norms._best_match(productivity_norms._TEMPLATE_RATES, name, "m2")
