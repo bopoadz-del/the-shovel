@@ -49,7 +49,7 @@ import json as _json
 import math
 import os as _os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache as _lru_cache
 from pathlib import Path as _Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -84,6 +84,10 @@ class Param:
     #: takes (``BASES``): this period's amount or the total to date. Empty
     #: when the amount has only one reading.
     basis: str = ""
+    #: The knowledge-read constant this input falls back to when it is not
+    #: given (a :class:`KnowledgeConstant`; see its ``as_input``). A
+    #: description of the input names that entry and its value.
+    default_from: Any = None
 
     def __post_init__(self) -> None:
         if self.basis and self.basis not in BASES:
@@ -246,6 +250,107 @@ class Constant:
     meaning: str
     source: Optional[str] = None
 
+    @classmethod
+    def from_knowledge(cls, entry_id: str, field_path: str, meaning: str, *, within: Param) -> "KnowledgeConstant":
+        """A constant whose value the shipped knowledge base states.
+
+        ``field_path`` is a dotted path inside the entry (``thresholds.x``).
+        ``within`` is the calculator input the figure stands in for: its
+        unit is the constant's unit and its declared range is the range the
+        figure must fall in, exactly as a value the caller gives would.
+        Nothing is read here: the value is read from the entry every time a
+        calculator applies it (see :meth:`KnowledgeConstant.resolve`), so
+        the run's constants record names the figure and the entry it came
+        from, and an entry that is missing or broken fails the one
+        calculator that applies it, never the module that declares it."""
+        if not isinstance(within, Param):
+            raise TypeError("a knowledge-read constant must name the input it stands in for")
+        return KnowledgeConstant(entry_id, field_path, meaning, within)
+
+    def resolve(self) -> "Constant":
+        """The constant as applied now: a literal constant is itself."""
+        return self
+
+
+def _range_words(lo: Optional[float], hi: Optional[float], unit: str) -> str:
+    """The declared range as a reader sees it (``1 to 5 ratio``)."""
+    if lo is not None and hi is not None:
+        span = f"{lo:g} to {hi:g}"
+    elif lo is not None:
+        span = f"at least {lo:g}"
+    else:
+        span = f"at most {hi:g}"
+    return f"{span} {unit}" if unit and unit != "-" else span
+
+
+@dataclass(frozen=True)
+class KnowledgeConstant:
+    """A declared constant whose number lives in a shipped knowledge entry,
+    read when it is applied, never copied into the calculator at import."""
+
+    entry_id: str
+    field_path: str
+    meaning: str
+    #: The calculator input this figure stands in for (unit and range).
+    within: Param
+
+    @property
+    def unit(self) -> str:
+        return self.within.unit
+
+    def as_input(self) -> Param:
+        """The input declaration whose unstated value is this constant."""
+        return replace(self.within, default_from=self)
+
+    def _fault(self, what: str) -> LookupError:
+        return LookupError(f"knowledge entry {self.entry_id!r} {what}")
+
+    def resolve(self) -> Constant:
+        """Read the entry now. A missing entry or field, a value that is not
+        a number, a number that is not finite (NaN, infinity, too large for
+        a float) or a number outside the input's declared range raises,
+        naming the entry: a calculator never falls back to a figure nobody
+        wrote down, never applies one no calculation can use, and a fault in
+        the knowledge base is never reported as a fault in the user's input."""
+        from app.blocks import _knowledge
+
+        entry = _knowledge.shipped_entry(self.entry_id)
+        if entry is None:
+            raise self._fault("is not in the shipped knowledge base")
+        node: Any = entry
+        for key in self.field_path.split("."):
+            if not isinstance(node, dict) or key not in node:
+                raise self._fault(f"has no field {self.field_path!r}")
+            node = node[key]
+        if isinstance(node, bool) or not isinstance(node, (int, float)):
+            raise self._fault(f"field {self.field_path!r} is not a number")
+        try:
+            value = float(node)
+        except OverflowError:
+            value = math.inf
+        if not math.isfinite(value):
+            raise self._fault(f"field {self.field_path!r} is not a finite number")
+        lo, hi = self.within.lo, self.within.hi
+        if (lo is not None and value < lo) or (hi is not None and value > hi):
+            raise self._fault(
+                f"field {self.field_path!r} states {value:g}, outside what the calculator "
+                f"accepts for {self.within.label or 'this input'} "
+                f"({_range_words(lo, hi, self.unit)})"
+            )
+        prov = entry.get("provenance") or {}
+        written = prov.get("course_reference") or prov.get("source")
+        source = f"knowledge entry {self.entry_id}" + (f" ({written})" if written else "")
+        return Constant(value, self.unit, self.meaning, source=source)
+
+    def describe(self) -> str:
+        """Where an unstated input's value comes from, for a description
+        offered before the run: ``from knowledge entry X (1.2)``. When the
+        entry cannot be applied the reason is given instead of a value."""
+        try:
+            return f"from knowledge entry {self.entry_id} ({self.resolve().value:g})"
+        except LookupError as exc:
+            return f"from knowledge entry {self.entry_id}, which cannot be applied: {exc}"
+
 
 _CONSTANT_READS: "contextvars.ContextVar[Optional[List[Tuple[str, Constant]]]]" = (
     contextvars.ContextVar("formula_constant_reads", default=None)
@@ -265,7 +370,7 @@ class Constants:
 
     def __init__(self, **declared: Constant) -> None:
         for key, c in declared.items():
-            if not isinstance(c, Constant):
+            if not isinstance(c, (Constant, KnowledgeConstant)):
                 raise TypeError(f"constant {key} must be declared as a Constant")
         object.__setattr__(self, "_declared", dict(declared))
 
@@ -273,7 +378,7 @@ class Constants:
         declared = object.__getattribute__(self, "_declared")
         if name not in declared:
             raise AttributeError(name)
-        c = declared[name]
+        c = declared[name].resolve()
         reads = _CONSTANT_READS.get()
         if reads is not None:
             reads.append((name, c))
@@ -282,7 +387,7 @@ class Constants:
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("declared constants are read-only")
 
-    def declared(self) -> Dict[str, Constant]:
+    def declared(self) -> Dict[str, Union[Constant, KnowledgeConstant]]:
         return dict(object.__getattribute__(self, "_declared"))
 
 
