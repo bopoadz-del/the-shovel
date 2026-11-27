@@ -653,3 +653,18 @@ def test_the_credit_lines_skip_notes_tools_only(calls, expected):
     text = tool_credit_lines(calls)
     assert text.count("Calculated with") == expected
     assert "Working notes" not in text
+
+
+@pytest.mark.parametrize("junk", [None, "a plain string"])
+def test_message_records_skip_a_non_message_and_a_notes_tool(junk):
+    from app.agents.citation_provenance import _message_records
+    note = _tool_msg("write_memory", {"status": "success", "written": "n"})
+    calc = _tool_msg("payment_certificate", {"status": "success", "net_due": 5})
+    records = _message_records([junk, note, calc])
+    assert [(r.kind, r.tool) for r in records] == [("tool_run", "payment_certificate")]
+
+
+@pytest.mark.parametrize("token", ["NaN", "-Infinity"])
+def test_not_json_constant_refuses_the_token_by_name(token):
+    with pytest.raises(ValueError, match=f"^{token} is not a JSON number$"):
+        llm_memory._not_json_constant(token)
