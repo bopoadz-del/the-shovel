@@ -235,27 +235,11 @@ def test_selling_exactly_the_break_even_quantity_is_not_a_shortfall(fixed, price
     assert "shortfall" in below["working"][-1]
 
 
-@pytest.mark.parametrize("stated", ["3", "+3", "a gain of 3"])
-def test_a_figure_stated_with_the_wrong_sign_gets_no_source_line(stated):
-    # contribution = 15 - 18 = -3; an answer giving it as positive misstates it
-    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
-                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
-    assert "Source: Break-even point" not in out, out
-
-
 @pytest.mark.parametrize("stated", ["(3)", "a shortfall of 3"])
 def test_other_written_negatives_keep_the_source_line(stated):
     out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
                  f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
     assert "Source: Break-even point" in out, out
-
-
-@pytest.mark.parametrize("working", ["500 - 3 = 497", "1,203 − 3 = 1,200"])
-def test_a_minus_after_a_figure_is_a_subtraction_not_a_negative(working):
-    # contribution = 15 - 18 = -3; "x - 3" subtracts 3, it does not state -3
-    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
-                 f"Revenue then works out as {working}.\nSource: Break-even point (platform calculator)")
-    assert "Source: Break-even point" not in out, out
 
 
 @pytest.mark.parametrize("fixed,price,variable", [
@@ -392,14 +376,6 @@ def test_a_positive_result_after_a_dash_bracket_or_loss_word_keeps_the_source_li
     assert f"Source: {name}" in out, out
 
 
-@pytest.mark.parametrize("stated", ["6 minus 3", "6 – 3", "9 - 3"])
-def test_a_figure_after_a_figure_and_minus_is_a_subtraction(stated):
-    # contribution = 15 - 18 = -3; "6 minus 3" subtracts 3, it does not state -3
-    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
-                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
-    assert "Source: Break-even point" not in out, out
-
-
 @pytest.mark.parametrize("price,variable,stated", [
     (15.0, 18.0, "–3"),                    # contribution -3, en dash
     (20.0, 25.0, "minus 5"),                    # contribution -5, in words
@@ -473,3 +449,135 @@ def test_whole_units_on_a_quotient_that_floats_just_above_a_whole(fixed, price, 
 def test_whole_units_are_singular_for_one(fixed, word):
     # contribution = 30 - 10 = 20
     assert break_even_point(fixed, 30.0, 10.0)["working"][1].endswith(word)
+
+
+# ── verdict at 7387c57 ─────────────────────────────────────────────────────
+# 1. Every figure inside the declared ranges is worked exactly or refused in
+#    plain words; 2. the gate matches a negative result on its size, with no
+#    rule keyed on wording.
+
+@pytest.mark.parametrize("inputs,units,revenue,revenue_line", [
+    # contribution 0.01: Q* = 1e13 / 0.01 = 1e15; revenue = 1e15 x 1e12 = 1e27
+    ({"fixed_costs": 1e13, "price_per_unit": 1e12, "variable_cost_per_unit": 999999999999.99},
+     1e15, 1e27, "1,000,000,000,000,000 x 1,000,000,000,000 = 1,000,000,000,000,000,000,000,000,000.00"),
+    # contribution 0.5: Q* = 2e13; revenue = 2e13 x 1e12 = 2e25
+    ({"fixed_costs": 1e13, "price_per_unit": 1e12, "variable_cost_per_unit": 999999999999.5},
+     2e13, 2e25, "20,000,000,000,000 x 1,000,000,000,000 = 20,000,000,000,000,000,000,000,000.00"),
+])
+def test_the_largest_declared_figures_are_worked_exactly_through_the_registry(inputs, units, revenue, revenue_line):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("break_even_point", dict(inputs))
+    assert env["status"] == "success", env
+    result = env["result"]
+    assert result["break_even_units"] == units and result["break_even_revenue"] == revenue
+    assert revenue_line in result["working"][-1]
+
+
+@pytest.mark.parametrize("price", [1e-300, 5e-324])
+def test_a_quantity_too_large_to_state_is_refused_in_plain_words(price):
+    """Inside the declared ranges, but fixed costs / contribution is beyond
+    any figure that can be written: a plain refusal, never an exception's
+    name and never an infinite number."""
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("break_even_point", {"fixed_costs": 1e13, "price_per_unit": price,
+                                               "variable_cost_per_unit": 0})
+    assert env["status"] == "error"
+    said = env["error"]
+    assert "too large to state" in said
+    for raw in ("InvalidOperation", "decimal", "<class", "Traceback", "inf"):
+        assert raw not in said
+    direct = break_even_point(1e13, price, 0)
+    assert set(direct) == {"error"}
+
+
+@pytest.mark.parametrize("price,units", [(1e-290, 1e303), (1e-295, 1e308)])
+def test_a_very_large_quantity_that_can_still_be_written_is_worked(price, units):
+    out = break_even_point(1e13, price, 0)
+    assert out["break_even_units"] == pytest.approx(units, rel=1e-12)
+    assert out["break_even_revenue"] == pytest.approx(1e13, rel=1e-12)
+    assert math.isfinite(out["break_even_units"]) and math.isfinite(out["break_even_revenue"])
+
+
+@pytest.mark.parametrize("fixed,units,revenue,line", [
+    # Q* = F / 3 does not end; the working prints the quantity a float holds
+    # and the revenue is THAT figure times the price, so the line adds up.
+    (1e15 + 1, 333333333333333.7, 1000000000000001.1, "333,333,333,333,333.7 x 3 = 1,000,000,000,000,001.10"),
+    (1e15 + 4, 333333333333334.7, 1000000000000004.1, "333,333,333,333,334.7 x 3 = 1,000,000,000,000,004.10"),
+])
+def test_revenue_is_the_printed_quantity_times_the_price(fixed, units, revenue, line):
+    out = break_even_point(fixed, 3, 0)
+    assert out["break_even_units"] == units and out["break_even_revenue"] == revenue
+    assert line in out["working"][-1]
+
+
+@pytest.mark.parametrize("kw,field,value", [
+    # margin of safety in units to four places: 1,000 - 10,000/15 = 333.3333
+    ({"fixed_costs": 10000, "price_per_unit": 45, "variable_cost_per_unit": 30, "expected_units": 1000},
+     "margin_of_safety_units", 333.3333),
+    # 1 x 0.005 - 0 = 0.005: half up to the cent
+    ({"fixed_costs": 0, "price_per_unit": 0.015, "variable_cost_per_unit": 0.01, "expected_units": 1},
+     "profit_at_expected", 0.01),
+    # 1e12 x (0.3 - 0.1) on the decimal figures: exactly 200,000,000,000
+    ({"fixed_costs": 0, "price_per_unit": 0.3, "variable_cost_per_unit": 0.1, "expected_units": 1e12},
+     "profit_at_expected", 200000000000.0),
+    # the largest declared price and quantity: 1e12 x 1e12 - 1e13
+    ({"fixed_costs": 1e13, "price_per_unit": 1e12, "variable_cost_per_unit": 0, "expected_units": 1e12},
+     "profit_at_expected", 9.9999999999e23),
+])
+def test_reported_figures_are_exact_to_their_stated_places(kw, field, value):
+    assert break_even_point(**kw)[field] == value
+
+
+@pytest.mark.parametrize("fixed", [0.001, 0.004])
+def test_a_loss_below_half_a_cent_prints_as_zero_not_minus_zero(fixed):
+    out = break_even_point(fixed, 10, 4, expected_units=0)
+    assert out["profit_at_expected"] == 0.0 and str(out["profit_at_expected"]) == "0.0"
+    assert out["working"][-1].endswith("= 0.00")
+
+
+@pytest.mark.parametrize("calc,inputs,name,answer", [
+    # contribution = 40 - 45 = -5, in words the check has no list for
+    ("break_even_point", {"fixed_costs": 10000, "price_per_unit": 40, "variable_cost_per_unit": 45},
+     "Break-even point", "Each unit sold loses 5, so there is no break-even point."),
+    ("break_even_point", {"fixed_costs": 10000, "price_per_unit": 40, "variable_cost_per_unit": 45},
+     "Break-even point", "The contribution per unit is -5."),
+    ("break_even_point", {"fixed_costs": 12, "price_per_unit": 15, "variable_cost_per_unit": 18},
+     "Break-even point", "Every unit is 3 under water."),
+    # profit = 1,500 x 30 - 60,000 = -15,000
+    ("break_even_point", {"fixed_costs": 60000, "price_per_unit": 50, "variable_cost_per_unit": 20,
+                          "expected_units": 1500}, "Break-even point", "Expect losses of 15,000 at that volume."),
+    # balance = 1,000 - 1,500 = -500 m3: another calculator, same check
+    ("cut_fill_balance", {"cut_volume_m3": 1000, "fill_volume_m3": 1500}, "Cut and fill balance",
+     "You are short 500 m3 of fill."),
+    ("cut_fill_balance", {"cut_volume_m3": 1000, "fill_volume_m3": 1500}, "Cut and fill balance",
+     "There is a deficit of 500 m3."),
+])
+def test_a_negative_result_keeps_its_source_line_however_the_answer_words_it(calc, inputs, name, answer):
+    out = _gated_calc(calc, inputs, name, answer)
+    assert f"Source: {name}" in out, out
+
+
+@pytest.mark.parametrize("calc,inputs,name,answer", [
+    # a result of exactly zero is a figure like any other
+    ("cut_fill_balance", {"cut_volume_m3": 1000, "fill_volume_m3": 1000}, "Cut and fill balance", "The net is 0 m3."),
+    ("break_even_point", {"fixed_costs": 600, "price_per_unit": 10, "variable_cost_per_unit": 4,
+                          "expected_units": 100}, "Break-even point", "At 100 units the profit is 0.00."),
+])
+def test_a_result_of_zero_keeps_its_source_line(calc, inputs, name, answer):
+    out = _gated_calc(calc, inputs, name, answer)
+    assert f"Source: {name}" in out, out
+
+
+@pytest.mark.parametrize("calc,inputs,name,answer", [
+    # -5 and -500 are the results: a different size is not the calculator's figure
+    ("break_even_point", {"fixed_costs": 10000, "price_per_unit": 40, "variable_cost_per_unit": 45},
+     "Break-even point", "Each unit sold loses 6."),
+    ("cut_fill_balance", {"cut_volume_m3": 1000, "fill_volume_m3": 1500}, "Cut and fill balance",
+     "You are short 480 m3 of fill."),
+])
+def test_a_size_the_calculator_did_not_return_gets_no_source_line(calc, inputs, name, answer):
+    out = _gated_calc(calc, inputs, name, answer)
+    assert f"Source: {name}" not in out, out
+

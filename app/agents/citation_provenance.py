@@ -846,61 +846,17 @@ def _has_number(text: str, targets: list[float]) -> bool:
     )
 
 
-# What marks a figure in prose as negative: a minus sign that is neither the
-# dash of a range ("2-3") nor a subtraction ("500 - 120"),
-# an accounting parenthesis "(3)", or a word that states a negative amount
-# up to two words before the figure ("a loss of 3", "a shortfall of 1,100").
-_NEGATIVE_LEAD_RE = re.compile(
-    r"(?:(?<![\w.])[-\u2212\u2013]\s*|\(\s*"
-    r"|\b(?:loss|losses|deficit|shortfall|negative|minus)\b(?:\s+\w+){0,2}\s+)$",
-    re.IGNORECASE,
-)
-
-
-def _signed_numbers_in(text: str) -> list[float]:
-    """Figures in prose with the sign the prose gives them."""
-    text = text or ""
-    found: list[float] = []
-    for match in _NUMBER_RE.finditer(text):
-        try:
-            value = float(match.group(0).replace(",", ""))
-        except ValueError:
-            continue
-        lead = text[max(0, match.start() - 40):match.start()]
-        sign = _NEGATIVE_LEAD_RE.search(lead)
-        if sign and (sign.group(0).lstrip()[:1] in "-\u2212\u2013"
-                     or sign.group(0).lstrip()[:5].lower() == "minus"):
-            # "500 - 120", "85 minus 61": a minus with a figure before it
-            # subtracts.
-            before = lead[:sign.start()].rstrip()
-            if before[-1:].isdigit():
-                sign = None
-        found.append(-value if sign else value)
-    return found
-
-
 def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
-    """True when the answer states a figure the calculator returned, sign
-    included.
+    """True when the answer states a figure the calculator returned.
 
-    ``_NUMBER_RE`` reads a figure without its sign, and prose states a
-    negative result in more ways than a minus ("-3", "a loss of 3", "(3)"),
-    so the sign is read from what leads the figure. A negative result is
-    committed to only by a figure the answer states as negative; a bare "3",
-    a "+3" or "a gain of 3" does not commit to -3.
-
-    A result of zero or above is matched on the figure alone, as before: a
-    dash used as punctuation ("pressure - 980.8 Pa"), a list bullet, a
-    bracket or a word such as "loss" in front of a positive figure is how
-    prose is written, not a misstated sign.
+    A figure is read from prose without its sign, and prose states a negative
+    amount in more ways than this check could list ("-3", "(3)", "a loss of
+    3", "each unit loses 3", "short by 3"). Which of those a sentence means
+    is language, and no rule here is keyed on wording: a negative result is
+    matched on its size, exactly as a positive one is. The check answers
+    where a figure came from, not how the sentence around it reads.
     """
-    targets = credit.result_numbers
-    if _has_number(answer, [t for t in targets if t >= 0]):
-        return True
-    negatives = [t for t in targets if t < 0]
-    return any(_close(found, target)
-               for found in _signed_numbers_in(answer) if found < 0
-               for target in negatives)
+    return _has_number(answer, [abs(target) for target in credit.result_numbers])
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:

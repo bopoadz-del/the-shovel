@@ -5,7 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 
 import math
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from app.lib.formula_registry import Param, formula
 
@@ -141,14 +141,30 @@ def break_even_point(
     if expected_units is not None and float(expected_units) < 0:
         return {"error": "expected_units must be >= 0."}
 
-    # Exact decimal arithmetic on the figures as written: a residue would put
-    # the break-even a hair above a whole quantity and call an expected
-    # volume equal to it a shortfall.
+    with localcontext() as exact:
+        # Exact decimal arithmetic on the figures as written, wide enough to
+        # hold any amount a float can to the cent: no step is rounded and no
+        # figure inside the declared ranges runs out of digits.
+        exact.prec = _EXACT_DIGITS
+        return _break_even_figures(fixed, price, var,
+                                   None if expected_units is None else float(expected_units))
+
+
+#: Digits the break-even arithmetic keeps. The largest float has 309 digits
+#: before the point; a revenue is a quantity a float holds times a price of
+#: at most 1e12, written to the cent. 400 covers every such figure whole.
+_EXACT_DIGITS = 400
+
+
+def _break_even_figures(fixed: float, price: float, var: float, q: float | None) -> dict:
+    """The break-even figures and their working, in exact decimal arithmetic
+    on the figures as written: a residue would put the break-even a hair above
+    a whole quantity and call an expected volume equal to it a shortfall. Run
+    inside the caller's wide decimal context."""
     contribution_d = _as_written(price) - _as_written(var)
     contribution = float(contribution_d)
     working = [(f"Contribution per unit = price {_figure(price)} - variable cost "
                 f"{_figure(var)} = {_figure(contribution_d)}")]
-    q = None if expected_units is None else float(expected_units)
     q_d = None if q is None else _as_written(q)
 
     def _profit_at_expected(out: dict) -> None:
@@ -173,6 +189,12 @@ def break_even_point(
 
     units_d = _as_written(fixed) / contribution_d
     units = float(units_d)
+    if not math.isfinite(units):
+        # The quantity is defined but beyond any figure that can be written:
+        # said plainly, never returned as an infinite number.
+        return {"error": "The price is above the variable cost per unit by so little that the "
+                         "break-even quantity for these fixed costs is too large to state. "
+                         "Check the price and the variable cost per unit."}
     # The quantity as the working prints it; the revenue is that printed
     # figure times the price, so the step adds up as read.
     units_shown = _as_written(units)
