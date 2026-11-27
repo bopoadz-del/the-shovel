@@ -7,13 +7,15 @@ import json
 import logging
 import re
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
+from app.agents.core.tool_registry import is_notes
 from app.agents.driver import catalogue, context, llm, render, routes, sources, tools
 from app.core import turn_progress
+from app.core.llm_memory import nested_deeper_than
 from app.core.offload import off_loop
 
 _LOG = logging.getLogger(__name__)
@@ -243,15 +245,29 @@ def _named_calculator_note(user_message: str) -> str:
             "say what it needs.")
 
 
-def _args(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+#: Arguments nested deeper than this are not run: past it the JSON writer can
+#: run out of stack on them inside a turn (the trace, the tool's own result).
+_ARGS_MAX_DEPTH = 200
+_ARGS_TOO_DEEP = ("The arguments of this call are nested too deeply to read. "
+                  "Send them again with less nesting.")
+
+
+def _args(tool_call: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """``(arguments, None)``, or ``({}, why)`` for arguments nested too deeply
+    to be read or written out again: that call is answered with ``why`` and
+    its tool is not run."""
     raw = (tool_call.get("function") or {}).get("arguments") or "{}"
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except RecursionError:
+        return {}, _ARGS_TOO_DEEP
     except ValueError:
         _LOG.warning("driver: tool %r arguments are not JSON; calling it with none",
                      (tool_call.get("function") or {}).get("name"))
         parsed = {}
-    return parsed if isinstance(parsed, dict) else {}
+    if nested_deeper_than(parsed, _ARGS_MAX_DEPTH):
+        return {}, _ARGS_TOO_DEEP
+    return (parsed if isinstance(parsed, dict) else {}), None
 
 
 async def stream(agent: Any, user_message: str, history: Optional[list] = None,
@@ -450,15 +466,17 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         questions: List[str] = []  # calculators that need an input this round
         for call in calls:
             name = (call.get("function") or {}).get("name") or ""
-            args = _args(call)
+            args, unreadable = _args(call)
             yield turn_progress.tool_call({"type": "tool_call", "tool": name, "name": name,
                                             "args_preview": json.dumps(args)[:200]})
-            if name == tools.SELECT_HAT:
+            if unreadable:
+                result_of_call: Dict[str, Any] = {"ok": False, "error": unreadable}
+            elif name == tools.SELECT_HAT:
                 chosen = str(args.get("hat") or "")
                 if chosen in disciplines:
                     hat = chosen
                     msgs[0] = await off_loop(context.system_message, project_id, user_id, hat)
-                    result_of_call: Dict[str, Any] = {"ok": True, "hat": hat}
+                    result_of_call = {"ok": True, "hat": hat}
                 else:
                     result_of_call = {"ok": False,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
@@ -495,20 +513,31 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             # text copied into the answer, for the errors this turn recorded.
             from app.agents import answer_exit
             answer_exit.note_tool_result(name, result_of_call)
-            trace[-1]["calls"].append({
+            call_record = {
                 "tool": name, "workflow": args.get("workflow") if name == routes.RUN_WORKFLOW else None,
                 "calculation": args.get("calculation") if name == "construction_calc" else None,
                 "ok": ok, "missing": bool(result_of_call.get("missing") or result_of_call.get("needs_input")),
                 # A calculator's own verdict: success, or needs_input and which inputs.
                 "result": _calc_verdict(result_of_call) if name == "construction_calc" else None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
-            })
+            }
+            # What the tool itself states for the trace record (e.g. a memory
+            # note's operation, name, size and turn), as given. A tool that
+            # states nothing leaves the record's shape as it was.
+            if isinstance(result_of_call.get("trace"), dict):
+                call_record["trace"] = result_of_call["trace"]
+            trace[-1]["calls"].append(call_record)
             if name == catalogue.LOOKUP:
-                # The entry ids the model read, on the lookup's own call only.
-                trace[-1]["calls"][-1]["ids"] = catalogue.asked_ids(args.get("ids"))
+                # The entry ids the model was given, on the lookup's own call
+                # only, with counts of the ids it was not given: read from the
+                # lookup's result, with no second pass over the catalogue.
+                call_record.update(catalogue.read_ids(result_of_call))
             if name not in (tools.SELECT_HAT, catalogue.LOOKUP):
                 if ok:
-                    succeeded = True
+                    # The model's own notes back no figure: a note that was
+                    # read or written does not stand in for a tool that ran.
+                    if not is_notes(name):
+                        succeeded = True
                 elif not _asks_for_input(result_of_call):
                     # A tool asking for an input has not failed: its question is
                     # the answer. A real failure is told in its own words; one
@@ -539,7 +568,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     questions.append(str(envelope["question"]).strip())
             else:
                 shown = _shown_to_model(json.dumps(_without_missing_pages(result_of_call), default=str))
-                if isinstance(envelope, dict) and envelope.get("status") == "success":
+                # The model's own notes are never rows for the user: a note
+                # kept as a list of records is not added to the answer as a table.
+                if isinstance(envelope, dict) and envelope.get("status") == "success" and not is_notes(name):
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})

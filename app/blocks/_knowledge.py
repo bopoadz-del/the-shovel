@@ -113,6 +113,23 @@ def load_knowledge(domain: Optional[str] = None) -> List[Dict[str, Any]]:
     ]
 
 
+def shipped_entry(rule_id: str) -> Optional[Dict[str, Any]]:
+    """Entry by id from the knowledge base shipped with the code, ignoring
+    the ``CONSTRUCTION_KB_FILE`` override. Calculator constants that the
+    knowledge base states read it here, so swapping the served file never
+    changes what a calculator computes. An unreadable shipped file raises
+    ``LookupError``: there is no empty knowledge base to fall back on."""
+    try:
+        with open(_KB_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise LookupError(f"shipped knowledge base is unreadable: {exc}") from exc
+    for entry in (data.get("entries") or []) if isinstance(data, dict) else []:
+        if isinstance(entry, dict) and entry.get("id") == rule_id:
+            return entry
+    return None
+
+
 def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
     """Return entry by id, or None."""
     for entry in _load_kb().get("entries", []):

@@ -130,11 +130,13 @@ def build_memory_context(project_id: str, query: str = "", limit: int = 8) -> st
     and the limit caps the block, so including the rest costs tokens only
     when the facts exist.
     """
-    all_facts = store.list_facts(project_id)
+    # Only facts someone confirmed are prompt material: a row the app saved by
+    # itself carries no verified mark and is never handed to the model.
+    all_facts = store.list_facts(project_id, verified_only=True)
     if not all_facts:
         return ""
     if query:
-        matched = store.search_facts(project_id, query) or []
+        matched = store.search_facts(project_id, query, verified_only=True) or []
         matched_keys = {f["key"] for f in matched}
         facts = matched + [f for f in all_facts if f["key"] not in matched_keys]
     else:

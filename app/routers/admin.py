@@ -613,6 +613,53 @@ def admin_list_archived_projects(auth: dict = Depends(require_api_key)):
     return {"archived": out, "count": len(out)}
 
 
+@router.get("/v1/admin/projects/{project_id}/memory")
+def admin_project_memory(project_id: str, auth: dict = Depends(require_api_key)):
+    """The model's own notes in one project (``app.core.llm_memory``), whole,
+    so the owner can read what it taught itself: every note, discarded ones
+    included, each with the owner's mark."""
+    _require_admin(auth)
+    from app.core import llm_memory
+    notes = llm_memory.listing(project_id, with_data=True, with_review=True)
+    return {"project_id": project_id, "notes": notes, "count": len(notes)}
+
+
+class MemoryReviewBody(BaseModel):
+    decision: str
+    version: str
+
+
+@router.post("/v1/admin/projects/{project_id}/memory/{name}/review")
+def admin_review_project_memory(project_id: str, name: str, body: MemoryReviewBody,
+                                auth: dict = Depends(require_api_key)):
+    """Keep or discard one of the model's notes at the version the owner
+    read (409 when it was written again since). A discarded note stays in
+    the table, marked, and the model's read_memory / list_memory no longer
+    return it; every decision is recorded. The content is never edited."""
+    _require_admin(auth)
+    from app.core import llm_memory
+    try:
+        done = llm_memory.review(project_id, name, body.decision, body.version,
+                                 by=str(auth.get("user_id") or ""))
+    except llm_memory.MemoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except llm_memory.MemoryRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    logger.info("llm_memory_review %s", json.dumps({"project_id": project_id, **done}))
+    return done
+
+
+@router.get("/v1/admin/projects/{project_id}/memory/reviews")
+def admin_project_memory_reviews(project_id: str, auth: dict = Depends(require_api_key)):
+    """Every keep / discard made on the project's notes, oldest first."""
+    _require_admin(auth)
+    from app.core import llm_memory
+    done = llm_memory.reviews(project_id)
+    return {"project_id": project_id, "reviews": done, "count": len(done)}
+
+
 @router.post("/v1/admin/projects/{project_id}/restore")
 def admin_restore_archived_project(project_id: str,
                                    hide_from_sidebar: bool = False,
