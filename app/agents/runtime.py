@@ -11996,6 +11996,13 @@ def _llm_config(provider: "str | None" = None) -> dict[str, Any]:
         "default_model": (
             (os.getenv("DEEPSEEK_MODEL") or "").strip() or DEEPSEEK_DEFAULT_MODEL
         ),
+        # What this provider takes to reply WITHOUT hidden reasoning (generic
+        # hook, read by ``llm_client.complete(plain_reply=True)``). The
+        # reasoning is spent out of the same allowance as the reply: on a
+        # dense page image it took 5,400 to 16,000 tokens and left the reply
+        # empty at an 8,000-token limit. A caller that only transcribes asks
+        # for a plain reply; a provider without this field is sent nothing.
+        "plain_reply": {"thinking": {"type": "disabled"}},
     }
 
 

@@ -35,6 +35,7 @@ No word of any line is read: types come from the model, checks from cells.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -413,7 +414,11 @@ def render_page_png(file_path: str, index: int, dpi: int = PAGE_READ_DPI) -> byt
 
 def provider_ask(max_tokens: int = PAGE_READ_MAX_TOKENS) -> Callable[[list[dict[str, Any]]], str]:
     """``ask`` through the product's provider client (``llm_client.complete``):
-    the configured provider and model, its usage recording and fallback."""
+    the configured provider and model, its usage recording and fallback.
+
+    A page read copies what the page prints, so it asks for a plain reply
+    (``plain_reply``): with the provider's hidden reasoning on, a dense page
+    spent the whole allowance on it and came back empty."""
     import asyncio
 
     from app.core import llm_client
@@ -421,7 +426,7 @@ def provider_ask(max_tokens: int = PAGE_READ_MAX_TOKENS) -> Callable[[list[dict[
     def ask(messages: list[dict[str, Any]]) -> str:
         return asyncio.run(llm_client.complete(
             messages, temperature=0.0, max_tokens=max_tokens,
-            agent_name="bill_page_read"))
+            agent_name="bill_page_read", plain_reply=True))
 
     return ask
 
@@ -702,26 +707,73 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
 SAVED_READ_NAME = "model_page_{index:05d}.json"
 
 
-def saved_page_reader(read_page: Callable[[Any], Any], work_dir: str) -> Callable[[Any], Any]:
+#: A saved read's file: what the page was asked (a digest of the instruction
+#: sent with it) and the lines the model gave.
+SAVED_ASKED = "asked"
+SAVED_READ = "read"
+
+
+def page_question(prompt: str = PAGE_READ_PROMPT) -> Callable[[Any], str]:
+    """What a page is asked, as :func:`model_page_reader` sends it with
+    ``prompt``: the instruction, with the bill the page before ended on when
+    there is one (:func:`prompt_for`)."""
+
+    def question(page_read: Any) -> str:
+        return prompt_for(prompt, getattr(page_read, "bill_before", None))
+
+    return question
+
+
+def asked_digest(question: str) -> str:
+    """The digest a saved read carries for the question it answers."""
+    return hashlib.sha256(question.encode("utf-8")).hexdigest()
+
+
+def saved_read_for(saved: Any, asked: str) -> list[Mapping[str, Any]] | None:
+    """The lines of a saved file when it is a read of the page made with the
+    question whose digest is ``asked``; ``None`` for anything else -- a read
+    made with another question (no bill before, another instruction), a file
+    saved before the question was recorded, or a file that is not a read."""
+    if not isinstance(saved, Mapping) or saved.get(SAVED_ASKED) != asked:
+        return None
+    return read_lines(saved.get(SAVED_READ))
+
+
+def saved_page_reader(
+    read_page: Callable[[Any], Any], work_dir: str,
+    question: Callable[[Any], str] | None = None,
+) -> Callable[[Any], Any]:
     """``read_page`` that keeps each page's lines in ``work_dir`` and gives the
     saved lines back on a later run, so the plan and its execute see the same
-    reads and the same plan hash. Only a read (:func:`read_lines`) is saved: a
-    not-read entry is returned as it is and the page is asked again on the
-    next run, and a saved file that is not a read is asked again too."""
+    reads and the same plan hash.
+
+    A saved read answers one question: the instruction the page was sent with,
+    which carries the bill the page before ended on (``question``; the default
+    is what :func:`model_page_reader` sends with the default instruction, and
+    a reader built with another instruction passes
+    ``page_question(that_instruction)``). A read is given back only for that
+    same question. When the page before is read differently this time -- it
+    failed last run and names its bill now -- the page is asked again, with
+    the context it now has; so is a page whose file was saved under another
+    instruction. Only a read (:func:`read_lines`) is saved: a not-read entry
+    is returned as it is and the page is asked again on the next run, and a
+    saved file that is not a read is asked again too."""
+    ask_of = question or page_question()
 
     def read(page_read: Any) -> Any:
+        asked = asked_digest(ask_of(page_read))
         path = os.path.join(work_dir, SAVED_READ_NAME.format(index=page_read.index))
         if os.path.exists(path):
             with open(path, encoding="utf-8") as fh:
-                saved = json.load(fh)
-            if read_lines(saved) is not None:
-                return saved
+                kept = saved_read_for(json.load(fh), asked)
+            if kept is not None:
+                return kept
         got = read_page(page_read)
         if read_lines(got) is not None:
             os.makedirs(work_dir, exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(got, fh, ensure_ascii=False)
+                json.dump({SAVED_ASKED: asked, SAVED_READ: got}, fh, ensure_ascii=False)
             os.replace(tmp, path)
         return got
 

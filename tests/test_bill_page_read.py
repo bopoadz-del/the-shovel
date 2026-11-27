@@ -897,3 +897,48 @@ def test_a_sum_line_naming_no_bill_inside_the_range_unplaces_nothing(sum_line, p
     (bill,) = bpr.bill_states(rows, [], spans=[bpr.BillSpan("b", 1, 2, printed)],
                               tolerance=0)["bills"]
     assert (bill["rows_unplaced"], bill["state"]) == (0, want)
+
+
+# --- rows no bill is named for, in the reach of a bill ---
+
+@pytest.mark.parametrize("label, page, amount", [("Bill A", 1, 10), ("Section 2", 3, 40)])
+def test_a_bill_with_no_printed_total_and_an_unnamed_row_in_reach_is_not_checked(label, page, amount):
+    """The bill prints no total, and the page after it holds an item that
+    names no bill: the bill is NOT CHECKED with that row counted, not
+    UNCHECKED as a bill that merely prints no total is."""
+    pages = {str(page): [_line(label, amount=amount)], str(page + 1): [_line(None, amount=5)]}
+    found = bpr.spans_from_page_reads(pages)
+    assert found.spans == [bpr.BillSpan(label, page, page, None, (), (page + 1,))]
+    states = bpr.bill_states(bpr.rows_from_page_reads(pages).rows, [], spans=found.spans, tolerance=0.5)
+    (bill,) = states["bills"]
+    assert bill["state"] == bpr.STATE_NOT_CHECKED and bill["state"] != bpr.STATE_UNCHECKED
+    assert bill["rows_unplaced"] == 1 and bill["pages_unplaced"] == [page + 1]
+    assert bill["printed_total"] is None and bill["diff"] is None and bill["items_sum"] == float(amount)
+    # the control: the same bill with no unnamed row after it is UNCHECKED
+    alone = {str(page): [_line(label, amount=amount)]}
+    control = bpr.bill_states(bpr.rows_from_page_reads(alone).rows, [],
+                              spans=bpr.spans_from_page_reads(alone).spans, tolerance=0.5)
+    assert control["bills"][0]["state"] == bpr.STATE_UNCHECKED
+
+
+@pytest.mark.parametrize("one, two, only_summary, first", [("A", "B", "C", 1), ("X", "Y", "Z", 5)])
+def test_a_page_naming_two_bills_with_an_unnamed_row_is_unplaced_for_both(one, two, only_summary, first):
+    """Page ``first + 1`` names both bills and also holds a row naming none:
+    it is in neither span, both bills are NOT CHECKED for it, and a bill the
+    summary lists but no page names gets no span."""
+    mid, last, summary = first + 1, first + 2, first + 3
+    pages = {
+        str(first): [_line(one, amount=1)],
+        str(mid): [_line(one, amount=1), _line(two, amount=1), _line(None, amount=1)],
+        str(last): [_line(two, amount=1)],
+        str(summary): [_line(one, kind="summary", amount=2), _line(two, kind="summary", amount=2),
+                       _line(only_summary, kind="summary", amount=9)],
+    }
+    found = bpr.spans_from_page_reads(pages)
+    assert found.spans == [bpr.BillSpan(one, first, first, 2.0, (), (mid,)),
+                           bpr.BillSpan(two, last, last, 2.0, (), (mid,))]
+    assert found.pages_split == [mid] and found.summary_without_pages == [only_summary]
+    assert only_summary not in [span.label for span in found.spans]
+    states = bpr.bill_states(bpr.rows_from_page_reads(pages).rows, [], spans=found.spans, tolerance=0.5)
+    assert [(b["label"], b["state"], b["pages_unplaced"], b["rows_unplaced"]) for b in states["bills"]] == [
+        (one, bpr.STATE_NOT_CHECKED, [mid], 1), (two, bpr.STATE_NOT_CHECKED, [mid], 1)]

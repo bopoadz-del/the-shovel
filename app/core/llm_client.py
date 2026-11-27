@@ -320,8 +320,14 @@ async def complete(
     timeout: Optional[float] = None,
     user_id: Optional[str] = None,
     agent_name: str = "",
+    plain_reply: bool = False,
 ) -> str:
     """Return the assistant message text for a tool-less completion.
+
+    ``plain_reply`` asks the provider to answer without hidden reasoning, with
+    whatever request fields its config declares for that (``plain_reply``; a
+    provider that declares none is sent nothing extra). For a transcription --
+    a page image read line by line -- the reply is then the whole allowance.
 
     Mirrors ``Agent._call_llm``'s provider fallback: on a RETRYABLE failure
     from the primary (402/408/413/429/5xx or a network/timeout error) it retries
@@ -364,6 +370,8 @@ async def complete(
             "max_tokens": _provider_max_tokens(a_cfg, int(max_tokens)),
             "stream": False,
         }
+        if plain_reply:
+            payload.update(a_cfg.get("plain_reply") or {})
         headers = {"Content-Type": "application/json"}
         if a_key:
             headers["Authorization"] = f"Bearer {a_key}"

@@ -1093,3 +1093,160 @@ def test_production_model_read_renders_asks_saves_and_keeps_the_tolerance(
     assert calls == [(bpr.PAGE_READ_MAX_TOKENS, i) for i in range(3)]  # 2nd run: saved
     assert all((tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=i)).is_file()
                for i in range(3))
+
+
+# --- a saved read answers one question: it is given back only for that question ---
+
+@pytest.mark.parametrize("bill", ["Bill A", "Section 9"])
+def test_a_saved_read_is_given_back_only_for_the_question_it_answers(tmp_path, bill):
+    plain = [{"type": "item", "bill": None, "amount": "5"}]
+    named = [{"type": "item", "bill": bill, "amount": "5"}]
+    asked: list[object] = []
+
+    def inner(page):
+        asked.append(page.bill_before)
+        return named if page.bill_before else plain
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    alone = bpr.PageInContext(2, bill_before=None)
+    after = bpr.PageInContext(2, bill_before=bill)
+    assert read(alone) == plain and read(alone) == plain      # the same question: given back
+    assert asked == [None]
+    assert read(after) == named                               # the page before now ended in a bill: asked again
+    assert asked == [None, bill]
+    assert read(after) == named and asked == [None, bill]     # and that read is kept for that question
+    assert read(alone) == plain and asked == [None, bill, None]
+
+
+@pytest.mark.parametrize("good", [[{"type": "item", "amount": "5"}], [{"type": "item", "bill": "B", "amount": "8"}]])
+def test_a_file_saved_before_the_question_was_recorded_is_asked_again(tmp_path, good):
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    path = wd / bpr.SAVED_READ_NAME.format(index=1)
+    path.write_text(json.dumps([{"type": "item", "amount": "1"}]), encoding="utf-8")   # a bare read, as saved before
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return good
+
+    read = bpr.saved_page_reader(inner, str(wd))
+    assert read(_Page(1)) == good and read(_Page(1)) == good
+    assert asked == [1]
+    kept = json.loads(path.read_text(encoding="utf-8"))
+    assert kept == {bpr.SAVED_ASKED: bpr.asked_digest(bpr.PAGE_READ_PROMPT), bpr.SAVED_READ: good}
+
+
+@pytest.mark.parametrize("instruction", ["Read this page of the table.", "List every priced line."])
+def test_a_read_saved_under_another_instruction_is_asked_again(tmp_path, instruction):
+    lines = [{"type": "item", "amount": "5"}]
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return lines
+
+    wd = str(tmp_path / "wd")
+    other = bpr.saved_page_reader(inner, wd, question=bpr.page_question(instruction))
+    assert other(_Page(0)) == lines and other(_Page(0)) == lines and asked == [0]
+    default = bpr.saved_page_reader(inner, wd)
+    assert default(_Page(0)) == lines and asked == [0, 0]     # saved for another instruction: asked again
+    assert default(_Page(0)) == lines and asked == [0, 0]
+
+
+@pytest.mark.parametrize("prompt, bill, want", [
+    ("P", None, "P"),
+    ("P", "", "P"),
+    ("P", "Bill A", "P" + bpr.PAGE_READ_BEFORE.format(bill=json.dumps("Bill A"))),
+    (bpr.PAGE_READ_PROMPT, "Section 9",
+     bpr.PAGE_READ_PROMPT + bpr.PAGE_READ_BEFORE.format(bill=json.dumps("Section 9"))),
+])
+def test_page_question_is_the_instruction_the_reader_sends(prompt, bill, want):
+    question = bpr.page_question(prompt)(bpr.PageInContext(4, bill_before=bill))
+    assert question == want == bpr.prompt_for(prompt, bill)
+    seen: list[str] = []
+
+    def ask(messages):
+        seen.append(messages[0]["content"][0]["text"])
+        return json.dumps({"lines": [{"type": "item", "amount": 1}]})
+
+    bpr.model_page_reader(ask, lambda i: b"png", prompt=prompt)(bpr.PageInContext(4, bill_before=bill))
+    assert seen == [question]                                  # the key is made from what is really sent
+    assert bpr.asked_digest(question) == bpr.asked_digest(want)
+    assert bpr.asked_digest(question) != bpr.asked_digest(want + " ")
+
+
+_LINES = [{"type": "item", "amount": "5"}]
+
+
+@pytest.mark.parametrize("saved, served", [
+    ({"asked": "KEY", "read": _LINES}, True),
+    ({"asked": "OTHER", "read": _LINES}, False),             # a read made with another question
+    ({"read": _LINES}, False),                                 # no question recorded
+    (_LINES, False),                                           # a bare read, as saved before
+    ({"asked": "KEY", "read": []}, False),                     # not a read
+    ({"asked": "KEY", "read": ["text"]}, False),
+    ({"asked": "KEY"}, False), ("text", False), (None, False),
+])
+def test_saved_read_for_gives_lines_only_for_a_read_of_the_same_question(saved, served):
+    assert bpr.saved_read_for(saved, "KEY") == (_LINES if served else None)
+
+
+@pytest.mark.parametrize("name", ["Bill A", "Section 4"])
+def test_a_page_read_without_its_context_is_asked_again_once_the_page_before_is_read(tmp_path, name):
+    """Run 1: page 1 fails, so page 2 is read with no bill before it and names
+    none. Run 2: page 1 is read, page 2 is asked again with the bill page 1
+    ended on, and the bill reconciles. Run 3: nothing is asked."""
+    import base64
+
+    failing: set = {0}
+    asks: list[int] = []
+    told = bpr.PAGE_READ_BEFORE.format(bill=json.dumps(name))
+
+    def ask(messages):
+        text = messages[0]["content"][0]["text"]
+        index = base64.b64decode(messages[0]["content"][1]["image_url"]["url"].split(",", 1)[1])[0]
+        asks.append(index)
+        if index in failing:
+            raise _status_error(503)
+        if index == 0:
+            return json.dumps({"lines": [{"type": "item", "bill": name, "description": "a", "amount": 10}]})
+        if index == 1:
+            return json.dumps({"lines": [{"type": "item", "bill": name if told in text else None,
+                                          "description": "b", "amount": 10}]})
+        return json.dumps({"lines": [{"type": "summary", "bill": name, "description": "total", "amount": 20}]})
+
+    def run():
+        asks.clear()
+        reader = bpr.model_page_reader(ask, lambda i: bytes([i]))
+        rows_of = bpr.rows_of_model_reads(bpr.saved_page_reader(reader, str(tmp_path / "wd")))
+        rows, not_read, pages = rows_of([_Page(0), _Page(1), _Page(2)])
+        found = bpr.spans_from_page_reads(pages)
+        states = bpr.bill_states(rows, not_read, spans=found.spans, tolerance=0.5)["bills"]
+        return not_read, pages, [(b["label"], b["state"], b["items_sum"]) for b in states]
+
+    not_read, pages, states = run()
+    assert not_read == [1] and pages["2"][0]["bill"] is None
+    assert asks == [0] * bpr.PAGE_READ_ATTEMPTS + [1, 2]
+    assert [state for _l, state, _s in states] != [bpr.STATE_RECONCILED]
+
+    failing.clear()
+    not_read, pages, states = run()
+    assert not_read == [] and pages["2"][0]["bill"] == name
+    assert asks == [0, 1, 2]              # page 2 again, now told the bill; page 3 again, its context changed too
+    assert states == [(name, bpr.STATE_RECONCILED, 20.0)]
+
+    not_read, pages, states = run()
+    assert asks == [] and states == [(name, bpr.STATE_RECONCILED, 20.0)]
+
+
+@pytest.mark.parametrize("errors, replies, want", [
+    (["HTTPStatusError:503"], ["HTTPStatusError:503", "the page is blank"],
+     {"HTTPStatusError:503": 1, bpo.CAUSE_NO_LINES: 1}),
+    (["HTTPStatusError:429"], ["HTTPStatusError:429", ""], {"HTTPStatusError:429": 1, bpo.CAUSE_NO_LINES: 1}),
+    ([], ["x", "y"], {bpo.CAUSE_NO_LINES: 2}),
+    (["ReadTimeout", "ReadTimeout"], ["ReadTimeout", "ReadTimeout"], {"ReadTimeout": 2}),
+])
+def test_not_read_causes_counts_a_failed_call_and_a_reply_without_lines_apart(errors, replies, want):
+    plan = {"pages_not_read_why": {"1": {bpr.ERRORS_KEY: errors, "replies": replies}}}
+    assert bpo.not_read_causes(plan) == want
