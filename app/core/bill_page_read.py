@@ -62,6 +62,7 @@ CHECK_SUM_LINE = "sum line is not the sum of the lines it closes"
 #: Line types the read prompt defines as a sum of other lines of the page.
 #: ``brought_forward`` restates an earlier page: it is added, never checked.
 SUM_LINE_TYPES = frozenset({"carried", "subtotal", "total"})
+BROUGHT_FORWARD = "brought_forward"
 
 #: The model's figure keys, mapped to the sheet's canonical fields.
 _FIGURES = (("quantity", "quantity"), ("rate", "rate"), ("amount", "total"))
@@ -176,8 +177,24 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     bill                  every ``item`` amount of its bill so far, across
                           pages; its bill is the one the line names, else the
                           one bill the items of its section name (none when
-                          they name no bill or more than one)
+                          they name no bill or more than one); when the
+                          bill the line names has no run, the one bill of its
+                          section
+    stretch               every ``item`` amount across pages since the last
+                          item naming another bill, items naming no bill
+                          included; offered to a line whose bill is the
+                          stretch's or unknown on either side, and closed by a
+                          line that names a bill and agrees with it
     ====================  ==================================================
+
+    The bill and stretch runs are counted from the pages read, so they are
+    not offered on a page that prints a brought-forward amount above the
+    line: there the page run, which adds that amount, is the document's own
+    run across pages, and an earlier page may not have been read.
+
+    A sum line with no amount closes no run: the section, the stretch and the
+    bills its section names carry on past it (``_section_bills`` reads the
+    same boundary).
 
     "Equals" is within one unit of the amount's own last printed place (the
     same arithmetic ``bill_aggregate.row_kinds`` decides a collection by).
@@ -191,10 +208,12 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     for row in rows:
         by_page.setdefault(row.source_page, []).append(row)
     bill_items: dict[str, float] = {}
+    stretch, stretch_bill = 0.0, ""
     for page in sorted(by_page):
         section = on_page = 0.0
         items = 0
         named: set[str] = set()
+        carried_in = False
         for row in by_page[page]:
             kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
             text = _text(row.fields.get("total"))
@@ -202,6 +221,7 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
             if kind not in SUM_LINE_TYPES:
                 if amount is None:
                     continue
+                carried_in = carried_in or kind == BROUGHT_FORWARD
                 section += amount
                 on_page += amount
                 if kind == ITEM:
@@ -210,18 +230,28 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
                     if bill:
                         named.add(bill)
                         bill_items[bill] = bill_items.get(bill, 0.0) + amount
+                        if stretch_bill and bill != stretch_bill:
+                            stretch = 0.0
+                        stretch_bill = bill
+                    stretch += amount
                 continue
             if amount is None:
                 continue
-            bill = _row_bill(row) or (next(iter(named)) if len(named) == 1 else "")
+            own = _row_bill(row)
+            single = next(iter(named)) if len(named) == 1 else ""
+            bill = own if own in bill_items else (single or own)
             runs = [section, on_page]
-            if bill in bill_items:
+            if bill in bill_items and not carried_in:
                 runs.append(bill_items[bill])
+            if not carried_in and (not bill or not stretch_bill or bill == stretch_bill):
+                runs.append(stretch)
             place = agg._last_place(text)
             if items and not row.check and not any(
                     agg._same_figure(amount, run, place) for run in runs):
                 row.check = CHECK_SUM_LINE
                 flagged.append(row)
+            if own and agg._same_figure(amount, stretch, place):
+                stretch, stretch_bill = 0.0, ""
             section, items, named = 0.0, 0, set()
     return flagged
 
@@ -669,14 +699,16 @@ def _bill_key(value: Any) -> str:
 
 def _section_bills(rows: Sequence[g.BillRow], own: Sequence[str], at: int) -> frozenset[str]:
     """The bills the ``item`` lines of the section a sum line closes name:
-    the rows above ``rows[at]`` on its page, back to the sum line before it."""
+    the rows above ``rows[at]`` on its page, back to the sum line before it
+    that has an amount (a sum line with none closes no run, as in
+    :func:`check_sum_lines`)."""
     bills: set[str] = set()
     for j in range(at - 1, -1, -1):
         row = rows[j]
         if row.source_page != rows[at].source_page:
             break
         kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
-        if kind in SUM_LINE_TYPES:
+        if kind in SUM_LINE_TYPES and g.parse_number(row.fields.get("total", "")) is not None:
             break
         if kind == ITEM and own[j]:
             bills.add(own[j])
