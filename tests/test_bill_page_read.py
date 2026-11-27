@@ -61,6 +61,22 @@ def test_page_without_a_list_of_lines_is_not_read(pages):
     assert [r.source_page for r in out.rows] == [4]
 
 
+@pytest.mark.parametrize("key", ["p3", "", "-2", "3.5", "³"])
+def test_key_that_is_not_a_page_number_is_listed_not_dropped(key):
+    out = bpr.rows_from_page_reads({key: [_item("A", 1, 1, 1)],
+                                    "4": [_item("B", 2, 2, 4)]})
+    assert out.keys_not_pages == [key]
+    assert [r.source_page for r in out.rows] == [4]
+    assert out.pages_not_read == []
+
+
+@pytest.mark.parametrize("key, page", [(" 12 ", 12), (7, 7), ("007", 7), ("٣", 3)])
+def test_page_number_key_is_a_page(key, page):
+    out = bpr.rows_from_page_reads({key: [_item("A", 1, 1, 1)]})
+    assert out.keys_not_pages == []
+    assert [r.source_page for r in out.rows] == [page]
+
+
 @pytest.mark.parametrize("label", ["Bill 7", "Part B"])
 def test_heading_run_is_the_path_under_the_bill_label(label):
     pages = {"2": [_head("Earth"), _head("Digging"), _item("A", 1, 2, 2),

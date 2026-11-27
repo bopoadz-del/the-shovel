@@ -25,7 +25,9 @@ It decides nothing about the figures; it only states facts about them:
   (a figure that is not a number, or quantity x rate != amount). A figure
   that fails is kept as read and flagged; it is never repaired;
 * a page whose read is missing or is not a list of lines is NOT READ, never
-  "a page with no rows".
+  "a page with no rows";
+* a key of the read that is not a page number (decimal digits only) is not dropped
+  in silence: it is listed in ``keys_not_pages`` so the caller can say so.
 
 No word of any line is read: types come from the model, checks from cells.
 """
@@ -50,10 +52,11 @@ _FIGURES = (("quantity", "quantity"), ("rate", "rate"), ("amount", "total"))
 
 @dataclass
 class PageReadRows:
-    """Rows of a model read, the pages that gave none, and the flagged rows."""
+    """Rows of a model read, the pages that gave none, keys that are not pages, flagged rows."""
 
     rows: list[g.BillRow] = field(default_factory=list)
     pages_not_read: list[int] = field(default_factory=list)
+    keys_not_pages: list[str] = field(default_factory=list)
 
     @property
     def flagged(self) -> list[g.BillRow]:
@@ -86,23 +89,19 @@ def _figure(value: Any) -> tuple[str, bool]:
     return text, g.parse_number(text) is not None
 
 
-def _page_key(key: Any) -> int | None:
-    try:
-        return int(str(key).strip())
-    except ValueError:
-        return None
-
-
 def rows_from_page_reads(
     pages: Mapping[Any, Any], bill_label: str = "",
 ) -> PageReadRows:
     """``BillRow`` objects from a model's per-page line reads, pages in order."""
     out = PageReadRows()
-    keyed = sorted(
-        ((n, lines) for n, lines in ((_page_key(k), v) for k, v in pages.items())
-         if n is not None),
-        key=lambda kv: kv[0],
-    )
+    keyed: list[tuple[int, Any]] = []
+    for key, lines in pages.items():
+        name = _text(key)
+        if name.isdecimal():
+            keyed.append((int(name), lines))
+        else:
+            out.keys_not_pages.append(name)
+    keyed.sort(key=lambda kv: kv[0])
     top = (bill_label.strip(),) if bill_label.strip() else ()
     headings: list[str] = []
     after_row = True
