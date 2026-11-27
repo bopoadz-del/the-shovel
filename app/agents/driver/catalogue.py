@@ -338,31 +338,48 @@ def _size(result: Dict[str, Any]) -> int:
     return len(json.dumps(result, default=str))
 
 
-def _cap_names(result: Dict[str, Any], key: str, limit: int) -> None:
-    """Keep as many of ``result[key]``'s names, in order, as fit the
-    result in ``limit`` characters; the rest are counted under
-    ``<key>_more``."""
+def _cap_names(result: Dict[str, Any], keys: Any, limit: int) -> None:
+    """Keep as many names of each list in ``keys`` (one key or several, in
+    the order given), in order, as fit the result in ``limit`` characters;
+    the rest of a list are counted under ``<key>_more``.
+
+    Every list's count is held at its largest before any name is kept, so a
+    later list's count always has room: keeping names only ever shrinks a
+    count, and dropping a count that is not needed only frees room."""
     import json
 
-    names = result.get(key) or []
-    if not names:
-        return
-    more_key = f"{key}_more"
-    result[key] = []
-    result[more_key] = len(names)  # sized at its largest; shrinks below
-    size = _size(result)
-    kept: List[str] = []
-    for name in names:
-        add = len(json.dumps(name)) + (2 if kept else 0)
-        if size + add > limit:
-            break
-        kept.append(name)
-        size += add
-    result[key] = kept
-    if len(kept) < len(names):
-        result[more_key] = len(names) - len(kept)
-    else:
-        del result[more_key]
+    keys = (keys,) if isinstance(keys, str) else tuple(keys)
+    lists = {key: list(result.get(key) or []) for key in keys}
+    for key, names in lists.items():
+        if names:
+            result[key] = []
+            result[f"{key}_more"] = len(names)  # sized at its largest; shrinks below
+    for key, names in lists.items():
+        if not names:
+            continue
+        more_key = f"{key}_more"
+        size = _size(result)
+        kept: List[str] = []
+        for name in names:
+            add = len(json.dumps(name)) + (2 if kept else 0)
+            if size + add > limit:
+                break
+            kept.append(name)
+            size += add
+        result[key] = kept
+        if len(kept) < len(names):
+            result[more_key] = len(names) - len(kept)
+        else:
+            del result[more_key]
+
+
+def read_ids(ids: Any) -> Dict[str, Any]:
+    """What a lookup call read, for the turn's trace: the asked ids the
+    catalogue holds, and only a count of those it does not hold. An id the
+    catalogue does not hold is the model's own text, so it is never kept."""
+    held = {e["id"] for e in entries()}
+    asked = asked_ids(ids)
+    return {"ids": [i for i in asked if i in held], "unknown": sum(1 for i in asked if i not in held)}
 
 
 def lookup(ids: Any, limit: Optional[int] = None) -> Dict[str, Any]:
@@ -398,9 +415,8 @@ def lookup(ids: Any, limit: Optional[int] = None) -> Dict[str, Any]:
     if not found:
         result["error"] = "None of these ids is in the catalogue index."
     # The found ids still to ask for come first; then the unknown ones.
-    _cap_names(result, "not_returned", limit)
     result["unknown"] = unknown
-    _cap_names(result, "unknown", limit)
+    _cap_names(result, ("not_returned", "unknown"), limit)
     return result
 
 

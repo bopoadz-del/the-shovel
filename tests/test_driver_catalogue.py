@@ -635,7 +635,9 @@ def test_found_ids_to_ask_again_are_named_before_unknown_ones(monkeypatch, unkno
     monkeypatch.setattr(catalogue, "LOOKUP_CHARS", 1)
     base = len(json.dumps(catalogue.lookup(ids[:1]), default=str))
     want_rest = len(json.dumps(ids[1:])) + len(', "not_returned": ')
-    out = catalogue.lookup(ids + unknown, limit=base + want_rest + 25)
+    # Room is held for the unknown ids' count before any name is kept.
+    held_count = len(f', "unknown_more": {len(unknown)}')
+    out = catalogue.lookup(ids + unknown, limit=base + want_rest + held_count + 25)
     assert out["not_returned"] == ids[1:]
     assert len(out["unknown"]) < len(unknown) and out["unknown_more"] >= 1
 
@@ -809,8 +811,7 @@ def test_a_tool_declaration_is_stored_without_its_padding(registered, use, not_)
     assert (entry["when_to_use"], entry["when_not"]) == (use.strip(), not_.strip())
 
 
-@pytest.mark.parametrize("asked,want", [([" a ", "a"], ["a"]), ("x", ["x"])])
-def test_the_turn_trace_records_the_ids_as_read(monkeypatch, _stream_through_call, caplog, asked, want):
+def _driver_turn_line(monkeypatch, caplog, asked, user_message="hi"):
     import logging
 
     replies = [{"content": "", "tool_calls": [_call(catalogue.LOOKUP, {"ids": asked}, "c1")]},
@@ -818,13 +819,54 @@ def test_the_turn_trace_records_the_ids_as_read(monkeypatch, _stream_through_cal
     monkeypatch.setattr(llm, "call", _scripted(replies, []))
 
     async def go():
-        return [e async for e in loop.stream(_agent(), user_message="hi")]
+        return [e async for e in loop.stream(_agent(), user_message=user_message)]
     with caplog.at_level(logging.INFO):
         asyncio.run(go())
-    line = [r.getMessage() for r in caplog.records if "DRIVER_TURN" in r.getMessage()][-1]
+    return [r.getMessage() for r in caplog.records if "DRIVER_TURN" in r.getMessage()][-1]
+
+
+def _looked_up(line):
     turn = json.loads(line.split("DRIVER_TURN ", 1)[1])
-    looked = [c for s in turn["steps"] for c in s.get("calls", []) if c.get("ids") is not None]
-    assert [c["ids"] for c in looked] == [want]
+    return [c for s in turn["steps"] for c in s.get("calls", []) if c.get("tool") == catalogue.LOOKUP]
+
+
+@pytest.mark.parametrize("pick", [(0, 1), (-1, 2)])
+def test_the_turn_trace_records_held_ids_as_read(monkeypatch, _stream_through_call, caplog, pick):
+    held = [e["id"] for e in catalogue.entries()]
+    first, second = held[pick[0]], held[pick[1]]
+    line = _driver_turn_line(monkeypatch, caplog, [f" {first} ", first, second])
+    [call] = _looked_up(line)
+    assert (call["ids"], call["unknown"]) == ([first, second], 0)
+
+
+@pytest.mark.parametrize("words", ["my card is 4111 1111 1111 1111",
+                                   "ring the site office on 050 123 4567 about the bill"])
+def test_the_turn_trace_never_keeps_an_id_the_catalogue_does_not_hold(monkeypatch, _stream_through_call,
+                                                                       caplog, words):
+    # The model may send the user's own words as an id: the trace keeps a
+    # count of such ids, never their text.
+    held = catalogue.entries()[0]["id"]
+    line = _driver_turn_line(monkeypatch, caplog, [words, held, words + " again"], user_message=words)
+    [call] = _looked_up(line)
+    assert (call["ids"], call["unknown"]) == ([held], 2)
+    assert words.split()[-1] not in line.split("DRIVER_TURN ", 1)[1]
+
+
+@pytest.mark.parametrize("count, chars", [(3000, 110), (500, 2000)])
+def test_the_turn_trace_stays_small_for_many_long_unknown_ids(monkeypatch, _stream_through_call, caplog,
+                                                              count, chars):
+    asked = [f"{i:06d}" + "x" * (chars - 6) for i in range(count)]
+    line = _driver_turn_line(monkeypatch, caplog, asked)
+    [call] = _looked_up(line)
+    assert (call["ids"], call["unknown"]) == ([], count)
+    assert len(line) < 5_000
+
+
+@pytest.mark.parametrize("ids, want", [(None, {"ids": [], "unknown": 0}), ([], {"ids": [], "unknown": 0}),
+                                       (["", "  "], {"ids": [], "unknown": 0}),
+                                       (["zz:none", "zz:none"], {"ids": [], "unknown": 1})])
+def test_read_ids_of_nothing_or_one_unknown(ids, want):
+    assert catalogue.read_ids(ids) == want
 
 
 @pytest.mark.parametrize("param,want", [
@@ -890,3 +932,67 @@ def test_a_tool_spec_replaced_under_its_name_is_a_new_state(registered, first, t
     spec = tool_registry._TOOLS["zz_cat_replaced"]
     tool_registry._TOOLS["zz_cat_replaced"] = dataclasses.replace(spec, when_to_use=then)
     assert {e["id"]: e for e in catalogue.entries()}["tool:zz_cat_replaced"]["when_to_use"] == then
+
+
+# -- the whole lookup result fits the loop's limit, whatever is asked -------------------
+
+@pytest.mark.parametrize("unknown_count", [1, 5, 12, 40])
+def test_every_id_and_unknown_ids_fit_the_loops_limit(unknown_count):
+    held = [e["id"] for e in catalogue.entries()]
+    asked = held + [f"unknown:{i:010d}" for i in range(unknown_count)]
+    out = catalogue.lookup(asked)
+    assert len(json.dumps(out, default=str)) <= loop._TOOL_RESULT_CHARS
+    # Nothing is lost: every asked id is returned, named or counted.
+    named = len(out["entries"]) + len(out.get("not_returned", [])) + out.get("not_returned_more", 0)
+    assert named == len(held)
+    assert len(out["unknown"]) + out.get("unknown_more", 0) == unknown_count
+
+
+@pytest.mark.parametrize("seed", [3, 11, 29])
+def test_random_lookups_fit_the_loops_limit(seed):
+    import random
+
+    rng = random.Random(seed)
+    held = [e["id"] for e in catalogue.entries()]
+    for _ in range(60):
+        asked = rng.sample(held, rng.randint(len(held) // 2, len(held)))
+        asked += [f"unknown:{rng.random():.12f}" for _ in range(rng.randint(0, 40))]
+        rng.shuffle(asked)
+        out = catalogue.lookup(asked)
+        assert len(json.dumps(out, default=str)) <= loop._TOOL_RESULT_CHARS
+
+
+@pytest.mark.parametrize("first, second", [(["a" * 5] * 30, ["b" * 7] * 30), (["c" * 9] * 50, ["d" * 3] * 80)])
+def test_cap_names_holds_room_for_a_later_count(first, second):
+    first = [f"{x}{i}" for i, x in enumerate(first)]
+    second = [f"{x}{i}" for i, x in enumerate(second)]
+    base = len(json.dumps({"p": [], "p_more": len(first), "q": [], "q_more": len(second)}))
+    for limit in range(base, base + 400, 7):
+        result = {"p": list(first), "q": list(second)}
+        catalogue._cap_names(result, ("p", "q"), limit)
+        assert len(json.dumps(result)) <= limit, limit
+        assert len(result["p"]) + result.get("p_more", 0) == len(first)
+        assert len(result["q"]) + result.get("q_more", 0) == len(second)
+
+
+@pytest.mark.parametrize("p, q", [(["x", "y"], ["z"]), ([], ["a", "b", "c"]), (["d"], [])])
+def test_cap_names_keeps_every_name_of_both_lists_when_they_fit(p, q):
+    result = {"p": list(p), "q": list(q)}
+    catalogue._cap_names(result, ("p", "q"), 10_000)
+    assert result == {"p": p, "q": q}
+
+
+@pytest.mark.parametrize("name", ["N" * 200, "word " * 40])
+def test_an_index_line_cuts_a_long_name_to_80_characters(name):
+    entry = {"id": "zz:long", "kind": "tool", "name": name, "for": "x"}
+    shown = catalogue.index_line(entry).split(" | ")[2]
+    assert len(shown) <= 80
+    assert shown[:20] == name.strip()[:20]
+
+
+@pytest.mark.parametrize("found, rest", [(13, 1), (20, 8)])
+def test_a_lookup_of_more_than_twelve_found_ids_returns_twelve(found, rest):
+    ids = [e["id"] for e in catalogue.entries()][:found]
+    out = catalogue.lookup(ids)
+    assert len(out["entries"]) == 12
+    assert out["not_returned"] == ids[12:] and len(out["not_returned"]) == rest
