@@ -270,3 +270,71 @@ def test_gross_keeps_the_cents(work, mos, gross):
 @pytest.mark.parametrize("work,rate", [(100_000, 5), (900_000, 10)])
 def test_the_result_names_its_standard(work, rate):
     assert interim_payment_to_date(work, rate, 0)["standard"] == "FIDIC Clause 14.3"
+
+
+def _summed_nil_cases(seed):
+    """Earlier certificates whose total a caller adds up in floating point:
+    equal to the net to the cent, but the sum carries a residue."""
+    rng = random.Random(seed)
+    out = []
+    while len(out) < 200:
+        work = rng.randint(5_000_000, 900_000_000) / 100.0
+        rate = rng.choice([0, 2.5, 5, 10])
+        net = round(work - round(work * rate / 100.0, 2), 2)
+        cents = round(net * 100)
+        a = rng.randint(1, cents - 2)
+        b = rng.randint(1, cents - a - 1)
+        prev = a / 100.0 + b / 100.0 + (cents - a - b) / 100.0
+        if prev != net:
+            out.append((work, rate, prev))
+    return out
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_a_nil_due_against_a_summed_total_is_nil(seed):
+    for work, rate, prev in _summed_nil_cases(seed):
+        r = interim_payment_to_date(work, rate, prev)
+        assert str(r["amount_due"]) == "0.0", (work, rate, prev)
+        assert "note" not in r
+        assert r["working"][3].endswith("= 0.00")
+
+
+@pytest.mark.parametrize("work,rate,parts", [
+    (885_330.57, 0, (75_838.48, 425_242.53, 384_249.56)),
+    (454_937.80, 5, (155_919.18, 74_828.58, 201_443.15)),
+])
+def test_a_summed_total_through_the_public_path(work, rate, parts):
+    from app.lib import construction_formulas as cf
+    prev = sum(parts)
+    env = cf.run_calculation("interim_payment_to_date", {
+        "work_value_to_date": work, "retention_percent": rate,
+        "previously_certified": prev})
+    res = env["result"]
+    assert res["amount_due"] == 0 and str(res["amount_due"]) == "0.0"
+    assert "note" not in res
+    assert "-0.00" not in "\n".join(res["working"])
+
+
+@pytest.mark.parametrize("prev,due,deduction", [
+    (100.004, 0.0, False),
+    (99.996, 0.0, False),
+    (100.006, -0.01, True),
+    (100.014, -0.01, True),
+])
+def test_earlier_certificates_are_taken_to_the_cent(prev, due, deduction):
+    r = interim_payment_to_date(100.0, 0, prev)
+    assert r["amount_due"] == due
+    assert ("note" in r) is deduction
+    assert "-0.00" not in r["working"][3]
+
+
+@pytest.mark.parametrize("limit,reached", [
+    (49_999.999, False),
+    (50_000.004, False),
+    (49_999.99, True),
+    (49_999.994, True),
+])
+def test_the_limit_is_compared_to_the_cent(limit, reached):
+    r = interim_payment_to_date(1_000_000.0, 5, 0, retention_limit=limit)
+    assert r["retention_limit_reached"] is reached
+    assert r["retention_to_date"] == (round(limit, 2) if reached else 50_000.0)

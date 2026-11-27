@@ -74,13 +74,16 @@ def interim_payment_to_date(
     if retention_limit is not None and float(retention_limit) < 0:
         return {"error": "retention_limit must be >= 0."}
 
-    # Amounts are money: retention and the net are taken to the cent before
-    # the next step uses them, so the working adds up as printed, and earlier
-    # certificates equal to the net to the cent give a due of exactly nil,
-    # not a float residue read as a deduction.
+    # Amounts are money: retention, the limit, the earlier certificates and
+    # the net are taken to the cent before the next step uses them, so the
+    # working adds up as printed, and earlier certificates equal to the net
+    # to the cent -- however their total was added up -- give a due of
+    # exactly nil, not a float residue read as a deduction.
+    prev = _cents(prev)
     gross = work + mos
     retention_at_rate = _cents(work * rate / 100.0)
-    capped = retention_limit is not None and retention_at_rate > float(retention_limit)
+    capped = (retention_limit is not None
+              and retention_at_rate > _cents(float(retention_limit)))
     retention = _cents(float(retention_limit)) if capped else retention_at_rate
     net = _cents(gross - retention)
     due = net - prev
