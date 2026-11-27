@@ -111,6 +111,13 @@
         "implemented_by": "app.lib.construction_formulas_additions.calculate_interim_payment",
         "domain": "commercial",
         "tier": "operational"
+      },
+      {
+        "id": "break_even_point",
+        "description": "Break-even quantity and revenue: fixed costs / (price - variable cost per unit), none when the price does not exceed the variable cost; margin of safety at an expected quantity",
+        "implemented_by": "app.lib.construction_formulas_additions.break_even_point",
+        "domain": "commercial",
+        "tier": "operational"
       }
     ],
     "flows": [

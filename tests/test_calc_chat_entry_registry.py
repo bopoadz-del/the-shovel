@@ -247,6 +247,19 @@ CASES: Dict[str, Case] = {
          {"daily_tonnage_per_crane": 370.5, "cranes_required": 2})),
     # Weights .45/.45/.07/.03. X: 36 + 31.5 + 6.3 + 1.5 = 75.3;
     # Y: 31.5 + 40.5 + 5.6 + 1.8 = 79.4 -> Y ranks first. Scores carry no unit.
+    # Items with no spread: every trial total is 3 + 4 = 7, so P50 = P90 = 7.
+    # Durations are days: one item of "1 week" = 7 days with no spread, so
+    # every trial total is 7.
+    "monte_carlo_percentiles": Case(
+        {"low": [3, 4], "most_likely": [3, 4], "high": [3, 4], "iterations": 200},
+        {"p50": 7.0, "p90": 7.0}, "low",
+        ({"low": "1 week", "most_likely": 7, "high": "1 week", "iterations": 200},
+         {"p50": 7.0, "p90": 7.0})),
+    # Costs carry no physical unit: 1,000 + 2,500 = 3,500 on every trial.
+    "monte_carlo_cost_percentiles": Case(
+        {"low": [1000, 2500], "most_likely": [1000, 2500], "high": [1000, 2500],
+         "iterations": 200},
+        {"p50": 3500.0, "p90": 3500.0}, "high", None),
     "evaluate_tender": Case(
         {"tenderers": [
             {"name": "X", "technical": 80, "commercial": 70, "hse": 90,
@@ -263,6 +276,13 @@ CASES: Dict[str, Case] = {
         ({"worker_mass_kg": 80, "free_fall_m": 1.8,
           "deceleration_distance_m": "120 cm"},
          {"max_arrest_force_kn": 1.96})),
+    # Contribution per unit = 50 - 30 = 20; break-even = 12,000 / 20 = 600
+    # units; revenue = 600 x 50 = 30,000. Money and counts carry no physical
+    # unit, so there is no unit case.
+    "break_even_point": Case(
+        {"fixed_costs": 12_000, "price_per_unit": 50, "variable_cost_per_unit": 30},
+        {"contribution_per_unit": 20.0, "break_even_units": 600.0,
+         "break_even_revenue": 30_000.0}, "fixed_costs", None),
 }
 
 

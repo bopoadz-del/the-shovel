@@ -457,6 +457,10 @@ class ProjectFact(Base):
     source_document: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    # Who confirmed the fact and when. NULL means the app saved it by itself
+    # and nobody has confirmed it; such a row is never read into a prompt.
+    verified_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    verified_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Workflow(Base):
@@ -699,6 +703,49 @@ class AgentFact(Base):
     key: Mapped[str] = mapped_column(String, nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    # Same mark as project_facts: NULL = not verified, never prompt material.
+    verified_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    verified_at: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class LlmMemory(Base):
+    """llm_memory table: the model's own working notes, one JSON document per
+    (project, name). Written and read only by the model's memory tools
+    (``app.core.llm_memory``); never injected into a prompt by code."""
+
+    __tablename__ = "llm_memory"
+
+    project_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, primary_key=True)
+    #: The whole document as JSON text; a write replaces it.
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    written_at: Mapped[str] = mapped_column(String, nullable=False)
+    written_by_turn: Mapped[str] = mapped_column(String, nullable=False, default="")
+    #: The owner's mark on this version of the note: "" (not reviewed),
+    #: "kept" or "discarded". A discarded note stays in the table and is no
+    #: longer handed back by the model's read / list. A write clears it.
+    review: Mapped[str] = mapped_column(String, nullable=False, default="")
+    reviewed_at: Mapped[str] = mapped_column(String, nullable=False, default="")
+    reviewed_by: Mapped[str] = mapped_column(String, nullable=False, default="")
+
+
+class LlmMemoryReview(Base):
+    """llm_memory_review table: every keep / discard the owner made on one of
+    the model's notes, with the note's content as it was when decided, so the
+    record holds what was kept or thrown away even after a later write."""
+
+    __tablename__ = "llm_memory_review"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    note_written_at: Mapped[str] = mapped_column(String, nullable=False)
+    note_written_by_turn: Mapped[str] = mapped_column(String, nullable=False, default="")
+    decided_at: Mapped[str] = mapped_column(String, nullable=False)
+    decided_by: Mapped[str] = mapped_column(String, nullable=False, default="")
 
 
 class IngestionJob(Base):

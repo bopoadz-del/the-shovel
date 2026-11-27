@@ -30,6 +30,8 @@
  *   GET  /v1/admin/corpus/collections             → chunk/doc counts
  *   POST /v1/admin/debug/project-reindex          → re-index a project
  *   DELETE /v1/projects/{id}                      → delete a project
+ *
+ * The model's notes (keep / discard) live in ./MemoryNotes.tsx.
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -38,6 +40,7 @@ import {
   FolderSearch, CheckCircle2, Trash2, ChevronRight, ChevronDown,
 } from 'lucide-react'
 import AppHeader from '../components/AppHeader'
+import MemoryNotes from './MemoryNotes'
 import { apiGet, apiPost, apiDelete, ApiError } from '../lib/api'
 import { getToken } from '../lib/token'
 import { useAuth } from '../auth/AuthContext'
@@ -142,6 +145,8 @@ export default function AdminPage() {
         <UsersSection />
 
         <DriverModeSection />
+
+        <MemoryNotes />
 
         <footer className="admin-main__footer">
           <button

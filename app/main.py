@@ -228,6 +228,8 @@ async def lifespan(app: FastAPI):
     _bootstrap_first_user()
     from app.core.agent_memory import init_db as init_agent_memory_db
     init_agent_memory_db()
+    from app.core.llm_memory import init_db as init_llm_memory_db
+    init_llm_memory_db()
     from app.core.doc_index import init_db as init_doc_index_db
     init_doc_index_db()
     # NOTE: seed_knowledge() used to run HERE, inline. It is now part of the
@@ -315,6 +317,9 @@ async def lifespan(app: FastAPI):
         # After the warm-up task is finished or cancelled, so its freeze
         # can never land after this release.
         loop_watchdog.release_startup_heap()
+        # The watchdog watches this lifespan's loop; it ends with it. Off the
+        # loop: stop() joins the monitor's threads.
+        await asyncio.to_thread(loop_watchdog.stop)
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()
