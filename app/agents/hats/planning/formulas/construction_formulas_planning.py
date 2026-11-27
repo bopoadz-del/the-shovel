@@ -68,9 +68,9 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     those (a sequence is read item by item, never as its printed text).
     Nothing is assumed beyond what the CPM convention itself defines: a link
     with no type is FS and a link with no lag has none. A mapping's id is
-    kept exactly as written, as the activity's own id is, so a link joins
-    the activity whose id is that same text; only an id read out of a
-    comma-separated string loses the spaces around it."""
+    kept exactly as written; only an id read out of a comma-separated string
+    loses the spaces around it. Which activity each link joins is settled
+    afterwards against the network's own ids (``_join_links_to_ids``)."""
     if raw is None or raw == "":
         return []
     items = list(raw) if isinstance(raw, (list, tuple)) else [raw]
@@ -85,6 +85,25 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
             links += [{"predecessor_id": p.strip(), "type": "FS", "lag": 0}
                       for p in str(item).split(",") if p.strip()]
     return links
+
+
+def _join_links_to_ids(rows: List[Dict[str, Any]]) -> None:
+    """Point every link at the activity it names in this same network.
+
+    A link joins the one activity whose id is the same text once the spaces
+    around both are dropped (an id pasted with a stray space and a
+    predecessor typed without it, or the other way round). When no activity,
+    or more than one, matches that way (ids such as "A" and "A " are two
+    activities) the link keeps its text exactly: it joins the activity of
+    that exact id, or the kernel refuses it as an unknown predecessor."""
+    by_trimmed: Dict[str, List[str]] = {}
+    for aid in {row["id"] for row in rows}:
+        by_trimmed.setdefault(aid.strip(), []).append(aid)
+    for row in rows:
+        for link in row["predecessors"]:
+            same = by_trimmed.get(link["predecessor_id"].strip(), [])
+            if len(same) == 1:
+                link["predecessor_id"] = same[0]
 
 
 @formula(
@@ -154,6 +173,7 @@ def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
         rows.append({"id": aid, "name": str(act.get("name") or ""),
                      "duration": int(dur_f),
                      "predecessors": _network_links(act.get("predecessors"))})
+    _join_links_to_ids(rows)
 
     settings: Dict[str, Any] = {"activities": rows}
     if project_start not in (None, ""):

@@ -379,3 +379,54 @@ def test_a_turn_ask_never_flips_the_callers_band(band, lag, ask):
         cf._CURRENT_ASK.reset(token)
     assert out == compute_cpm(data)
     assert out.near_critical_band_days == band
+
+
+# ── A link joins its activity when the two differ only by spaces ────────────
+
+@pytest.mark.parametrize("acts, path, duration", [
+    ([{"id": "A ", "duration": 2},
+      {"id": "B", "duration": 3, "predecessors": ["A "]}], ["A ", "B"], 5),
+    ([{"id": "A ", "duration": 2},
+      {"id": "B", "duration": 3, "predecessors": "A "}], ["A ", "B"], 5),
+    ([{"id": " K", "duration": 4},
+      {"id": "L", "duration": 1, "predecessors": [" K"]}], [" K", "L"], 5),
+    ([{"id": "A", "duration": 6},
+      {"id": "B", "duration": 3, "predecessors": [{"id": "A "}]}], ["A", "B"], 9),
+])
+def test_chat_calculator_joins_a_link_written_with_other_spaces(acts, path, duration):
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env.get("status") == "success", env
+    assert env["result"]["project_duration"] == duration
+    assert env["result"]["critical_path"] == path
+
+
+@pytest.mark.parametrize("link, duration", [("A ", 1 + 3), ("A", 7 + 3)])
+def test_an_exact_id_wins_over_a_spaced_twin(link, duration):
+    # "A" (7 days) and "A " (1 day) are two activities; a link joins the one
+    # it names exactly, never its twin.
+    acts = [{"id": "A", "duration": 7}, {"id": "A ", "duration": 1},
+            {"id": "B", "duration": 3, "predecessors": [{"id": link}]}]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env.get("status") == "success", env
+    row = {r["id"]: r for r in env["result"]["activities"]}["B"]
+    assert row["early_start"] == duration - 3
+
+
+@pytest.mark.parametrize("link", ["A  ", "Z"])
+def test_a_link_with_no_single_match_is_refused(link):
+    # "A  " trims to two activities ("A" and "A "); "Z" to none: no guess.
+    acts = [{"id": "A", "duration": 7}, {"id": "A ", "duration": 1},
+            {"id": "B", "duration": 3, "predecessors": [{"id": link}]}]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env.get("status") != "success"
+    assert "unknown predecessor" in str(env.get("error"))
+    assert repr(link) in str(env.get("error"))
+
+
+@pytest.mark.parametrize("band, accepted", [(100000, True), (100001, False)])
+def test_band_upper_bound_is_the_declared_range(band, accepted):
+    acts = [{"id": "A", "duration": 2},
+            {"id": "B", "duration": 3, "predecessors": ["A"]}]
+    env = cf.run_calculation("cpm_network", {"activities": acts,
+                                             "near_critical_band_days": band})
+    assert (env.get("status") == "success") is accepted, env
