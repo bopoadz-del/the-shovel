@@ -80,7 +80,9 @@ def test_sheet_whose_rows_match_its_chunks_is_planned(n):
     e = _entry(plan, "s1")
     assert (e["rows_to_write"], e["skip_reason"]) == (n, "")
     assert plan["rows_to_write"] == n and plan["documents_to_write"] == 1
-    assert e["states"] == {"1": dr.RECONCILED}
+    # the plan reports doc_rows' own verdict: a sheet that prints no total is
+    # UNCHECKED (RECONCILED is the printed total only, #746)
+    assert e["states"] == {"1": dr.UNCHECKED}
 
 
 @pytest.mark.parametrize("n, chunks", [(3, 2), (2, 5), (0, 3)])
