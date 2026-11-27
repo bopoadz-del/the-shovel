@@ -589,3 +589,74 @@ def test_inputs_that_are_not_an_object_are_refused_as_such(params):
     from app.lib.construction_formulas import run_calculation
     env = run_calculation("resource_cost_line", params)
     assert env == {"status": "error", "error": "params must be an object of keyword arguments."}
+
+
+# ── a counted noun names what is counted (formula_registry._noun_fills_count) ──
+# "12.5 blocks per m2" for a count per count, "3.20 per block" or "3.20 each"
+# for a price per count: the noun stands in the count place, as an
+# unrecognised word after a plain count does. Through the public entry.
+
+@pytest.mark.parametrize("consumption,price,total", [
+    ("12.5 blocks per m2", "3.20 each", 1590 * 12.5 * 3.2),
+    ("12.5 blocks/m2", "3.20 per block", 1590 * 12.5 * 3.2),
+    ("6 bags per m2", "21 per bag", 1590 * 6 * 21),
+    ("4 sheets/m2", "17.5 ea", 1590 * 4 * 17.5),
+    ("2 panels per m2", "40 pcs", 1590 * 2 * 40),
+])
+def test_a_counted_noun_fills_the_count_place(consumption, price, total):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("resource_cost_line", {"quantity": "1590 m2", "consumption_per_unit": consumption,
+                                                 "price_per_resource_unit": price})
+    assert env["status"] == "success", env
+    assert env["result"]["line_total"] == pytest.approx(total), env
+
+
+@pytest.mark.parametrize("inputs,refused", [
+    # a noun beside a unit of another kind: kN is a force, not a measure of work
+    ({"consumption_per_unit": "6 bags per kN", "price_per_resource_unit": "21 per bag"}, "consumption_per_unit"),
+    # a part that is not a plain word is not a noun
+    ({"consumption_per_unit": "6 m33/m2", "price_per_resource_unit": "21 per bag"}, "consumption_per_unit"),
+    # a noun alone does not fill a count per count
+    ({"consumption_per_unit": "6 bags", "price_per_resource_unit": "21 per bag"}, "consumption_per_unit"),
+    # a word that is not a count mark does not make a price per count
+    ({"consumption_per_unit": "6 bags per m2", "price_per_resource_unit": "21 zz"}, "price_per_resource_unit"),
+    # a price per volume against a consumption counted in bags
+    ({"consumption_per_unit": "6 bags per m2", "price_per_resource_unit": "21 per m3"}, "price_per_resource_unit"),
+    # a consumption per bag against a quantity in m2
+    ({"consumption_per_unit": "6 blocks per bag", "price_per_resource_unit": "21 per block"}, "consumption_per_unit"),
+])
+def test_a_counted_noun_does_not_fill_what_it_cannot(inputs, refused):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("resource_cost_line", {"quantity": "1590 m2", **inputs})
+    assert env["status"] != "success", env
+    assert refused in str(env), env
+
+
+@pytest.mark.parametrize("value", ["5000 per block", "5000 each"])
+def test_a_counted_noun_does_not_fill_a_place_that_is_not_a_count(value):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("resource_line_cost", {"quantity": "500 m2", "daily_output": "20 m2/d",
+                                                 "day_rate": value, "material_rate_per_unit": 30})
+    assert env["status"] != "success", env
+    assert "day_rate" in str(env), env
+
+
+@pytest.mark.parametrize("unit,chained,fills", [
+    ("blocks/m2", True, True),
+    ("blocks/m2", False, False),   # a measure in a denominator needs per
+    ("m2/blocks", True, True),
+    ("m2/blocks", False, False),   # a noun in a denominator needs per
+    ("m3/m2", True, False),        # no noun: a measure fill, not this rule
+    ("blocks", True, False),       # parts do not match
+    ("blocks/kN", True, False),
+    ("bl0cks/m2", True, False),
+])
+def test_noun_fills_count_reads_each_part(unit, chained, fills):
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+    from app.lib.formula_registry import _noun_fills_count
+
+    assert _noun_fills_count(parse_unit("count/count"), unit, chained) is fills
+    assert _noun_fills_count(None, unit, chained) is False

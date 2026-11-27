@@ -841,6 +841,49 @@ def _measure_fills_count(declared: Any, written: Any, chained: bool = False) -> 
                for i, (w, h) in enumerate(zip(want, have)))
 
 
+def _noun_fills_count(declared: Any, unit: str, chained: bool = False) -> bool:
+    """True when ``unit``, read part by part ("blocks per m2" -> blocks, m2),
+    fills the declared unit with a counted noun -- a word the converter does
+    not know -- in at least one place the declared unit says ``count``, and
+    every other part is the declared kind or a countable measure as
+    :func:`_measure_fills_count` allows. The noun names what is counted, as
+    an unrecognised word after a plain count does. A noun or a measure stands
+    in a denominator only for an input that declares what it is ``per``
+    (``chained``). A part that is not a plain word ("m33") is not a noun."""
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate, parse_unit
+
+    if declared is None:
+        return False
+    want = declared.dimension.split("/")
+    parts = [part.strip() for part in normalise_rate(unit).split("/")]
+    if len(parts) != len(want) or any(not part for part in parts):
+        return False
+    nouns = 0
+    for i, (w, part) in enumerate(zip(want, parts)):
+        atom = parse_unit(part)
+        if atom is not None and atom.dimension == w:
+            continue
+        if w != "count" or not (i == 0 or chained):
+            return False
+        if atom is None and part.isalpha():
+            nouns += 1
+        elif atom is None or atom.dimension not in _COUNTABLE_MEASURES:
+            return False
+    return nouns > 0
+
+
+def _count_mark(unit: str) -> Optional[str]:
+    """The standard mark for a written count unit ("each", "ea", "pcs" ->
+    "nr", by the bill-of-quantities unit table), or None when ``unit`` is
+    not one."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+    from app.lib.boq_units import canon_unit
+
+    mark = canon_unit(unit)
+    atom = parse_unit(mark)
+    return mark if atom is not None and atom.dimension == "count" else None
+
+
 def convert_figure(spec: ParamSpec, number: float, unit: str,
                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One figure written in ``unit``, put into the unit ``spec`` declares by
@@ -884,7 +927,18 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
         # implied, as it is for a bare figure on a currency input. Only a
         # unit that then reads as the declared kind is taken; it begins with
         # currency, so only a currency-per input can match it.
-        implied = parse_unit(f"currency {unit}")
+        if any(_noun_fills_count(declared, text, bool(spec.per))
+               for text in (unit, f"currency {unit}")):
+            # "12.5 blocks per m2" for a count per count, "3.20 per block"
+            # for a price per count: the noun names what is counted.
+            return {"value": number,
+                    "conversion": {"parameter": spec.name, "value_in": number,
+                                   "from_unit": unit, "to_unit": unit, "value_out": number,
+                                   "note": "count carries the stated unit"}}
+        # "3.20 each" for a price per count: a price written against a count
+        # mark is a price per that mark.
+        mark = _count_mark(unit)
+        implied = parse_unit(f"currency/{mark}" if mark else f"currency {unit}")
         if implied is not None and (implied.dimension == declared.dimension
                                     or _measure_fills_count(declared, implied, bool(spec.per))):
             return convert_figure(spec, number, implied.written, context)
@@ -913,16 +967,33 @@ def _stated_parts(value: Any) -> Optional[Tuple[str, str]]:
     """The unit ``value`` is stated in, split into what it measures and what
     it is per: "5 L/m2" -> ("L", "m2"), "12 m2" -> ("m2", ""), "9 per
     m3" -> ("currency", "m3"). None when no unit the converter knows is stated."""
-    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate, parse_unit
 
     parsed = value_and_unit(value)
     if parsed is None:
         return None
     unit = parse_unit(parsed[1]) or parse_unit(f"currency {parsed[1]}")
     if unit is None:
+        # A counted noun in a place ("12 blocks per m2", "3 per block"):
+        # each part is a unit the converter knows or a plain word.
+        for text in (parsed[1], f"currency {parsed[1]}"):
+            parts = [part.strip() for part in normalise_rate(text).split("/")]
+            if 1 <= len(parts) <= 2 and all(_part_unit(part) is not None for part in parts):
+                return parts[0], (parts[1] if len(parts) == 2 else "")
         return None
     head, _, tail = unit.written.partition("/")
     return head.strip(), tail.strip()
+
+
+def _part_unit(part: str) -> Any:
+    """One part of a stated unit: the unit the converter reads, or for a
+    plain word it does not know (a counted noun, "blocks") a count."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    unit = parse_unit(part)
+    if unit is None and part.isalpha():
+        return parse_unit("count")
+    return unit
 
 
 def _chain_units(params: Dict[str, ParamSpec], values: Dict[str, Any], out: Dict[str, Any],
@@ -933,7 +1004,7 @@ def _chain_units(params: Dict[str, ParamSpec], values: Dict[str, Any], out: Dict
     (a price per m3 against a consumption in litres becomes a price per
     litre), another kind is refused. Where either is a bare figure there is
     nothing stated to check."""
-    from app.agents.base.formulas.construction_formulas_planning import parse_unit, pe_unit_convert
+    from app.agents.base.formulas.construction_formulas_planning import pe_unit_convert
 
     refused = {row["parameter"] for row in rejected}
     for key, p in params.items():
@@ -943,7 +1014,7 @@ def _chain_units(params: Dict[str, ParamSpec], values: Dict[str, Any], out: Dict
         mine, theirs = _stated_parts(values.get(key)), _stated_parts(values.get(p.per))
         if not mine or not theirs or not mine[1]:
             continue
-        per_unit, measured = parse_unit(mine[1]), parse_unit(theirs[0])
+        per_unit, measured = _part_unit(mine[1]), _part_unit(theirs[0])
         if per_unit is None or measured is None:
             continue
         if per_unit.dimension != measured.dimension:
