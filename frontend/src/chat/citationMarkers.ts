@@ -39,6 +39,13 @@ export function readCoverage(value: unknown): AnswerCoverage | undefined {
   return { indexed, total }
 }
 
+/** The SSE 'end' event's ``details`` field (rule 5 of the answer contract:
+ *  supporting text moved out of the lead), or undefined when absent, blank
+ *  or not text. */
+export function readDetails(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
 /** A ``citations`` field (the SSE 'end' event, or a stored answer read back
  *  when a session is reopened), or undefined when absent or not a list. */
 export function readCitations(value: unknown): AnswerCitation[] | undefined {

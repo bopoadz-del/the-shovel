@@ -923,10 +923,11 @@ def test_audit_delay_damages_daily():
 
 def test_audit_dewatering_uplift_check():
     """Hydrostatics: uplift = h × γw (T/m²). Counter = raft×γc + floors×t×γc.
-    FOS = counter / uplift; stop if FOS ≥ 1.25.
+    FOS = counter / uplift; stop if FOS ≥ 1.2 (the course's figure, read
+    from knowledge entry foundation.uplift_fos when none is given).
     Hand: h=23, raft=2, 5 floors × 0.3, γc=2.5
           uplift=23; counter=5.0+3.75=8.75; FOS=0.380
-          min floors: ceil((23×1.25 − 5.0)/0.75) = ceil(31.667) = 32.
+          min floors: ceil((23×1.2 − 5.0)/0.75) = ceil(30.133) = 31.
     Zero water: no uplift → FOS = ∞, can_stop True. Silent FOS=0 was wrong.
     """
     r = _ok("dewatering_uplift_check",
@@ -936,7 +937,7 @@ def test_audit_dewatering_uplift_check():
     assert r["fos"] == pytest.approx(0.380, abs=0.001)
     assert r["can_stop"] is False
     assert r["needs_tension_piles"] is True
-    assert r["min_floors_for_stop"] == 32
+    assert r["min_floors_for_stop"] == 31
 
     dry = _ok("dewatering_uplift_check",
               {"water_depth": 0, "raft_thickness": 2.0, "floor_count": 5})

@@ -288,23 +288,76 @@ def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(monkey
         assert mon.max_wake_late_ms < 150, mon.max_wake_late_ms
 
 
+class TickSleepThatAdmitsTheHold:
+    """Stands in for the monitor's stop event so that WHERE the hold begins is
+    an order of events, not a race against the runner's scheduler.
+
+    ``wait`` is the monitor's tick sleep (``_sleep_watched`` calls it after it
+    has read ``slept_from``). It says the sleep has begun, blocks with the GIL
+    released until the worker says its hold has begun, then sleeps out what is
+    left of the tick. The worker starts only after the first signal, so its
+    hold begins inside the sleep however late either thread is scheduled. With
+    ``admits_hold`` False there is no hold to wait for and ``wait`` is the
+    plain tick sleep. The monitor's clock reads, its arithmetic and the C
+    timer are the real ones."""
+
+    def __init__(self, admits_hold: bool) -> None:
+        self.admits_hold = admits_hold
+        self.sleeping, self.holding = threading.Event(), threading.Event()
+        self._rest = threading.Event()
+
+    def wait(self, timeout: float) -> bool:
+        began = time.monotonic()
+        self.sleeping.set()
+        if self.admits_hold:
+            assert self.holding.wait(5), "the worker never began"
+        return self._rest.wait(max(0.0, timeout - (time.monotonic() - began)))
+
+
 @pytest.mark.parametrize("hold", [True, False])
 @own_process
 def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
     """The blind spot this closes: the hold starts inside the monitor's tick
     sleep, so no heartbeat is pending and ``max_lag_ms`` stays ~0. The late
-    wake and the live dump still name it."""
-    n = _size_for(0.6) if hold else 0
+    wake and the live dump still name it.
+
+    RED MAIN (a674f652, run 45813533641): the worker used to start its hold
+    50 ms after it was started, by wall time. On a loaded runner it ran
+    before ``slept_from`` was read or after the 400 ms sleep had ended, and
+    the wake read 0.1 ms late. Now the hold is placed by events
+    (``TickSleepThatAdmitsTheHold``), and it lasts a fixed time with the GIL
+    held (``_gil_holding_wait``): two full timer periods, so the repeating
+    C timer is due twice inside it. The monitor cannot wake before the hold
+    ends, so the wake is at least ``2 * period_s - tick`` late on any runner. A
+    slower runner only makes it later."""
     loop = asyncio.new_event_loop()
     mon = loop_watchdog.LagMonitor(loop, threshold_ms=250, tick_ms=400, log=False, live_ms=150)
+    period_s = mon.tick + mon._live.after_s
+    gate = TickSleepThatAdmitsTheHold(admits_hold=hold)
+    mon._stop = gate
     # No loop running: drive the sleep path directly on this thread while a
     # worker holds the GIL from inside that sleep.
     release = threading.Event()
 
     def work():
-        time.sleep(0.05)
-        if hold:
-            _gil_holding_call(n)
+        if not hold or not gate.sleeping.wait(5):
+            release.wait(5)
+            return
+        old = sys.getswitchinterval()
+        # Once the monitor is let go it waits for the GIL; with no forced
+        # switch it gets it only when the hold returns, never between the
+        # signal and the hold.
+        sys.setswitchinterval(_NO_FORCED_SWITCH_S)
+        try:
+            for _ in range(_SETTLE_SLEEPS):
+                time.sleep(0.001)
+            gate.holding.set()
+            # One timer period per call (POSIX ``usleep`` may refuse a
+            # second or more); no forced switch between the two calls.
+            for _ in range(2):
+                _gil_holding_wait(period_s)
+        finally:
+            sys.setswitchinterval(old)
         release.wait(5)
 
     worker = threading.Thread(target=work, name="gil-holder")
@@ -319,7 +372,8 @@ def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
     if hold:
         assert mon.max_wake_late_ms >= 150, mon.max_wake_late_ms
         assert mon.live_dumps and "[gil-holder]" in mon.live_dumps[0][1], mon.live_dumps
-        assert "_gil_holding_call" in mon.live_dumps[0][1]
+        assert "_gil_holding_wait" in mon.live_dumps[0][1]
+        assert mon.live_dumps[0][1].startswith("WAKE_LATE ")
     else:
         assert mon.max_wake_late_ms < 150 and mon.live_dumps == []
 
