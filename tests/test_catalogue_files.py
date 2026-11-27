@@ -64,15 +64,58 @@ def _a_file(shipped, kind, index=0):
 
 # -- drift: one file for every capability, none extra, facts equal to code -----------
 
-def test_capabilities_drift_shipped_files_agree_with_code(shipped, capabilities):
+@pytest.mark.parametrize("kind", ["formula", "kernel", "knowledge", "rag"])
+def test_capabilities_drift_shipped_files_agree_with_code(shipped, capabilities, kind):
     assert cf.drift() == []
-    registered = {entry["id"] for _kind, entry in capabilities}
-    assert set(shipped) == registered
-    # One file per capability, each in its own kind's directory.
-    for kind, entry in capabilities:
-        assert shipped[entry["id"]]["kind"] == kind
-    kinds = {kind for kind, _e in capabilities}
-    assert kinds == set(cf.DIRS)
+    registered = {entry["id"] for k, entry in capabilities if k == kind}
+    held = {i for i, d in shipped.items() if d["kind"] == kind}
+    # One file per capability of this kind, none extra, each in its kind's directory.
+    assert registered and held == registered
+    for entry_id in held:
+        assert cf.path_of(kind, entry_id).startswith(cf.DIRS[kind] + "/")
+
+
+# -- the facts of each kind, read from the code -----------------------------------------
+
+@pytest.mark.parametrize("kind,index,reader", [
+    ("formula", 0, cf._formula_facts), ("formula", 5, cf._formula_facts),
+    ("kernel", 0, cf._kernel_facts), ("kernel", 2, cf._kernel_facts),
+    ("knowledge", 0, cf._knowledge_facts), ("knowledge", 7, cf._knowledge_facts),
+    ("rag", 0, cf._rag_facts), ("rag", 4, cf._rag_facts)])
+def test_each_kinds_facts_are_what_its_file_holds(shipped, capabilities, kind, index, reader):
+    entry_id = _a_file(shipped, kind, index)["id"]
+    entry = next(e for k, e in capabilities if e["id"] == entry_id)
+    own = json.loads(json.dumps(reader(entry)))
+    assert own, f"{entry_id}: the {kind} reader gave no facts"
+    held = shipped[entry_id]["facts"]
+    assert {key: held[key] for key in own} == own
+
+
+@pytest.mark.parametrize("field", ["choices", "described_as"])
+def test_rag_facts_carry_the_offered_choices_and_descriptions(shipped, capabilities, field):
+    # A retrieval tool's inputs as offered to the model: what the offered
+    # schema declares (an input's choices, its description) is carried.
+    entries = {e["id"]: e for k, e in capabilities if k == "rag"}
+    carrying = [i for i, e in entries.items()
+                if any(item.get(field) for item in cf._rag_facts(e)["inputs"])]
+    assert carrying, f"no retrieval tool carries {field}"
+    for entry_id in carrying:
+        assert cf._rag_facts(entries[entry_id])["inputs"] == shipped[entry_id]["facts"]["inputs"]
+
+
+@pytest.mark.parametrize("bad_kind", ["recipe", ""])
+def test_facts_refuses_an_unknown_kind(capabilities, bad_kind):
+    entry = capabilities[0][1]
+    with pytest.raises(cf.CatalogueFileError, match="unknown file kind"):
+        cf.facts(bad_kind, entry)
+
+
+@pytest.mark.parametrize("bound", [float("inf"), float("nan")])
+def test_facts_refuses_a_figure_json_cannot_hold(capabilities, bound):
+    kind, entry = next((k, e) for k, e in capabilities if k == "kernel")
+    entry = dict(entry, inputs=[{"name": "x", "range": [0, bound]}])
+    with pytest.raises(ValueError):
+        cf.facts(kind, entry)
 
 
 @pytest.mark.parametrize("kind,index", [("formula", 0), ("knowledge", 3)])
@@ -100,34 +143,40 @@ def test_drift_names_the_facts_that_differ(copy_dir, shipped, kind, index, field
     assert cf.drift(copy_dir) == [f"{doc['id']}: facts differ from the code in: {field}"]
 
 
-def test_write_rebuilds_facts_and_keeps_hints(copy_dir, shipped):
-    first, second = _a_file(shipped, "formula", 0), _a_file(shipped, "kernel", 1)
+@pytest.mark.parametrize("first_kind,second_kind,gone_kind,gone_hints", [
+    ("formula", "kernel", "rag",
+     {"approved": False, "purpose": "", "not_to_be_confused_with": [], "question_kinds": []}),
+    ("knowledge", "rag", "formula",
+     {"approved": False, "purpose": "", "not_to_be_confused_with": []})])
+def test_write_rebuilds_facts_and_keeps_hints(copy_dir, shipped, first_kind, second_kind, gone_kind, gone_hints):
+    first, second = _a_file(shipped, first_kind, 0), _a_file(shipped, second_kind, 1)
+    gone = _a_file(shipped, gone_kind, 0)
     for doc, purpose in ((first, "What the first one is for."), (second, "What the second one is for.")):
         changed = json.loads(json.dumps(doc))
         changed["facts"]["described_as"] = "stale"
         changed["hints"]["purpose"] = purpose
         _write(copy_dir, cf.path_of(doc["kind"], doc["id"]), changed)
-    os.remove(os.path.join(copy_dir, cf.path_of("rag", _a_file(shipped, "rag", 0)["id"])))
+    os.remove(os.path.join(copy_dir, cf.path_of(gone_kind, gone["id"])))
     report = cf.write(copy_dir)
-    assert sorted(report["written"]) == sorted([cf.path_of("formula", first["id"]),
-                                                cf.path_of("kernel", second["id"]),
-                                                cf.path_of("rag", _a_file(shipped, "rag", 0)["id"])])
+    assert sorted(report["written"]) == sorted([cf.path_of(first_kind, first["id"]),
+                                                cf.path_of(second_kind, second["id"]),
+                                                cf.path_of(gone_kind, gone["id"])])
     assert report["extra"] == [] and report["removed"] == []
     assert cf.drift(copy_dir) == []
-    assert _read(copy_dir, cf.path_of("formula", first["id"]))["hints"]["purpose"] == "What the first one is for."
-    assert _read(copy_dir, cf.path_of("kernel", second["id"]))["hints"]["purpose"] == "What the second one is for."
+    assert _read(copy_dir, cf.path_of(first_kind, first["id"]))["hints"]["purpose"] == "What the first one is for."
+    assert _read(copy_dir, cf.path_of(second_kind, second["id"]))["hints"]["purpose"] == "What the second one is for."
     # The file written for the missing capability carries the empty hint of its kind.
-    assert _read(copy_dir, cf.path_of("rag", _a_file(shipped, "rag", 0)["id"]))["hints"] == {
-        "approved": False, "purpose": "", "not_to_be_confused_with": [], "question_kinds": []}
+    assert _read(copy_dir, cf.path_of(gone_kind, gone["id"]))["hints"] == gone_hints
     # A second write changes nothing.
     again = cf.write(copy_dir)
     assert again["written"] == [] and again["unchanged"] == len(shipped)
 
 
-def test_write_reports_extra_and_prunes_only_when_asked(copy_dir, shipped):
-    doc = json.loads(json.dumps(_a_file(shipped, "knowledge", 0)))
+@pytest.mark.parametrize("kind,index", [("knowledge", 0), ("formula", 4)])
+def test_write_reports_extra_and_prunes_only_when_asked(copy_dir, shipped, kind, index):
+    doc = json.loads(json.dumps(_a_file(shipped, kind, index)))
     doc["id"] = doc["id"] + "_gone"
-    rel = cf.path_of("knowledge", doc["id"])
+    rel = cf.path_of(kind, doc["id"])
     _write(copy_dir, rel, doc)
     assert cf.write(copy_dir)["extra"] == [rel]
     assert os.path.exists(os.path.join(copy_dir, rel))
@@ -135,14 +184,15 @@ def test_write_reports_extra_and_prunes_only_when_asked(copy_dir, shipped):
     assert not os.path.exists(os.path.join(copy_dir, rel))
 
 
-def test_write_never_overwrites_an_unreadable_file(copy_dir, shipped):
-    rel = cf.path_of("formula", _a_file(shipped, "formula", 3)["id"])
+@pytest.mark.parametrize("kind,index,text", [("formula", 3, "{not json"), ("kernel", 1, "[1,")])
+def test_write_never_overwrites_an_unreadable_file(copy_dir, shipped, kind, index, text):
+    rel = cf.path_of(kind, _a_file(shipped, kind, index)["id"])
     with open(os.path.join(copy_dir, rel), "w", encoding="utf-8") as f:
-        f.write("{not json")
+        f.write(text)
     with pytest.raises(cf.CatalogueFileError, match="unreadable, so not rewritten"):
         cf.write(copy_dir)
     with open(os.path.join(copy_dir, rel), encoding="utf-8") as f:
-        assert f.read() == "{not json"
+        assert f.read() == text
 
 
 # -- loader refusals --------------------------------------------------------------------
@@ -211,10 +261,11 @@ def test_load_refuses_a_missing_directory(tmp_path):
             cf.load(str(missing))
 
 
-def test_problems_names_self_reference_duplicates_and_question_kinds(shipped):
-    doc = json.loads(json.dumps(_a_file(shipped, "rag", 0)))
+@pytest.mark.parametrize("index,other_index", [(0, 1), (3, 5)])
+def test_problems_names_self_reference_duplicates_and_question_kinds(shipped, index, other_index):
+    doc = json.loads(json.dumps(_a_file(shipped, "rag", index)))
     assert cf.problems(doc) == []
-    other = _a_file(shipped, "rag", 1)["id"]
+    other = _a_file(shipped, "rag", other_index)["id"]
     doc["hints"]["not_to_be_confused_with"] = [{"id": doc["id"], "difference": "the file itself, named as its own neighbour"}]
     assert cf.problems(doc) == ["hints/not_to_be_confused_with: names the file itself"]
     doc["hints"]["not_to_be_confused_with"] = [{"id": other, "difference": "a different retrieval tool"},
@@ -236,15 +287,47 @@ def test_path_of_refuses_what_has_no_file_name(kind, entry_id):
         cf.path_of(kind, entry_id)
 
 
-def test_path_of_places_each_kind_in_its_directory():
-    assert cf.path_of("formula", "formula:a_b") == "formulas/a_b.json"
-    assert cf.path_of("rag", "tool:search_x") == "rag/search_x.json"
+@pytest.mark.parametrize("kind,entry_id,rel", [
+    ("formula", "formula:a_b", "formulas/a_b.json"), ("rag", "tool:search_x", "rag/search_x.json"),
+    ("kernel", "kernel:hat.one", "kernels/hat.one.json"), ("knowledge", "knowledge:k-2", "knowledge/k-2.json")])
+def test_path_of_places_each_kind_in_its_directory(kind, entry_id, rel):
+    assert cf.path_of(kind, entry_id) == rel
 
 
-def test_hint_gaps_lists_files_without_a_written_hint(copy_dir, shipped):
+@pytest.mark.parametrize("hints", [None, "a sentence, not an object"])
+def test_problems_stops_at_the_schema_when_the_hints_are_not_an_object(shipped, hints):
+    # A file the schema refuses is named by the schema alone; the later
+    # checks, which read the hints, are not reached.
+    doc = json.loads(json.dumps(_a_file(shipped, "rag", 0)))
+    if hints is None:
+        del doc["hints"]
+    else:
+        doc["hints"] = hints
+    found = cf.problems(doc)
+    assert found and all(not line.startswith("hints/not_to_be_confused_with") for line in found)
+
+
+@pytest.mark.parametrize("change", ["rewrite", "remove"])
+def test_identity_changes_when_a_file_changes(copy_dir, shipped, change):
+    before = cf.identity(copy_dir)
+    assert before == cf.identity(copy_dir) and len(before) == len(shipped) + 1  # + schema.json
+    rel = cf.path_of("formula", _a_file(shipped, "formula", 0)["id"])
+    if change == "rewrite":
+        with open(os.path.join(copy_dir, rel), "a", encoding="utf-8") as f:
+            f.write("  ")  # two more bytes: a rewrite
+        after = cf.identity(copy_dir)
+        assert len(after) == len(before) and after != before
+    else:
+        os.remove(os.path.join(copy_dir, rel))
+        after = cf.identity(copy_dir)
+        assert [r for r, _m, _s in after] == [r for r, _m, _s in before if r != rel]
+
+
+@pytest.mark.parametrize("f_index,r_index", [(0, 0), (9, 2)])
+def test_hint_gaps_lists_files_without_a_written_hint(copy_dir, shipped, f_index, r_index):
     before = cf.hint_gaps(copy_dir)
     assert len(before) == len(shipped)  # nothing is written yet
-    formula, rag = _a_file(shipped, "formula", 0), _a_file(shipped, "rag", 0)
+    formula, rag = _a_file(shipped, "formula", f_index), _a_file(shipped, "rag", r_index)
     for doc in (formula, rag):
         changed = json.loads(json.dumps(doc))
         changed["hints"]["purpose"] = "What it is for."
@@ -257,12 +340,13 @@ def test_hint_gaps_lists_files_without_a_written_hint(copy_dir, shipped):
 
 # -- using a file: call_for, hint_text, enrich ------------------------------------------
 
-def test_call_for_builds_the_files_call_and_refuses_by_name(shipped):
+@pytest.mark.parametrize("values", [{"length_m": 12, "width_m": 4, "depth_m": 2},
+                                    {"length_m": 7, "width_m": 3, "depth_m": 1.5}])
+def test_call_for_builds_the_files_call_and_refuses_by_name(shipped, values):
     doc = shipped["formula:excavation_volume"]
-    for values in ({"length_m": 12, "width_m": 4, "depth_m": 2}, {"length_m": 7, "width_m": 3, "depth_m": 1.5}):
-        call = cf.call_for(doc, values)
-        assert call == {"tool": doc["facts"]["call"]["tool"],
-                        "arguments": {**doc["facts"]["call"]["arguments"], "params": values}}
+    call = cf.call_for(doc, values)
+    assert call == {"tool": doc["facts"]["call"]["tool"],
+                    "arguments": {**doc["facts"]["call"]["arguments"], "params": values}}
     with pytest.raises(cf.CatalogueFileError, match="has no input named colour"):
         cf.call_for(doc, {"length_m": 1, "width_m": 1, "depth_m": 1, "colour": "red"})
     for blank in (None, " "):
@@ -272,10 +356,11 @@ def test_call_for_builds_the_files_call_and_refuses_by_name(shipped):
         cf.call_for(doc, [1, 2, 3])
 
 
-def test_hint_text_and_enrich_use_only_an_approved_file_that_agrees(shipped, capabilities):
+@pytest.mark.parametrize("a,b", [("formula:excavation_volume", "formula:unit_cost_total"),
+                                 ("formula:cost_per_area", "formula:excavation_volume")])
+def test_hint_text_and_enrich_use_only_an_approved_file_that_agrees(shipped, capabilities, a, b):
     entries = {e["id"]: e for _k, e in capabilities}
     files = json.loads(json.dumps(shipped))
-    a, b = "formula:excavation_volume", "formula:unit_cost_total"
     for entry_id, purpose in ((a, "First purpose."), (b, "Second purpose.")):
         files[entry_id]["hints"].update(purpose=purpose, not_to_be_confused_with=[
             {"id": a if entry_id == b else b, "difference": "another figure"}])
@@ -293,6 +378,22 @@ def test_hint_text_and_enrich_use_only_an_approved_file_that_agrees(shipped, cap
     files[a]["facts"] = shipped[a]["facts"]
     declared = [dict(plain[0], when_to_use="Declared by the registry.")]
     assert cf.enrich(declared, files)[0]["when_to_use"] == "Declared by the registry."
+
+
+@pytest.mark.parametrize("purpose", ["First purpose.", "Another purpose."])
+def test_enriched_reads_the_loaded_files_and_keeps_entries_when_they_fail(shipped, capabilities,
+                                                                         monkeypatch, purpose):
+    entry_id = "formula:excavation_volume"
+    plain = [dict(e, when_to_use="", when_not="") for _k, e in capabilities if e["id"] == entry_id]
+    files = json.loads(json.dumps(shipped))
+    files[entry_id]["hints"].update(approved=True, purpose=purpose)
+    monkeypatch.setattr(cf, "load", lambda root=None: files)
+    assert cf.enriched(plain)[0]["when_to_use"] == purpose
+
+    def broken(root=None):
+        raise cf.CatalogueFileError(f"no catalogue files directory: {purpose}")
+    monkeypatch.setattr(cf, "load", broken)
+    assert cf.enriched(plain) is plain
 
 
 # -- chains built from the files, run through the working sheet --------------------------
