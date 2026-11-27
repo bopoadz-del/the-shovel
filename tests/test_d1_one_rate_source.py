@@ -125,6 +125,30 @@ def test_the_most_specific_keyword_wins(monkeypatch, desc, want):
     assert want in got["source"]
 
 
+@pytest.mark.parametrize("desc,want", [
+    ("Gizmo widget fixing", "first row"),
+    ("Widget gizmo laying", "first row"),
+])
+def test_equally_specific_keywords_go_to_the_earlier_row(monkeypatch, desc, want):
+    """Two rows match with the same number of keyword words: the earlier row
+    keeps the activity (a later tie never displaces it)."""
+    monkeypatch.setattr(productivity_norms, "_TEMPLATE_RATES", [
+        _row("first row", ["gizmo"], 11.0),
+        _row("second row", ["widget"], 22.0),
+    ])
+    got = norm_rate_for(desc, "m2")
+    assert want in got["source"]
+    assert got["rate"].startswith("11 ")
+
+
+@pytest.mark.parametrize("partial", ["widget", "laying", "widget lay"])
+def test_the_calculator_needs_the_whole_work_item_not_part_of_it(monkeypatch, partial):
+    monkeypatch.setattr(productivity_norms, "_TEMPLATE_RATES",
+                        [_row("widget laying", ["widget laying"], 40.0)])
+    assert productivity_norms.benchmark_row(partial) is None
+    assert productivity_norms.benchmark_row("Widget-Laying") is not None
+
+
 @pytest.mark.parametrize("desc", ["Surrender of keys", "Widgetry inspection"])
 def test_keyword_words_match_only_whole_words(monkeypatch, desc):
     monkeypatch.setattr(productivity_norms, "_TEMPLATE_RATES", [
