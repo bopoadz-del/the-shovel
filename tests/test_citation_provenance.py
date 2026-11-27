@@ -587,6 +587,14 @@ def test_a_quantity_is_compared_at_the_givens_own_scale_with_its_sign(message, n
     (7.25, "m", [], [], [[(7.25, None)]], False),           # a digit inside a unit gives nothing
     (7.25, "", [(7.25, "m")], [], [], True),                # no unit on the given: the number check
     (-7.25, "", [(7.25, "m")], [], [], False),
+    (67.0, "currency", [(67.0, "SAR/m3")], [], [], True),   # a price per something is that number of money
+    (67.0, "SAR", [], [], [[(67.0, "currency/t")]], True),
+    (67.0, "currency", [(67.0, "SAR")], [], [], True),
+    (67.0, "currency", [(67.0, "m")], [], [], False),       # a length is not money
+    (67.0, "currency", [(67.0, "m3/day")], [], [], False),  # nor is a rate of anything else
+    (68.0, "currency", [(67.0, "SAR/m3")], [], [], False),
+    (67.0, "m3", [(67.0, "SAR/m3")], [], [], False),        # a price is not the thing it is per
+    (67.0, "currency/m3", [(67.0, "SAR")], [], [], False),  # an amount is not a price per m3
 ])
 def test_quantity_given_over_users_tools_and_passages(number, unit, users, tools, passages, expected):
     from app.agents.citation_provenance import _quantity_given
@@ -679,10 +687,11 @@ def test_workflow_answers_are_read_from_tool_runs_only(answer):
 
 # --- a turn that carries a working sheet: no pairwise "working" ----------------
 
-def _sheet_step_turn(user, givens, inputs, extra=None):
-    """The messages of a turn in which one arithmetic step ran on a working
-    sheet, as the catalogue path leaves them: the user's message, the
-    model's run_step call, and the tool's result carrying the sheet."""
+def _sheet_step_turn(user, givens, inputs, extra=None, entry="formula:arithmetic_step", **step):
+    """The messages of a turn in which one step (an arithmetic step unless
+    ``entry`` names another formula) ran on a working sheet, as the
+    catalogue path leaves them: the user's message, the model's run_step
+    call, and the tool's result carrying the sheet."""
     import json
 
     from app.agents.citation_provenance import given_check
@@ -690,7 +699,7 @@ def _sheet_step_turn(user, givens, inputs, extra=None):
 
     messages = [{"role": "user", "content": user}]
     work, problems = ws.apply_update(ws.new_sheet("t1", user), {
-        "givens": givens, "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}]})
+        "givens": givens, "plan": [{"id": "s1", "entry": entry, "inputs": inputs, **step}]})
     assert problems == []
     work = ws.run_step(ws.mark_given(work, given_check(messages)), "s1", "c1")
     payload = {"ok": True, "step": work["steps"][0], "sheet": work}
@@ -797,3 +806,171 @@ def test_pairwise_working_is_allowed_only_on_a_turn_without_a_working_sheet(leve
     out, entries = figure_provenance(answer, None, on_sheet, tool_passages=True)
     assert worked not in out and f"{level + rise} m" in out
     assert [e["figure"] for e in entries] == [f"{level + rise} m"]
+
+
+# --- a step's result is credited only to a figure whose unit agrees with it ---
+
+@pytest.mark.parametrize("tail,unit", [
+    (" m long, 3 m wide", "m"), ("mm bars", "mm"), (" kN/m2.", "kN/m2"), (" working days of float", "working days"),
+    (" kg per m3", "kg per m3"),                   # a rate: "per" is no unit of its own
+    (" m in depth", "m"), (" m in", "m"),          # two units side by side are not one: not minutes
+    (" m. In all", "m"), (" mm in total", "mm"),
+    (" long", ""), (" per m3", ""), (", then 4", ""), ("", ""), (None, ""),
+])
+def test_unit_written_after_reads_the_unit_that_follows_a_figure(tail, unit):
+    from app.agents.citation_provenance import _unit_written_after
+
+    assert _unit_written_after(tail) == unit
+
+
+@pytest.mark.parametrize("message,number,unit,expected", [
+    ("The trench is 12 m in length and 2 m in depth.", 12.0, "m", "user"),
+    ("The trench is 12 m in length and 2 m in depth.", 2000.0, "mm", "user"),
+    ("The trench is 12 m in length and 2 m in depth.", 12.0, "min", ""),     # nobody gave minutes
+    ("The pour took 12 min in all.", 12.0, "min", "user"),
+    ("The pour took 12 min in all.", 12.0, "m", ""),
+])
+def test_given_check_reads_a_unit_followed_by_a_word_that_is_also_a_unit(message, number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number, unit) == expected
+
+
+@pytest.mark.parametrize("text,number,unit", [
+    ("The new level is 207 m.", 207.0, "m"),
+    ("The area is 48 m*m.", 48.0, "m*m"),                       # the whole token, not the "m" the pattern knows
+    ("A density of 5 kN/m3 of fill.", 5.0, "kN/m3"),
+    ("That is **120 m³** of spoil.", 120.0, "m³"),    # markdown marks are not part of the unit
+    ("It is 12 m, then more.", 12.0, "m"),                 # a no-break space before the unit
+    ("It is 33 m—that is all.", 33.0, "m"),
+    ("A waste of 25%.", 25.0, "%"),
+    ("An output of 3 m3/day.", 3.0, "m3/day"),
+    ("A 40 m-long trench.", 40.0, "m-long"),
+    ("It costs $8,040 in total.", 8040.0, "currency"),          # money: the currency stands before the figure
+    ("It costs AED 450/m2 laid.", 450.0, "currency/m2"),
+    ("It costs AED 450 per m2 laid.", 450.0, "currency/m2"),
+    ("It costs AED 450 per square metre.", 450.0, "currency"),  # per what is in words the converter cannot read
+])
+def test_unit_written_with_reads_the_unit_a_figure_is_written_with(text, number, unit):
+    from app.agents.citation_provenance import _figure_mentions, _unit_written_with
+
+    mention = next(m for m, value in _figure_mentions(text) if value == number)
+    assert _unit_written_with(text, mention) == unit
+
+
+@pytest.mark.parametrize("value,written,size,unit,pure,expected", [
+    (207.0, "m", 207.0, "m", False, True),
+    (0.207, "km", 207.0, "m", False, True),                 # the same quantity at another scale
+    (20700.0, "cm", 207.0, "m", False, True),
+    (72000.0, "L", 72.0, "m3", False, True),
+    (207.0, "mm", 207.0, "m", False, False),                # the same number in another unit
+    (0.207, "m", 207.0, "m", False, False),                 # the same unit, another number
+    (207.0, "kg", 207.0, "m", False, False),                # another kind
+    (207.0, "m2", 207.0, "m", False, False),
+    (207.0, "", 207.0, "m", False, False),                  # no unit written for a result in m
+    (12.0, "tons", 12.0, "t", False, False),                # a unit the converter does not know
+    (207.0, "m", 207.0, "-", True, False),                  # a pure number given a unit
+    (207.0, "currency", 207.0, "-", True, False),
+    (207.0, "", 207.0, "-", True, True),                    # ... and written with none
+    (208.0, "", 207.0, "-", True, False),
+    (8.0, "days", 8.0, "-", False, True),                   # no unit declared for the output: the number alone
+    (8000.0, "mm", 8.0, "-", False, True),
+    (9.0, "days", 8.0, "-", False, False),
+    (48.0, "m2", 48.0, "m*m", False, True),                 # a unit the converter cannot compare: the number alone
+    (48.0, "m", 48.0, "m*m", False, True),
+    (49.0, "m2", 48.0, "m*m", False, False),
+    (8040.0, "currency", 8040.0, "currency", False, True),
+    (8040.0, "m", 8040.0, "currency", False, False),
+    (450.0, "currency/m2", 450.0, "currency/m2", False, True),
+    (450.0, "currency", 450.0, "currency/m2", False, True),     # money by its currency alone states a money rate
+    (451.0, "currency", 450.0, "currency/m2", False, False),
+    (450.0, "currency/t", 450.0, "currency/m2", False, False),  # per something else
+    (450.0, "currency/m2", 450.0, "currency", False, False),
+])
+def test_states_result_holds_a_figure_to_the_unit_of_the_step_result(value, written, size, unit, pure, expected):
+    from app.agents.citation_provenance import _states_result
+
+    assert _states_result(value, written, size, unit, pure) is expected
+
+
+_RISE_IN_MM = "The level is {level} m. Raise it by {rise} mm: what is the new level?"
+
+
+@pytest.mark.parametrize("level,rise,said", [
+    (-43, 250, "207 m"), (-43, 250, "207 mm"), (12, 500, "512 m"), (12, 500, "512 kg"), (12, 500, "AED 512"),
+])
+def test_on_a_sheet_turn_a_pure_number_result_written_with_a_unit_is_withheld(level, rise, said):
+    """Both givens written as pure numbers: each number is the user's, the
+    step adds them, and the result is a pure number. No unit is its unit."""
+    from app.agents.citation_provenance import figure_provenance
+
+    messages, work = _sheet_step_turn(
+        _RISE_IN_MM.format(level=level, rise=rise),
+        [{"id": "g1", "value": level, "unit": "-"}, {"id": "g2", "value": rise, "unit": "-"}],
+        {"operator": "add", "a": "g1", "b": "g2"})
+    assert [g.get("checked") for g in work["givens"]] == ["user", "user"]
+    assert work["steps"][0]["result"] == {"name": "result", "value": float(level + rise), "unit": "-"}
+    out, entries = figure_provenance(f"The new level is {said}.", None, messages, tool_passages=True)
+    assert said not in out
+    assert entries == []
+    _same, record = figure_provenance(f"The new level is {said}.", None, messages, enforce=False,
+                                      tool_passages=True)
+    assert [e["source"] for e in record] == [None]
+
+
+@pytest.mark.parametrize("level,rise,said,credited", [
+    (200, 7, "207 m", True), (200, 7, "0.207 km", True), (200, 7, "20700 cm", True),
+    (200, 7, "207 mm", False), (200, 7, "0.207 m", False), (200, 7, "207 kg", False), (200, 7, "207 m2", False),
+    (-43, 10, "-33 m", True), (-43, 10, "-0.033 km", True), (-43, 10, "-33 mm", False), (-43, 10, "-33 km", False),
+])
+def test_on_a_sheet_turn_a_step_result_is_credited_only_in_a_unit_that_agrees(level, rise, said, credited):
+    from app.agents.citation_provenance import figure_provenance
+
+    answer = f"The new level is {said}."
+    out, entries = figure_provenance(answer, None, _level_turn(level, rise), tool_passages=True)
+    assert (out == answer) is credited
+    assert (said in out) is credited
+    assert [(e["source"], e.get("step"), e.get("unit")) for e in entries] == (
+        [("calculator", "s1", "m")] if credited else [])
+
+
+@pytest.mark.parametrize("late,early,said", [(20, 12, "8 days"), (31, 30.5, "0.5 days"), (20, 12, "8 m")])
+def test_on_a_sheet_turn_an_output_with_no_declared_unit_is_held_to_its_number_alone(late, early, said):
+    """The registry declares no unit for this output, and the formula does
+    not return one: nothing says what unit its figure carries, so the unit
+    the reply writes is not held (the last case is what that leaves open)."""
+    from app.agents.citation_provenance import figure_provenance
+
+    messages, work = _sheet_step_turn(
+        f"Early start is {early}, early finish {early + 3}, late start {late} and late finish {late + 3}. "
+        "What is the total float?",
+        [{"id": "g1", "value": early, "unit": "-"}, {"id": "g2", "value": early + 3, "unit": "-"},
+         {"id": "g3", "value": late, "unit": "-"}, {"id": "g4", "value": late + 3, "unit": "-"}],
+        {"early_start": "g1", "early_finish": "g2", "late_start": "g3", "late_finish": "g4"},
+        entry="formula:critical_path_float", output="total_float")
+    assert work["steps"][0]["result"] == {"name": "total_float", "value": float(late - early), "unit": "-"}
+    answer = f"The total float is {said}."
+    out, entries = figure_provenance(answer, None, messages, tool_passages=True)
+    assert out == answer
+    assert [(e["source"], e.get("step")) for e in entries] == [("calculator", "s1")]
+
+
+@pytest.mark.parametrize("udl,span,said,credited", [
+    (20, 6, "90 kN.m", True), (20, 6, "90 kN", True), (20, 6, "91 kN.m", False), (8, 5, "25 kN.m", True),
+])
+def test_on_a_sheet_turn_a_unit_the_converter_cannot_compare_is_held_to_its_number_alone(udl, span, said,
+                                                                                       credited):
+    """A moment in kN.m: the converter has no kind for it, so the unit the
+    reply writes cannot be compared and the number check stands alone (the
+    second case is what that leaves open)."""
+    from app.agents.citation_provenance import figure_provenance
+
+    messages, work = _sheet_step_turn(
+        f"A simply supported beam carries {udl} kN/m over a span of {span} m. What is the maximum moment?",
+        [{"id": "g1", "value": udl, "unit": "kN/m"}, {"id": "g2", "value": span, "unit": "m"}],
+        {"udl_w_kn_m": "g1", "span_m": "g2"}, entry="formula:beam_moment_simple")
+    assert work["steps"][0]["result"]["unit"] == "kN.m"
+    answer = f"The maximum moment is {said}."
+    out, entries = figure_provenance(answer, None, messages, tool_passages=True)
+    assert (said in out) is credited
+    assert [e.get("step") for e in entries] == (["s1"] if credited else [])

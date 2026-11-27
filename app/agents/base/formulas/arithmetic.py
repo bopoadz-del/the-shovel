@@ -54,7 +54,10 @@ def _same_unit(a: str, b: str) -> bool:
 
 
 def _compose(a: str, b: str, operator: str) -> str:
-    """The unit of a product or quotient of a value in ``a`` and one in ``b``."""
+    """The unit of a product or quotient of a value in ``a`` and one in ``b``.
+    A divisor that is itself a product or a ratio is written in brackets:
+    m2 divided by m2/day is "m2/(m2/day)", never "m2/m2/day", which reads
+    as (m2/m2)/day -- another quantity."""
     if operator == "multiply":
         if a == "-":
             return b
@@ -63,7 +66,8 @@ def _compose(a: str, b: str, operator: str) -> str:
         return a
     if _same_unit(a, b):
         return "-"
-    return f"1/{b}" if a == "-" else f"{a}/{b}"
+    divisor = f"({b})" if "/" in b or "*" in b else b
+    return f"1/{divisor}" if a == "-" else f"{a}/{divisor}"
 
 
 @formula(

@@ -1408,3 +1408,282 @@ def test_a_bare_number_of_the_plan_in_the_unit_the_user_gave_it_in_is_credited(m
     assert total in shown
     assert [f.get("step") for f in row["figures"]] == ["s1"]
 
+
+# --- the unit a figure is written with, and a bare number fed to an input that declares a unit ---
+
+def _sheet_turn(monkeypatch, conv, ask, update, said, steps=("s1",), **who):
+    """The model writes ``update``, runs ``steps`` and replies ``said``."""
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", update, "c0")]},
+        *[{"content": "", "tool_calls": [_call("run_step", {"step": s}, f"c-{s}")]} for s in steps],
+        {"content": said},
+    ])
+    shown = _text(_run(user_message=ask, conversation_id=conv, sheet_mode=True, **who))
+    return shown, trace_store.records(_today(), conv)[-1]
+
+
+def _pure_sum(level, rise):
+    """Both givens written as pure numbers ("-"), added in one step."""
+    return {"givens": [{"id": "g1", "value": level, "unit": "-"}, {"id": "g2", "value": rise, "unit": "-"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}
+
+
+@pytest.mark.parametrize("level,rise,rise_unit,wrong", [
+    (-43, 250, "mm", "207 m"), (12, 500, "mm", "512 m"), (40, 3, "km", "43 m"),
+    (-43, 250, "mm", "207 mm"), (12, 500, "mm", "512 kg"), (12, 500, "mm", "AED 512"),
+])
+def test_a_pure_number_result_is_not_credited_to_a_figure_written_with_a_unit(monkeypatch, level, rise, rise_unit,
+                                                                              wrong):
+    """The user gave a level in m and a rise in mm. The model writes both
+    as pure numbers, so each passes the number check and the step adds
+    them: 207, a pure number. The reply gives it a unit code never wrote."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"pure-{level}-{wrong}",
+        f"The level is {level} m. Raise it by {rise} {rise_unit}: what is the new level?",
+        _pure_sum(level, rise), f"The new level is {wrong}.")
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["user", "user"]   # each number was given
+    assert row["sheet"]["steps"][0]["result"] == {"name": "result", "value": float(level + rise), "unit": "-"}
+    assert wrong not in shown
+    assert row["figures"] == []
+
+
+@pytest.mark.parametrize("level,rise,said", [(-43, 250, "207"), (12, 500, "512")])
+def test_a_pure_number_result_written_with_no_unit_is_not_a_gated_figure(monkeypatch, level, rise, said):
+    """What the unit check leaves: a number written bare in the reply is not
+    a figure for the exit check (no unit, no currency), so it is shown and
+    has no entry. Stated in the PR body."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"pure-bare-{level}",
+        f"The level is {level} m. Raise it by {rise} mm: what is the new level?",
+        _pure_sum(level, rise), f"The sum of the two numbers is {said}.")
+    assert shown.strip() == f"The sum of the two numbers is {said}."
+    assert row["figures"] == []
+
+
+@pytest.mark.parametrize("level,rise,said,credited", [
+    (200, 7, "207 m", True), (200, 7, "0.207 km", True), (200, 7, "20700 cm", True), (200, 7, "207,000 mm", True),
+    (200, 7, "207 mm", False), (200, 7, "207 km", False), (200, 7, "0.207 m", False), (200, 7, "207 m2", False),
+    (200, 7, "207 kg", False), (200, 7, "207 days", False), (200, 7, "AED 207", False),
+    (-43, 10, "-33 m", True), (-43, 10, "-0.033 km", True), (-43, 10, "-33 mm", False), (-43, 10, "-33 m3", False),
+])
+def test_a_step_result_is_credited_only_to_a_figure_whose_unit_agrees_with_it(monkeypatch, level, rise, said,
+                                                                              credited):
+    """Both givens are the user's, in m, and the step's result is in m. The
+    reply states that number: it is the step's figure in a unit of the same
+    kind at the right scale, and in no other unit."""
+    _level_script(monkeypatch, level, rise, f"The new level is {said}.")
+    conv = f"unit-said-{level}-{said}"
+    shown = _text(_run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert row["sheet"]["steps"][0]["result"] == {"name": "result", "value": float(level + rise), "unit": "m"}
+    assert (said in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("said,credited", [
+    ("72 m3", True), ("72 m³", True), ("72,000 L", True), ("**72 m³**", True),
+    ("72 m2", False), ("72 m", False), ("0.072 m3", False), ("72 kg", False),
+])
+def test_a_formula_result_is_credited_only_to_a_figure_in_a_unit_of_its_declared_kind(monkeypatch, said, credited):
+    shown, row = _volume_turn(monkeypatch, f"vol-said-{said}", {
+        "givens": [{"id": "g1", "value": 12, "unit": "m"}, {"id": "g2", "value": 3, "unit": "m"},
+                   {"id": "g3", "value": 2, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                  "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}}]},
+        f"The excavation is {said}.")
+    assert row["sheet"]["steps"][0]["result"] == {"name": "bank_volume_m3", "value": 72.0, "unit": "m3"}
+    assert (said.strip("*") in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("length,unit,volume", [(12, "mm", 72), (250, "mm", 1500), (7, "km", 42), (12, "kg", 72)])
+def test_a_bare_plan_number_fed_to_an_input_that_declares_a_unit_is_that_quantity(monkeypatch, length, unit,
+                                                                                  volume):
+    """The user wrote the length in mm. The plan writes the number bare for
+    an input the formula declares in m, so the step runs it as metres.
+    Nobody gave that quantity."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"bare-lit-{length}-{unit}",
+        f"A trench is {length} {unit} long, 3 m wide and 2 m deep. What volume is excavated?",
+        {"plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                   "inputs": {"length_m": length, "width_m": 3, "depth_m": 2}}]},
+        f"The excavation is {volume} m3.")
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(volume)]   # the step did run
+    assert f"{volume} m3" not in shown
+    assert row["figures"] == []
+
+
+@pytest.mark.parametrize("length_words", ["12 m long", "12 long", "12,000 mm long", "0.012 km long",
+                                          "12 m in length"])
+def test_a_bare_plan_number_in_the_declared_unit_the_user_gave_is_credited(monkeypatch, length_words):
+    """The same plan; the user wrote that length in metres, in another unit
+    of length at the right scale, or as a bare number."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"bare-lit-ok-{length_words}",
+        f"A trench is {length_words}, 3 m wide and 2 m deep. What volume is excavated?",
+        {"plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                   "inputs": {"length_m": 12, "width_m": 3, "depth_m": 2}}]},
+        "The excavation is 72 m3.")
+    assert "72 m3" in shown and "incomplete" not in shown
+    assert [f.get("step") for f in row["figures"]] == ["s1"]
+
+
+@pytest.mark.parametrize("length,unit,volume", [(12, "mm", 72), (250, "mm", 1500), (7, "km", 42)])
+def test_a_given_with_no_unit_fed_to_an_input_that_declares_a_unit_is_that_quantity(monkeypatch, length, unit,
+                                                                                    volume):
+    """The same through a given the model wrote as a pure number: the number
+    is the user's, so the given is marked, but as metres nobody gave it."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"bare-giv-{length}-{unit}",
+        f"A trench is {length} {unit} long, 3 m wide and 2 m deep. What volume is excavated?",
+        {"givens": [{"id": "g1", "value": length, "unit": "-"}],
+         "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                   "inputs": {"length_m": "g1", "width_m": "3 m", "depth_m": "2 m"}}]},
+        f"The excavation is {volume} m3.")
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(volume)]   # the step did run
+    given = row["sheet"]["givens"][0]
+    assert given.get("checked") == "user" and not given.get("checked_as")
+    assert f"{volume} m3" not in shown
+    assert row["figures"] == []
+
+
+@pytest.mark.parametrize("length_words", ["12 m long", "12 long", "12,000 mm long"])
+def test_a_given_with_no_unit_in_the_declared_unit_the_user_gave_is_credited(monkeypatch, length_words):
+    shown, row = _sheet_turn(
+        monkeypatch, f"bare-giv-ok-{length_words}",
+        f"A trench is {length_words}, 3 m wide and 2 m deep. What volume is excavated?",
+        {"givens": [{"id": "g1", "value": 12, "unit": "-"}],
+         "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                   "inputs": {"length_m": "g1", "width_m": "3 m", "depth_m": "2 m"}}]},
+        "The excavation is 72 m3.")
+    assert row["sheet"]["givens"][0].get("checked_as") == ["m"]
+    assert "72 m3" in shown and "incomplete" not in shown
+    assert [f.get("step") for f in row["figures"]] == ["s1"]
+
+
+@pytest.mark.parametrize("unit,held", [("m", True), ("mm", False)])
+def test_a_given_with_no_unit_keeps_its_quantity_mark_into_the_next_turn(monkeypatch, unit, held):
+    """Turn 1 checks the pure 12 as metres against the user's own words.
+    Turn 2 arrives with no history and changes only the depth: the mark
+    made in turn 1 still stands (or is still missing)."""
+    conv = f"carry-bare-{unit}"
+    who = {"user_id": "cb-u", "project_id": _owned_conversation(conv, "cb-u")}
+    first = {"givens": [{"id": "g1", "value": 12, "unit": "-"}, {"id": "g2", "value": 3, "unit": "m"},
+                        {"id": "g3", "value": 2, "unit": "m"}],
+             "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                       "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}}]}
+    shown, row = _sheet_turn(monkeypatch, conv,
+                             f"A trench is 12 {unit} long, 3 m wide and 2 m deep. What volume is excavated?",
+                             first, "The excavation is 72 m3.", **who)
+    assert ("72 m3" in shown) is held
+    trace_store.forget_held()   # read back from the file, as after a restart
+    second = {"givens": [{"id": "g4", "value": 4, "unit": "m"}],
+              "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                        "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g4"}}]}
+    shown, row = _sheet_turn(monkeypatch, conv, "Make it 4 m deep. What volume now?", second,
+                             "The excavation is 144 m3.", history=[], **who)
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [144.0]
+    assert row["sheet"]["givens"][0].get("checked_as") == (["m"] if held else None)
+    assert ("144 m3" in shown) is held
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if held else [])
+
+
+@pytest.mark.parametrize("rate_words,credited", [
+    ("67 SAR/m3", True), ("67 SAR per m3", True), ("SAR 67 per m3", True), ("67 per m3", True), ("67 SAR", True),
+    ("67 mm thick, no rate given", False), ("67 m3/day", False),
+])
+def test_a_bare_number_fed_to_a_price_input_is_money_and_a_price_per_something_backs_it(monkeypatch, rate_words,
+                                                                                      credited):
+    """The registry declares a price input in currency alone. A pure 67 fed
+    to it is 67 of money: the user's price per m3 backs it, in any way of
+    writing it; the user's 67 mm, or 67 m3 a day, does not."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"price-{rate_words}", f"Excavation of 120 m3 at {rate_words}: what is the cost?",
+        {"givens": [{"id": "g1", "value": 120, "unit": "m3"}, {"id": "g2", "value": 67, "unit": "-"}],
+         "plan": [{"id": "s1", "entry": "formula:unit_cost_total", "inputs": {"quantity": "g1", "unit_rate": "g2"}}]},
+        "The cost is SAR 8,040.")
+    assert row["sheet"]["steps"][0]["result"] == {"name": "total_cost", "value": 8040.0, "unit": "currency"}
+    assert row["sheet"]["givens"][1].get("checked_as") == (["currency"] if credited else None)
+    assert ("SAR 8,040" in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("area,rate,said,credited", [
+    (150, 50, "3 days", True),          # 150 m2 over 50 m2/day: the unit is one the converter cannot compare
+    (150, 50, "3 m2", True),            # ... so the number check stands alone (what that leaves open)
+    (150, 50, "4 days", False),
+    (240, 60, "4 days", True),
+])
+def test_a_quotient_by_a_rate_is_not_read_as_another_quantity(monkeypatch, area, rate, said, credited):
+    """m2 divided by m2/day is written "m2/(m2/day)". Written "m2/m2/day"
+    it would read as a quantity per day, and "3 days" would be refused."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"rate-{area}-{said}", f"A crew lays {rate} m2/day. How long does {area} m2 take?",
+        {"givens": [{"id": "g1", "value": area, "unit": "m2"}, {"id": "g2", "value": rate, "unit": "m2/day"}],
+         "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                   "inputs": {"operator": "divide", "a": "g1", "b": "g2"}}]},
+        f"It will take {said}.")
+    assert row["sheet"]["steps"][0]["result"] == {"name": "result", "value": area / rate, "unit": "m2/(m2/day)"}
+    assert (said in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
+def _two_runs(first, second, unit):
+    """Two lengths added in one step, and the sum fed to a volume formula
+    as its length (an input the formula declares in m)."""
+    return {"givens": [{"id": "g1", "value": first, "unit": unit}, {"id": "g2", "value": second, "unit": unit}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
+                     {"id": "s2", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                      "inputs": {"length_m": "s1", "width_m": "3 m", "depth_m": "2 m"}}]}
+
+
+@pytest.mark.parametrize("first,second,unit,volume", [(43, 250, "mm", 1758), (12, 500, "mm", 3072)])
+def test_a_pure_number_step_result_fed_to_an_input_that_declares_a_unit_is_not_credited(monkeypatch, first,
+                                                                                        second, unit, volume):
+    """One more hop: the two lengths are added as pure numbers (293), and
+    the sum is fed to an input the formula declares in m. The volume rests
+    on 293 m, which nobody gave."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"pure-hop-{first}",
+        f"One run is {first} m and the next is {second} {unit}. A trench of their total length is 3 m wide "
+        "and 2 m deep. What volume is excavated?",
+        _two_runs(first, second, "-"), f"The excavation is {volume} m3.", steps=("s1", "s2"))
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(first + second), float(volume)]
+    assert f"{volume} m3" not in shown
+    assert row["figures"] == []
+
+
+@pytest.mark.parametrize("first,second,volume", [(43, 7, 300), (12, 0.5, 75)])
+def test_a_step_result_with_its_unit_fed_to_an_input_that_declares_a_unit_is_credited(monkeypatch, first, second,
+                                                                                      volume):
+    """The control: the two lengths are the user's, in m, so their sum is
+    in m and the volume is credited."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"unit-hop-{first}",
+        f"One run is {first} m and the next is {second} m. A trench of their total length is 3 m wide "
+        "and 2 m deep. What volume is excavated?",
+        _two_runs(first, second, "m"), f"The excavation is {volume} m3.", steps=("s1", "s2"))
+    assert f"{volume} m3" in shown and "incomplete" not in shown
+    assert [f.get("step") for f in row["figures"]] == ["s2"]
+
+
+@pytest.mark.parametrize("ask,numbers,volume", [
+    ("A trench is 12 m in length, 3 m in width and 2 m in depth. What volume is excavated?", (12, 3, 2), 72),
+    ("The pit measures 5 m in length, 4 m in width and 2 m in depth. What volume is excavated?", (5, 4, 2), 40),
+])
+def test_a_unit_followed_by_a_word_that_is_also_a_unit_is_read_alone(monkeypatch, ask, numbers, volume):
+    """"12 m in length" is 12 m: the "in" after it is a word of the
+    sentence, not a second half of the unit (m + in, read as minutes)."""
+    shown, row = _sheet_turn(
+        monkeypatch, f"m-in-{volume}", ask,
+        {"givens": [{"id": f"g{i + 1}", "value": n, "unit": "m"} for i, n in enumerate(numbers)],
+         "plan": [{"id": "s1", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+                   "inputs": {"length_m": "g1", "width_m": "g2", "depth_m": "g3"}}]},
+        f"The excavation is {volume} m3.")
+    assert [g.get("checked") for g in row["sheet"]["givens"]] == ["user", "user", "user"]
+    assert f"{volume} m3" in shown
+    assert [f.get("step") for f in row["figures"]] == ["s1"]
+

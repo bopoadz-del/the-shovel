@@ -212,6 +212,11 @@ def test_render_is_stable(ids):
     ("multiply", 3, 7, "-", "-", 21.0, "-"),
     ("multiply", 6, 5, "-", "kg", 30.0, "kg"),
     ("multiply", 4, 2.5, "-", "m2", 10.0, "m2"),
+    # a divisor that is itself a ratio or a product is bracketed: m2 over m2/day is not (m2/m2)/day
+    ("divide", 150, 50, "m2", "m2/day", 3.0, "m2/(m2/day)"),
+    ("divide", 1, 4, "-", "m/s", 0.25, "1/(m/s)"),
+    ("divide", 90, 3, "kN", "m*m", 30.0, "kN/(m*m)"),
+    ("divide", 2400, 2, "kg/m3", "m", 1200.0, "kg/m3/m"),      # a ratio divided on: read left to right, as written
 ])
 def test_arithmetic(op, a, b, au, bu, value, unit):
     out = arithmetic_step(op, a, b, au, bu)
@@ -679,8 +684,9 @@ def test_written_quantities_reads_each_number_with_the_unit_written_on_it(litera
 
 
 @pytest.mark.parametrize("unit_a,literal,expected", [
-    ("m", "3 m", [(12.0, "m"), (3.0, "m"), (2.0, "")]),
-    ("mm", {"value": 3, "unit": "cm"}, [(12.0, "mm"), (3.0, "cm"), (2.0, "")]),
+    # The bare 2 is fed to an input the formula declares in m: it ran as 2 m, and is listed so.
+    ("m", "3 m", [(12.0, "m"), (3.0, "m"), (2.0, "m")]),
+    ("mm", {"value": 3, "unit": "cm"}, [(12.0, "mm"), (3.0, "cm"), (2.0, "m")]),
 ])
 def test_what_a_step_rests_on_keeps_each_unit_the_model_wrote(unit_a, literal, expected):
     work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
@@ -813,3 +819,217 @@ def test_a_bare_number_of_the_plan_rests_on_the_unit_written_beside_it(b, beside
     work = ws.mark_given(work, lambda number, unit: "user")
     assert ws.rests_quantities(work, "s1") == expected
     assert ws.rests_on(work, "s1") == [number for number, _unit in expected]
+
+
+@pytest.mark.parametrize("a,b,operator,unit", [
+    ("m2", "m2/day", "divide", "m2/(m2/day)"), ("-", "m/s", "divide", "1/(m/s)"), ("kN", "m*m", "divide", "kN/(m*m)"),
+    ("currency", "m2", "divide", "currency/m2"), ("kg/m3", "m", "divide", "kg/m3/m"), ("m3", "M3", "divide", "-"),
+    ("m", "-", "divide", "m"), ("-", "d", "divide", "1/d"),
+    ("m", "m", "multiply", "m*m"), ("-", "kg", "multiply", "kg"), ("m3", "-", "multiply", "m3"),
+    ("m3", "currency/m3", "multiply", "m3*currency/m3"),
+])
+def test_compose_writes_the_unit_of_a_product_or_a_quotient_as_it_is_read(a, b, operator, unit):
+    from app.agents.base.formulas.arithmetic import _compose
+
+    assert _compose(a, b, operator) == unit
+
+
+# --- a number with no unit fed to an input that declares a unit is that quantity ---
+
+@pytest.mark.parametrize("unit,expected", [
+    ("-", True), ("", True), (None, True), (" - ", True), ("  ", True),
+    ("m", False), ("m3", False), ("nr", False), ("currency", False), ("--", False),
+])
+def test_no_unit_is_true_only_for_a_pure_number_as_the_sheet_writes_it(unit, expected):
+    assert ws.no_unit(unit) is expected
+
+
+@pytest.mark.parametrize("entry,name,expected", [
+    ("formula:excavation_volume", "length_m", "m"),
+    ("formula:excavation_volume", "bulking_factor", "fraction"),
+    ("formula:unit_cost_total", "unit_rate", "currency"),
+    ("formula:beam_moment_simple", "udl_w_kn_m", "kN/m"),
+    ("formula:unit_cost_total", "quantity", ""),            # declared "nr": a count carries no dimension
+    ("formula:arithmetic_step", "a", ""),                   # declared a bare number (its unit is beside it)
+    ("formula:arithmetic_step", "operator", ""),            # a text option: "-"
+    ("formula:excavation_volume", "no_such_input", ""),
+    ("formula:no_such_formula", "length_m", ""),
+    ("workflow:excavation_volume", "length_m", ""),         # not a formula entry
+    ("excavation_volume", "length_m", ""), (None, "length_m", ""), ("", "", ""),
+])
+def test_declared_unit_reads_the_unit_the_registry_declares_for_an_input(entry, name, expected):
+    assert ws.declared_unit(entry, name) == expected
+
+
+@pytest.mark.parametrize("entry,output,expected", [
+    ("formula:arithmetic_step", "result", True),            # it returns result_unit beside result
+    ("formula:excavation_volume", "bank_volume_m3", False),
+    ("formula:critical_path_float", "total_float", False),  # declared "-": no unit is declared, none returned
+    ("formula:arithmetic_step", "", False), ("formula:arithmetic_step", "result_unit", False),
+    ("formula:no_such_formula", "result", False), ("workflow:arithmetic_step", "result", False),
+    (None, "result", False),
+])
+def test_returns_unit_is_true_only_for_a_formula_that_returns_its_results_unit(entry, output, expected):
+    assert ws.returns_unit(entry, output) is expected
+
+
+def _trench_plan(length="g1", width="g2", depth="g3", sid="s1"):
+    return {"id": sid, "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+            "inputs": {"length_m": length, "width_m": width, "depth_m": depth}}
+
+
+@pytest.mark.parametrize("units,plan,expected", [
+    (["-", "m", "m"], [_trench_plan()], {"g1": ["m"]}),
+    (["-", "-", "-"], [_trench_plan()], {"g1": ["m"], "g2": ["m"], "g3": ["m"]}),
+    (["-", "m", "m"], [_trench_plan(width="g1", depth="g1")], {"g1": ["m"]}),            # each unit once
+    (["-", "m", "m"], [_trench_plan(), {"id": "s2", "entry": "formula:excavation_volume",
+                                        "inputs": {"length_m": "g2", "width_m": "g2", "depth_m": "g3",
+                                                   "bulking_factor": "g1"}}], {"g1": ["m", "fraction"]}),
+    (["m", "m", "m"], [_trench_plan()], {}),                                             # every given has its unit
+    (["-", "-", "-"], [{"id": "s1", "entry": "formula:arithmetic_step",
+                        "inputs": {"operator": "add", "a": "g1", "b": "g2"}}], {}),    # inputs that declare none
+    (["-", "-", "-"], [{"id": "s1", "entry": "formula:no_such_formula", "inputs": {"length_m": "g1"}}], {}),
+    (["-", "-", "-"], [], {}),
+])
+def test_fed_units_lists_the_declared_units_a_given_with_no_unit_is_fed_to(units, plan, expected):
+    s = _sheet_with([{"id": f"g{i + 1}", "value": 10 + i, "unit": unit} for i, unit in enumerate(units)], plan)
+    assert ws.fed_units(s) == expected
+
+
+@pytest.mark.parametrize("sheet", [{}, {"givens": None, "plan": None}, {"givens": ["g1"], "plan": ["s1", {"id": "s1"}]},
+                                   {"givens": [{"id": "g1", "unit": "-"}],
+                                    "plan": [{"id": "s1", "entry": "formula:excavation_volume", "inputs": "g1"}]}])
+def test_fed_units_of_a_sheet_with_nothing_fed_is_empty(sheet):
+    assert ws.fed_units(sheet) == {}
+
+
+@pytest.mark.parametrize("number,given_as,marks,asked_units", [
+    (12, {"-", "m"}, ("user", ["m"]), ["-", "m"]),        # the user wrote 12 m (or 12 bare)
+    (12, {"-"}, ("user", None), ["-", "m"]),              # the number is the user's; 12 m is not (it was 12 mm)
+    (12, set(), (None, None), ["-", "m"]),                # nobody gave the number at all
+    (250, {"-", "m"}, ("user", ["m"]), ["-", "m"]),
+])
+def test_mark_given_checks_a_given_with_no_unit_as_the_quantity_it_is_fed_as(number, given_as, marks, asked_units):
+    s = _sheet_with([{"id": "g1", "value": number, "unit": "-"}, {"id": "g2", "value": 3, "unit": "m"},
+                     {"id": "g3", "value": 2, "unit": "m"}], [_trench_plan()])
+    asked = []
+
+    def check(value, unit):
+        asked.append((value, unit))
+        return "user" if value != float(number) or unit in given_as else ""
+
+    marked = ws.mark_given(s, check)
+    assert (marked["givens"][0].get("checked"), marked["givens"][0].get("checked_as")) == marks
+    assert [unit for value, unit in asked if value == float(number)] == asked_units
+    # a given with its own unit is checked in that unit only, and gets no second mark
+    assert [(g.get("checked"), g.get("checked_as")) for g in marked["givens"][1:]] == [("user", None), ("user", None)]
+    assert "checked_as" not in s["givens"][0]             # the sheet passed in is not changed
+    # what the step still rests on: the number when nobody gave it, and the quantity it ran as
+    open_ = ([] if marks[0] else [(float(number), "-")]) + ([] if marks[1] else [(float(number), "m")])
+    assert ws.rests_quantities(marked, "s1") == open_
+
+
+@pytest.mark.parametrize("number", [12, 250])
+def test_the_quantity_mark_is_kept_asked_once_and_lost_with_the_given(number):
+    """Mark, keep, re-plan, change, mark again: the mark stays with an
+    unchanged given into the next turn, a unit already held is not asked
+    again, a new declared unit is asked for by itself, and a changed value
+    or unit loses every mark."""
+    s = _sheet_with([{"id": "g1", "value": number, "unit": "-"}, {"id": "g2", "value": 3, "unit": "m"},
+                     {"id": "g3", "value": 2, "unit": "m"}], [_trench_plan()])
+    asked = []
+
+    def check(value, unit):
+        asked.append((value, unit))
+        return "user"
+
+    marked = ws.mark_given(s, check)
+    assert marked["givens"][0]["checked_as"] == ["m"]
+    asked.clear()
+    again = ws.mark_given(marked, check)
+    assert asked == [] and again == marked                                    # nothing new to check
+    same, _ = ws.apply_update(marked, {"givens": [{"id": "g1", "value": number, "unit": "-"}]})
+    assert (same["givens"][0]["checked"], same["givens"][0]["checked_as"]) == ("user", ["m"])
+    carried = ws.new_sheet("t2", "q2", marked)
+    assert carried["givens"][0]["checked_as"] == ["m"]
+    # the model cannot write the mark
+    typed, _ = ws.apply_update(s, {"givens": [{"id": "g1", "value": number, "unit": "-", "checked_as": ["m"]}]})
+    assert "checked_as" not in typed["givens"][0]
+    # the plan now feeds the same given to an input declared in another unit: only that one is asked
+    replanned, problems = ws.apply_update(marked, {"plan": [
+        {"id": "s2", "entry": "formula:excavation_volume", "output": "bank_volume_m3",
+         "inputs": {"length_m": "g2", "width_m": "g2", "depth_m": "g3", "bulking_factor": "g1"}}]})
+    assert problems == []
+    assert ws.rests_quantities(replanned, "s2") == [(float(number), "fraction")]
+    refused = ws.mark_given(replanned, lambda value, unit: "")
+    assert refused["givens"][0]["checked_as"] == ["m"]
+    assert ws.rests_quantities(refused, "s2") == [(float(number), "fraction")]
+    assert ws.mark_given(replanned, check)["givens"][0]["checked_as"] == ["m", "fraction"]
+    assert asked == [(float(number), "fraction")]
+    # a new value, or a unit written on it, is a new given: no mark is left
+    for change in ({"value": number + 1, "unit": "-"}, {"value": number, "unit": "mm"}):
+        changed, _ = ws.apply_update(marked, {"givens": [{"id": "g1", **change}]})
+        assert "checked" not in changed["givens"][0] and "checked_as" not in changed["givens"][0]
+    back, _ = ws.apply_update(changed, {"givens": [{"id": "g1", "value": number, "unit": "-"}]})
+    assert "checked_as" not in back["givens"][0]                             # written again: checked again
+    assert ws.rests_quantities(back, "s1") == [(float(number), "-"), (float(number), "m")]
+
+
+@pytest.mark.parametrize("length,expected", [
+    (12, [(12.0, "m")]), ("12", [(12.0, "m")]), ({"value": 12}, [(12.0, "m")]),
+    ("12 mm", [(12.0, "mm")]), ({"value": 12, "unit": "km"}, [(12.0, "km")]),      # a unit written on it stands
+    ([12, "5 mm"], [(12.0, "m"), (5.0, "mm")]),
+])
+def test_a_bare_number_of_the_plan_rests_on_the_unit_its_input_declares(length, expected):
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "plan": [_trench_plan(length=length, width="3 m", depth="2 m")]})
+    assert problems == []
+    assert ws.rests_quantities(work, "s1") == expected + [(3.0, "m"), (2.0, "m")]
+
+
+@pytest.mark.parametrize("a,b", [(43, 250), (12, 0.5)])
+def test_a_bare_number_fed_to_an_input_that_declares_no_unit_keeps_the_number_check_alone(a, b):
+    """arithmetic_step's values declare no unit (the unit is written beside
+    them), and a count carries no dimension: a bare number there is listed
+    with no unit, as before."""
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": a, "unit": "-"}],
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": b}},
+                 {"id": "s2", "entry": "formula:unit_cost_total", "inputs": {"quantity": "g1", "unit_rate": "s1"}}]})
+    assert problems == []
+    assert ws.rests_quantities(work, "s1") == [(float(a), "-"), (float(b), "")]
+    assert ws.fed_units(work) == {}
+    marked = ws.mark_given(work, lambda number, unit: "user")
+    assert "checked_as" not in marked["givens"][0]
+    assert ws.rests_quantities(marked, "s1") == [(float(b), "")]
+
+
+@pytest.mark.parametrize("first,second,unit,extra", [
+    (43, 250, "-", [(293.0, "m")]),      # a pure-number sum fed to an input in m: 293 m, which nobody gave
+    (12, 500, "-", [(512.0, "m")]),
+    (43, 7, "m", []),                    # the sum carries its unit: nothing more to check
+])
+def test_a_pure_number_result_fed_to_an_input_that_declares_a_unit_is_listed_as_that_quantity(first, second, unit,
+                                                                                            extra):
+    s = _sheet_with([{"id": "g1", "value": first, "unit": unit}, {"id": "g2", "value": second, "unit": unit}],
+                    [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
+                     _trench_plan(length="s1", width="3 m", depth="2 m", sid="s2")])
+    s = ws.mark_given(s, lambda number, unit: "user")                        # each number was given
+    assert ws.rests_quantities(s, "s2") == [(3.0, "m"), (2.0, "m")]          # s1 has not run: no result yet
+    s = ws.run_step(s, "s1", "c1")
+    assert ws.rests_quantities(s, "s2") == extra + [(3.0, "m"), (2.0, "m")]
+    assert ws.rests_quantities(s, "s1") == []
+
+
+@pytest.mark.parametrize("output,value", [("bulking_factor", 0.25), ("bank_volume_m3", 72.0)])
+def test_a_result_whose_formula_does_not_return_its_unit_is_not_listed_as_a_quantity(output, value):
+    """An output the registry declares no unit for ("-") is not a pure
+    number by code's arithmetic: fed on to an input in m, it adds nothing to
+    check beyond what it rests on itself."""
+    s = _sheet_with([{"id": "g1", "value": 12, "unit": "m"}, {"id": "g2", "value": 3, "unit": "m"},
+                     {"id": "g3", "value": 2, "unit": "m"}],
+                    [dict(_trench_plan(), output=output), _trench_plan(length="s1", sid="s2")])
+    s = ws.mark_given(ws.run_step(s, "s1", "c1"), lambda number, unit: "user")
+    assert s["steps"][0]["result"]["value"] == value
+    assert ws.rests_quantities(s, "s2") == []

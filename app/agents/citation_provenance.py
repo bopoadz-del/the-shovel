@@ -1772,11 +1772,14 @@ def figure_provenance(
                            for n, unit in rests):
                         # The answer's figures are matched on size, so a
                         # result is pooled by its size and credited only to
-                        # a figure written with the same sign.
+                        # a figure written with the same sign, in a unit
+                        # that agrees with the result's (_states_result).
                         calc_entries.append(({abs(row["value"])}, {
                             "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
                             "step": row["step"], "unit": row["unit"],
-                            _RESULT_SIGN: row["value"] < 0}))
+                            _RESULT_SIGN: row["value"] < 0,
+                            _RESULT_PURE: (working_sheet.no_unit(row["unit"])
+                                           and working_sheet.returns_unit(row["entry"], row["name"]))}))
         calc_pool: set[float] = set()
         for nums, _meta in calc_entries:
             calc_pool |= nums
@@ -1785,8 +1788,9 @@ def figure_provenance(
         # carries a working sheet has none: there every arithmetic step is a
         # step code ran, so a figure is a tool's result, a passage's figure,
         # the user's own, or a step's result written with the sign code
-        # wrote. A figure that is none of these is the model's own -- a step
-        # result with its sign turned, or the result of a step that ran on a
+        # wrote and in a unit that agrees with the result's. A figure that is
+        # none of these is the model's own -- a step result with its sign
+        # turned or in another unit, or the result of a step that ran on a
         # quantity nobody gave -- and sizes worked pairwise would let exactly
         # those back in (43 and 10 make 33 and 53 whatever the signs were).
         working = _working(_rescaled(calc_pool | user_vals)) if calc_entries and not sheets else set()
@@ -1808,10 +1812,17 @@ def figure_provenance(
             # value matches the user's numbers AND nothing else produced it. A
             # figure the user never typed can therefore never read user_input.
             for nums, meta in calc_entries:
-                if _match(value, _rescaled(nums)):
-                    if _RESULT_SIGN in meta and meta[_RESULT_SIGN] != _written_negative(text, m):
-                        continue  # a step's result, stated with the other sign
-                    entry = {"figure": fig, **{k: v for k, v in meta.items() if k != _RESULT_SIGN}}
+                if _RESULT_SIGN in meta:
+                    # A sheet step's result: the figure states it only with
+                    # the sign code wrote and in a unit that agrees with the
+                    # result's own. Stated otherwise it is not the step's.
+                    stated = (meta[_RESULT_SIGN] == _written_negative(text, m)
+                              and _states_result(value, _unit_written_with(text, m), max(nums),
+                                                 meta["unit"], meta[_RESULT_PURE]))
+                else:
+                    stated = _match(value, _rescaled(nums))
+                if stated:
+                    entry = {"figure": fig, **{k: v for k, v in meta.items() if k not in _RESULT_MARKS}}
                     break
             if entry is None:
                 for rec in attrib_pool:
@@ -1890,6 +1901,60 @@ def _given_pools(ev: Any, produced: Iterable[Iterable[float]]) -> tuple[set[floa
 
 #: On a sheet step's entry: whether its result is negative (not shown).
 _RESULT_SIGN = "_negative"
+#: On a sheet step's entry: its result is a pure number by code's own
+#: arithmetic -- the unit is "-" and the formula returned it (not shown).
+_RESULT_PURE = "_pure"
+_RESULT_MARKS = (_RESULT_SIGN, _RESULT_PURE)
+
+#: The converter's name for the kind of every currency ("AED", "currency").
+_MONEY = "currency"
+#: What money is per, written straight after its figure: "/m2", "per m2".
+_PER_AFTER_MONEY = re.compile(r"\s?(?:/\s?|per\s+)([^\s,;:()\[\]]+)", re.IGNORECASE)
+#: The whole unit token written after a figure: "m3", "kN/m2", "m*m", "%".
+_UNIT_TOKEN = re.compile(r"\s?([A-Za-z%°µμ‰][A-Za-z0-9%°µμ‰²³⁴/.*^·\-]*)")
+
+
+def _unit_written_with(text: str, mention: re.Match) -> str:
+    """The unit the figure ``mention`` found in ``text`` is written with.
+
+    A figure with a currency before it and no unit after it is money
+    ("currency"); when what it is per follows it in a form the converter
+    reads ("AED 450/m2", "AED 450 per m2"), money per that. Any other
+    figure: the whole unit token that follows the number ("m3" of
+    "120 m3;", "m*m" of "48 m*m.", "kN/m3" of "5 kN/m3"), not only the part
+    the figure pattern knows -- without the sentence's full stop or markdown
+    marks after it. "" when nothing of the kind follows."""
+    tail = text[mention.end("num"):mention.end("num") + 48]
+    token = _UNIT_TOKEN.match(tail)
+    unit = token.group(1).rstrip(".*-/^") if token else ""
+    per = _PER_AFTER_MONEY.match(tail)
+    rate = f"{_MONEY}/{per.group(1).rstrip('.*')}" if per else ""
+    money = rate if _unit_kind(rate) is not None else _MONEY
+    return money if mention.group("pre") and not mention.group("post") else unit
+
+
+def _states_result(value: float, written: str, size: float, unit: str, pure: bool) -> bool:
+    """True when a figure of size ``value``, written with the unit
+    ``written``, states a step result of size ``size`` whose unit is ``unit``.
+
+    * The result's unit is one the converter compares: the figure is in a
+      unit of the same kind and, at the two scales, is the same number --
+      "0.207 km" for 207 m; not "207 mm", "0.207 m" or "207 kg". Money
+      written by its currency alone also states a money rate (what it is
+      per is then in the words, which this check does not read).
+    * The result is a pure number (``pure``): only a figure written with no
+      unit states it -- "207 m" for a result of 207 does not.
+    * Any other result -- an output the registry declares no unit for, or a
+      unit the converter cannot compare ("m*m", "kN.m") -- is held to its
+      number alone, at any thousand, as before."""
+    ours, theirs = _unit_kind(unit), _unit_kind(written)
+    if ours is None:
+        return (not pure or not written) and _match(value, _rescaled([size]))
+    if theirs is None:
+        return False
+    if theirs[0] == ours[0]:
+        return _close(value * theirs[1] / ours[1], size)
+    return theirs[0] == _MONEY and ours[0].startswith(_MONEY + "/") and _close(value, size)
 
 
 def _written_negative(text: str, mention: re.Match) -> bool:
@@ -1926,16 +1991,20 @@ def _unit_written_after(tail: str) -> str:
     """The unit written straight after a figure (``tail`` is the text that
     follows it): the longest run of up to three words the unit converter
     knows ("m", "kN/m2", "working days"); "" when the figure stands bare or
-    is followed by words that are no unit ("12 long", "67 per m3")."""
+    is followed by words that are no unit ("12 long", "67 per m3"). Words
+    that are each a unit on their own are not read together as another one:
+    "12 m in length" is 12 m (the converter, which ignores spaces, would
+    read "m in" as minutes)."""
     from app.agents.base.formulas.construction_formulas_planning import parse_unit
 
     m = _UNIT_AFTER_FIGURE.match(tail or "")
     if not m:
         return ""
-    words = m.group(1).split()
+    words = [word.rstrip(".") for word in m.group(1).split()]
     for end in range(len(words), 0, -1):
-        head = " ".join(words[:end]).rstrip(".")
-        if head and parse_unit(head) is not None:
+        head = " ".join(words[:end])
+        glued = end > 1 and all(parse_unit(word) is not None for word in words[:end])
+        if head and not glued and parse_unit(head) is not None:
             return head
     return ""
 
@@ -2024,7 +2093,11 @@ def _quantity_given(number: float, unit: str, users: list[tuple[float, str]],
       unit's scale, the same number ("12 m" for 12 m, for 12,000 mm), or
     * a source wrote the number bare, so the unit is a reading of it.
     A number the sources wrote only with another unit is another quantity:
-    12 mm is not the user's when the user wrote 12 m, and nor is 12,000 m."""
+    12 mm is not the user's when the user wrote 12 m, and nor is 12,000 m.
+    Money is the one kind read more widely: a price the source wrote per
+    something ("67 SAR/m3") is that number of money, because the registry
+    declares a price input in currency alone and a figure in it is run as
+    the price."""
     kind = _unit_kind(unit)
     if kind is None:
         return _given_to_us(number, _rescaled(n for n, _u in list(users) + list(tools)),
@@ -2033,6 +2106,8 @@ def _quantity_given(number: float, unit: str, users: list[tuple[float, str]],
     for n, u in written:
         other = _unit_kind(u or "")
         if other is not None and other[0] == kind[0] and _close(n * other[1] / kind[1], number):
+            return True
+        if other is not None and kind[0] == _MONEY and other[0].startswith(_MONEY + "/") and _close(n, number):
             return True
     bare = _rescaled(n for n, u in list(users) + list(tools) if _bare(u))
     return _given_to_us(number, bare, [[n for n, u in passage if _bare(u)] for passage in passages])

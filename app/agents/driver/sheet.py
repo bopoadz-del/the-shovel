@@ -25,7 +25,11 @@ Who writes what -- the point of the sheet:
 * a result is code's arithmetic on numbers the model put on the sheet (the
   givens, a number written in the plan), so each result carries the numbers
   it rests on (``rests_on``) for the exit check to hold against what the
-  user and the tools gave.
+  user and the tools gave;
+* a number with no unit -- a given written "-", a bare number in the plan,
+  the pure-number result of an earlier step -- fed to an input the formula
+  declares in a unit is run in that unit, so it is held as that quantity
+  (``declared_unit``, ``rests_quantities``, ``mark_given``).
 
 ``run_step`` runs a plan step whose entry is a registered formula
 (``formula:<name>``): code resolves its inputs from the sheet, holds them to
@@ -144,9 +148,9 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
         if _changed(out["givens"], entry, ("value", "unit")):
             replaced.add(entry["id"])
         else:
-            kept = next((g.get("checked") for g in out["givens"] if g.get("id") == entry["id"]), None)
-            if kept:
-                entry["checked"] = kept  # the same value and unit: code's mark stays
+            # The same value and unit: code's marks stay.
+            old = next((g for g in out["givens"] if g.get("id") == entry["id"]), {})
+            entry.update({mark: old[mark] for mark in GIVEN_MARKS if old.get(mark)})
         _put(out["givens"], entry)
     known = {g["id"] for g in out["givens"]} | {s.get("id") for s in out["plan"]}
     known |= {s.get("id") for s in update.get("plan") or [] if isinstance(s, dict)}
@@ -350,15 +354,84 @@ def mark_given(sheet: Dict[str, Any], is_given: Any) -> Dict[str, Any]:
     (``"user"``, ``"calculator"``, ``"passage"``). The mark is
     code's: an update from the model cannot set it, a given whose value or
     unit changes loses it (``apply_update`` writes the given anew), and one
-    that stays the same keeps it into the next turn."""
+    that stays the same keeps it into the next turn.
+
+    A given written with no unit ("-") that the plan feeds to an input its
+    formula declares in a unit is run as that quantity, so it is checked as
+    that quantity too: ``checked_as`` lists each declared unit in which the
+    number ``is_given`` (the user's "40 m" backs a pure 40 fed to an input
+    in m; the user's "40 mm" does not; a number the user wrote bare does).
+    ``checked`` alone says only that the number was given."""
     out = copy.deepcopy(sheet)
+    fed = fed_units(out)
     for given in out.get("givens") or []:
         number = _number(given.get("value"))
         by = (is_given(number, str(given.get("unit") or ""))
               if number is not None and not given.get("checked") else "")
         if by:
             given["checked"] = by if isinstance(by, str) else True
+        held = list(given.get("checked_as") or [])
+        held += [unit for unit in fed.get(given.get("id"), [])
+                 if unit not in held and number is not None and is_given(number, unit)]
+        if held:
+            given["checked_as"] = held
     return out
+
+
+#: The marks code writes on a given (``mark_given``); the model cannot.
+GIVEN_MARKS = ("checked", "checked_as")
+
+
+def no_unit(unit: Any) -> bool:
+    """True for the unit of a pure number as the sheet writes it: "-", or
+    nothing at all."""
+    return str(unit or "").strip() in ("", "-")
+
+
+def declared_unit(entry: Any, name: str) -> str:
+    """The unit in which the formula of plan entry ``entry`` takes its
+    input ``name``, read from the registry's own declaration of that input:
+    a bare number fed to it is run as that many of this unit. "" when the
+    entry is not a registered formula, the input is not one of its inputs,
+    or the declaration carries no dimension ("-", a count, a ratio): a bare
+    number fed there is a number and nothing more."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+    from app.lib import formula_registry
+
+    kind, _, formula = str(entry or "").partition(":")
+    spec = formula_registry.get(formula) if kind == FORMULA_ENTRY else None
+    param = formula_registry.parameters(spec).get(str(name)) if spec is not None else None
+    unit = str(param.unit or "").strip() if param is not None else ""
+    parsed = None if no_unit(unit) else parse_unit(unit)
+    return unit if parsed is not None and parsed.dimension not in formula_registry._DIMENSIONLESS else ""
+
+
+def returns_unit(entry: Any, output: str) -> bool:
+    """True when the formula of plan entry ``entry`` returns the unit of its
+    output ``output`` beside it (it declares ``<output>_unit`` among its
+    outputs), worked from the units of its inputs. Such a result written
+    with "-" is a pure number by code's own arithmetic; an output the
+    registry merely declares no unit for says nothing about its unit."""
+    from app.lib import formula_registry
+
+    kind, _, formula = str(entry or "").partition(":")
+    spec = formula_registry.get(formula) if kind == FORMULA_ENTRY else None
+    return spec is not None and bool(output) and f"{output}_unit" in spec.outputs
+
+
+def fed_units(sheet: dict[str, Any]) -> dict[str, list[str]]:
+    """For each given written with no unit: the declared units of the plan
+    inputs it is fed to (``declared_unit``), each once. A given with a unit,
+    and one fed only to inputs that declare none, has no entry."""
+    bare = {g.get("id") for g in sheet.get("givens") or [] if isinstance(g, dict) and no_unit(g.get("unit"))}
+    fed: dict[str, list[str]] = {}
+    for step in sheet.get("plan") or []:
+        inputs = (step.get("inputs") if isinstance(step, dict) else None) or {}
+        for name, ref in inputs.items() if isinstance(inputs, dict) else ():
+            unit = declared_unit(step.get("entry"), name) if isinstance(ref, str) and ref in bare else ""
+            if unit and unit not in fed.setdefault(ref, []):
+                fed[ref].append(unit)
+    return {gid: units for gid, units in fed.items() if units}
 
 
 def user_givens(sheet: Any) -> List[float]:
@@ -383,7 +456,14 @@ def rests_quantities(sheet: Dict[str, Any], step_id: str) -> List[Tuple[float, s
     earlier steps it reads. The model wrote each of them, so a result is
     only as sourced as these are; who reads this list checks each one --
     number and unit -- against what the user and the tools gave. Read from
-    the plan's own inputs and nothing else."""
+    the plan's own inputs and nothing else.
+
+    A number with no unit fed to an input its formula declares in a unit
+    (``declared_unit``) was run as that quantity, so it is listed as that
+    quantity: a bare number of the plan; a given written "-", unless code
+    marked it checked as that unit (``checked_as``); and the result of an
+    earlier step that is a pure number by code's own arithmetic
+    (``returns_unit``) -- nobody gave that result in any unit."""
     plan = {p.get("id"): p for p in sheet.get("plan") or [] if isinstance(p, dict)}
     givens = {g.get("id"): g for g in sheet.get("givens") or [] if isinstance(g, dict)}
     found: List[Tuple[float, str]] = []
@@ -395,13 +475,22 @@ def rests_quantities(sheet: Dict[str, Any], step_id: str) -> List[Tuple[float, s
             continue
         seen.add(sid)
         for name, ref in ((plan.get(sid) or {}).get("inputs") or {}).items():
+            declared = declared_unit((plan.get(sid) or {}).get("entry"), name)
             if isinstance(ref, str) and _STEP_ID.match(ref):
                 frontier.append(ref)
+                result = (_step(sheet, ref) or {}).get("result") or {}
+                number = _number(result.get("value")) if declared and no_unit(result.get("unit")) else None
+                if number is not None and returns_unit((plan.get(ref) or {}).get("entry"),
+                                                       str(result.get("name") or "")):
+                    found.append((number, declared))
             elif isinstance(ref, str) and _GIVEN_ID.match(ref):
                 given = givens.get(ref) or {}
                 number = _number(given.get("value"))
                 if number is not None and not given.get("checked"):
                     found.append((number, str(given.get("unit") or "")))
+                if (number is not None and declared and no_unit(given.get("unit"))
+                        and declared not in (given.get("checked_as") or [])):
+                    found.append((number, declared))
             else:
                 # A literal the reader below finds no number in, while the
                 # formula ran on one, is taken as the formula ran it: the
@@ -412,7 +501,9 @@ def rests_quantities(sheet: Dict[str, Any], step_id: str) -> List[Tuple[float, s
                 # A number written bare, with its unit written beside it in
                 # the plan (``<input>_unit``), is that quantity: the step
                 # runs it in that unit, so the check reads it in that unit.
-                beside = _unit_beside(inputs, name)
+                # With none beside it, the step runs it in the unit the
+                # formula declares for the input.
+                beside = _unit_beside(inputs, name) or declared
                 found.extend([(n, unit or beside) for n, unit in read]
                              or [(n, beside) for n in _ran_numbers(ran)])
     return found
