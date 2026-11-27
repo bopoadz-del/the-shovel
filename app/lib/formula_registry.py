@@ -237,7 +237,7 @@ def declared_examples(kind: str, name: str, examples: Any) -> Tuple[Dict[str, An
     each with ``invented: True``, a non-empty ``given`` and ``result`` text
     and an optional ``chain`` list of strings, and no other key. Raises
     ``ValueError`` at declaration on anything else."""
-    if isinstance(examples, (str, bytes, dict)):
+    if isinstance(examples, (str, bytes, dict)) or (examples is not None and not hasattr(examples, "__iter__")):
         raise ValueError(f"{kind} {name!r}: examples must be a sequence of dicts")
     out = []
     for example in examples or ():

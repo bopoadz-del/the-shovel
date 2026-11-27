@@ -566,3 +566,285 @@ def test_stream_adds_the_named_calculator_note_only_when_there_is_one(monkeypatc
     sent = seen[0]["messages"]
     assert [m["role"] for m in sent] == ["system"] + (["system"] if note else []) + ["user"]
     assert [m["content"] for m in sent[1:-1]] == ([note] if note else [])
+
+
+# -- the whole lookup result is held to the loop's limit ------------------------------
+
+@pytest.mark.parametrize("ordering", ["index", "reversed"])
+def test_a_lookup_of_every_index_id_fits_the_loop_limit(ordering):
+    ids = [e["id"] for e in catalogue.entries()]
+    if ordering == "reversed":
+        ids = ids[::-1]
+    out = catalogue.lookup(ids)
+    assert len(json.dumps(out, default=str)) <= loop._TOOL_RESULT_CHARS
+    returned = [e["id"] for e in out["entries"]]
+    assert returned == ids[:len(returned)] and 1 <= len(returned) <= catalogue.MAX_LOOKUP
+    # Every found id past the returned ones is named or counted, in order.
+    named = out.get("not_returned", [])
+    assert named == ids[len(returned):len(returned) + len(named)]
+    assert len(returned) + len(named) + out.get("not_returned_more", 0) == len(ids)
+
+
+@pytest.mark.parametrize("unknown_count,id_chars", [(40, 200), (90, 120)])
+def test_long_unknown_ids_do_not_push_a_lookup_past_the_loop_limit(unknown_count, id_chars):
+    ids = [e["id"] for e in catalogue.entries()][:catalogue.MAX_LOOKUP]
+    unknown = [f"formula:{i:03d}" + "x" * id_chars for i in range(unknown_count)]
+    alone = catalogue.lookup(ids)
+    out = catalogue.lookup(ids + unknown)
+    assert len(json.dumps(out, default=str)) <= loop._TOOL_RESULT_CHARS
+    assert out["entries"] == alone["entries"]  # the entries are never what gives way
+    assert out["unknown"] == unknown[:len(out["unknown"])]
+    assert len(out["unknown"]) + out.get("unknown_more", 0) == unknown_count
+    assert out.get("unknown_more", 0) > 0
+
+
+@pytest.mark.parametrize("room", [60, 200])
+def test_lookup_names_what_fits_and_counts_the_rest(monkeypatch, room):
+    ids = [e["id"] for e in catalogue.entries()][:6]
+    monkeypatch.setattr(catalogue, "LOOKUP_CHARS", 1)  # one entry back; five to name
+    base = len(json.dumps(catalogue.lookup(ids[:1]), default=str))
+    out = catalogue.lookup(ids, limit=base + room)
+    assert len(json.dumps(out, default=str)) <= base + room
+    named = out.get("not_returned", [])
+    assert named == ids[1:1 + len(named)]
+    assert len(named) + out.get("not_returned_more", 0) == 5
+    assert out.get("not_returned_more", 0) > 0
+
+
+@pytest.mark.parametrize("names", [["a", "bb", "ccc"], ["formula:x", "tool:y"]])
+def test_cap_names_leaves_a_list_that_fits_as_it_is(names):
+    result = {"ok": True, "entries": [], "unknown": list(names)}
+    catalogue._cap_names(result, "unknown", 10_000)
+    assert result == {"ok": True, "entries": [], "unknown": names}  # no count key when all fit
+    empty = {"ok": True, "unknown": []}
+    catalogue._cap_names(empty, "unknown", 1)
+    assert empty == {"ok": True, "unknown": []}  # nothing to cap
+
+
+@pytest.mark.parametrize("names,keep", [(["aaaa", "bbbb", "cccc"], 2), (["aaaa", "bbbb", "cccc", "dddd"], 1)])
+def test_cap_names_keeps_names_in_order_up_to_the_limit(names, keep):
+    result = {"unknown": list(names)}
+    want = {"unknown": names[:keep], "unknown_more": len(names) - keep}
+    limit = len(json.dumps(want))
+    catalogue._cap_names(result, "unknown", limit)
+    assert result == want and len(json.dumps(result)) <= limit
+
+
+@pytest.mark.parametrize("unknown", [["formula:zz_none_a", "formula:zz_none_b"],
+                                     ["tool:zz_none_c", "tool:zz_none_d", "tool:zz_none_e"]])
+def test_found_ids_to_ask_again_are_named_before_unknown_ones(monkeypatch, unknown):
+    ids = [e["id"] for e in catalogue.entries()][:3]
+    monkeypatch.setattr(catalogue, "LOOKUP_CHARS", 1)
+    base = len(json.dumps(catalogue.lookup(ids[:1]), default=str))
+    want_rest = len(json.dumps(ids[1:])) + len(', "not_returned": ')
+    out = catalogue.lookup(ids + unknown, limit=base + want_rest + 25)
+    assert out["not_returned"] == ids[1:]
+    assert len(out["unknown"]) < len(unknown) and out["unknown_more"] >= 1
+
+
+@pytest.mark.parametrize("ordering", ["index", "reversed"])
+def test_every_index_id_through_the_public_route_reaches_the_model_uncut(monkeypatch, _stream_through_call, ordering):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setenv("DRIVER_MODE", "request")
+    ids = [e["id"] for e in catalogue.entries()]
+    if ordering == "reversed":
+        ids = ids[::-1]
+    seen = []
+    replies = [{"content": "", "tool_calls": [_call(catalogue.LOOKUP, {"ids": ids}, "c1")]},
+               {"content": "Read them."}]
+    monkeypatch.setattr(llm, "call", _scripted(replies, seen))
+    body = {"message": "What can the platform work out?", "project_id": None, "history": []}
+    with TestClient(app) as client:
+        client.post("/v1/chat/stream", json=body,
+                    headers={"Authorization": "Bearer " + DEV_KEY, "X-Fork-Driver": "on"})
+    shown = json.loads(seen[1]["messages"][-1]["content"])
+    assert "truncated" not in shown
+    assert [e["id"] for e in shown["entries"]] == [e["id"] for e in catalogue.lookup(ids)["entries"]]
+
+
+# -- the cache follows every kind it builds -------------------------------------------
+
+@pytest.fixture
+def _counted_builds(monkeypatch):
+    calls = []
+
+    def build():
+        calls.append(1)
+        return []
+    monkeypatch.setattr(catalogue, "_BUILDERS", (build,))
+    catalogue._CACHE.clear()
+    yield calls
+    catalogue._CACHE.clear()
+
+
+@pytest.mark.parametrize("first,then", [([], ["zz_wf_a"]), (["zz_wf_a"], ["zz_wf_a", "zz_wf_b"])])
+def test_a_workflow_that_appears_later_reaches_the_index_without_a_restart(monkeypatch, first, then):
+    from app.agents.driver import routes
+
+    names, no_cards = {"now": first}, {}
+    monkeypatch.setattr(routes, "catalogue", lambda: list(names["now"]))
+    monkeypatch.setattr(routes, "cards", lambda: no_cards)  # one cards object: only the workflows change
+    catalogue._CACHE.clear()
+    before = [e["id"] for e in catalogue.entries() if e["kind"] == "workflow"]
+    names["now"] = then
+    after = [e["id"] for e in catalogue.entries() if e["kind"] == "workflow"]
+    catalogue._CACHE.clear()
+    assert before == [f"workflow:{n}" for n in first]
+    assert after == [f"workflow:{n}" for n in then]
+
+
+@pytest.mark.parametrize("produces", ["A first register.", "A second register."])
+def test_a_reloaded_card_reaches_the_index_without_a_restart(monkeypatch, produces):
+    from app.agents.driver import routes
+
+    held = {"cards": {}}
+    monkeypatch.setattr(routes, "catalogue", lambda: ["zz_wf_c"])
+    monkeypatch.setattr(routes, "cards", lambda: held["cards"])
+    catalogue._CACHE.clear()
+    before = next(e for e in catalogue.entries() if e["id"] == "workflow:zz_wf_c")["for"]
+    held["cards"] = {"zz_wf_c": {"produces": produces}}  # a new cards object, as after cache_clear
+    after = next(e for e in catalogue.entries() if e["id"] == "workflow:zz_wf_c")["for"]
+    catalogue._CACHE.clear()
+    assert (before, after) == ("", produces)
+
+
+def _knowledge_file_entries():
+    """The knowledge entries built from the knowledge files (the knowledge
+    base's entries share the kind; they name their entry in ``source``)."""
+    return [e for e in catalogue.entries()
+            if e["kind"] == "knowledge" and "entry" not in e["source"]]
+
+
+@pytest.mark.parametrize("text", ["# Zz\n\ny", "# Zz\n\nOther words, longer."])  # the same size, then not
+def test_a_changed_or_added_knowledge_file_reaches_the_index_without_a_restart(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(catalogue, "knowledge_dir", lambda: str(tmp_path))
+    catalogue._CACHE.clear()
+    assert not _knowledge_file_entries()
+    path = tmp_path / "zz_k.md"
+    path.write_text("# Zz\n\nx", encoding="utf-8")
+    assert next(iter(_knowledge_file_entries()))["for"] == "x"
+    path.write_text(text, encoding="utf-8")
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # a later write, whatever the clock
+    got = next(iter(_knowledge_file_entries()))["for"]
+    catalogue._CACHE.clear()
+    assert got == text.split("\n\n", 1)[1]
+
+
+@pytest.mark.parametrize("hats", [1, 2])
+def test_a_reloaded_hat_set_is_a_new_state(monkeypatch, hats):
+    from app.agents import catalog
+
+    held = {"hats": [object()]}
+    monkeypatch.setattr(catalog, "list_hats", lambda: list(held["hats"]))
+    before = catalogue._state_key()
+    assert catalogue._state_key() == before  # the same objects: the same state
+    held["hats"] = [object() for _ in range(hats)]
+    assert catalogue._state_key() != before
+
+
+@pytest.mark.parametrize("calls_after", [2, 3])
+def test_an_unchanged_state_is_built_once(_counted_builds, calls_after):
+    for _ in range(calls_after):
+        catalogue.entries()
+    assert len(_counted_builds) == 1
+
+
+@pytest.mark.parametrize("files", [{}, {"zz_a.md": "a", "zz_b.md": "bb"}])
+def test_knowledge_state_names_each_markdown_file_with_its_size(monkeypatch, tmp_path, files):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    (tmp_path / "skip.txt").write_text("no", encoding="utf-8")
+    monkeypatch.setattr(catalogue, "knowledge_dir", lambda: str(tmp_path))
+    state = catalogue._knowledge_state()
+    assert [(n, size) for n, _, size in state] == [(n, len(t)) for n, t in sorted(files.items())]
+    monkeypatch.setattr(catalogue, "knowledge_dir", lambda: str(tmp_path / "missing"))
+    assert catalogue._knowledge_state() == ()
+
+
+# -- what the tests did not pin -------------------------------------------------------
+
+@pytest.mark.parametrize("names", [("q", "q"), ("r", "r")])
+def test_an_output_with_no_unit_feeds_nothing(names):
+    a = catalogue._entry("formula", "a", inputs=[], outputs=[{"name": names[0], "unit": ""}])
+    b = catalogue._entry("formula", "b", inputs=[{"name": names[1], "unit": ""}], outputs=[])
+    catalogue._link_formulas([a, b])
+    assert (a["feeds"], b["fed_by"]) == ([], [])
+
+
+@pytest.mark.parametrize("unit", ["m3", "kN"])
+def test_a_formula_never_feeds_itself(unit):
+    a = catalogue._entry("formula", "a", inputs=[{"name": "q", "unit": unit}], outputs=[{"name": "q", "unit": unit}])
+    b = catalogue._entry("formula", "b", inputs=[{"name": "q", "unit": unit}], outputs=[])
+    catalogue._link_formulas([a, b])
+    assert a["feeds"] == ["formula:b"] and a["fed_by"] == []
+    assert b["fed_by"] == ["formula:a"]
+
+
+@pytest.mark.parametrize("pick", [0, -1])
+def test_a_caller_changing_its_copy_leaves_the_catalogue_as_built(pick):
+    first = catalogue.entries()
+    name = first[pick]["name"]
+    first[pick]["name"] = "changed by a caller"
+    first[pick]["inputs"].append({"name": "added"})
+    again = catalogue.entries()
+    assert again[pick]["name"] == name
+    assert {"name": "added"} not in again[pick]["inputs"]
+
+
+@pytest.mark.parametrize("certified", [True, False])
+def test_a_certified_formula_is_stamped_tested_by_the_registry(registered, monkeypatch, certified):
+    _formula(registered, "zz_cat_cert", {"a": "m"}, {"b": "m2"})
+    monkeypatch.setattr(fr, "certified", lambda name: certified if name == "zz_cat_cert" else False)
+    entry = next(e for e in catalogue._formula_entries() if e["id"] == "formula:zz_cat_cert")
+    assert entry["stamps"]["tested"] == ({"by": "formula_registry.certified"} if certified else None)
+    assert entry["stamps"]["verified"] is None and entry["stamps"]["approved"] is None
+
+
+@pytest.mark.parametrize("use,not_", [("  use me  ", " not me "), ("\tfor sums\n", "  never for rates")])
+def test_a_tool_declaration_is_stored_without_its_padding(registered, use, not_):
+    async def handle(call):
+        return {"ok": True}
+
+    tool_registry.tool("zz_cat_pad", owner="base", display_name="Padded tool",
+                       params={"q": Param(label="q", kind="text", required=True)},
+                       when_to_use=use, when_not=not_)(handle)
+    registered["tool"].append("zz_cat_pad")
+    catalogue._CACHE.clear()
+    entry = next(e for e in catalogue.entries() if e["id"] == "tool:zz_cat_pad")
+    assert (entry["when_to_use"], entry["when_not"]) == (use.strip(), not_.strip())
+
+
+@pytest.mark.parametrize("asked,want", [([" a ", "a"], ["a"]), ("x", ["x"])])
+def test_the_turn_trace_records_the_ids_as_read(monkeypatch, _stream_through_call, caplog, asked, want):
+    import logging
+
+    replies = [{"content": "", "tool_calls": [_call(catalogue.LOOKUP, {"ids": asked}, "c1")]},
+               {"content": "Done."}]
+    monkeypatch.setattr(llm, "call", _scripted(replies, []))
+
+    async def go():
+        return [e async for e in loop.stream(_agent(), user_message="hi")]
+    with caplog.at_level(logging.INFO):
+        asyncio.run(go())
+    line = [r.getMessage() for r in caplog.records if "DRIVER_TURN" in r.getMessage()][-1]
+    turn = json.loads(line.split("DRIVER_TURN ", 1)[1])
+    looked = [c for s in turn["steps"] for c in s.get("calls", []) if c.get("ids") is not None]
+    assert [c["ids"] for c in looked] == [want]
+
+
+@pytest.mark.parametrize("param,want", [
+    (Param("m", 0, None, label="len", kind="number"), [0, None]),
+    (Param("kN", None, 50, label="load", kind="number"), [None, 50]),
+])
+def test_a_one_sided_range_keeps_its_one_bound(param, want):
+    assert catalogue._input("x", param)["range"] == want
+
+
+@pytest.mark.parametrize("examples", [5, 2.5])
+def test_examples_that_are_not_a_sequence_are_refused_at_declaration(examples):
+    with pytest.raises(ValueError, match="examples must be a sequence"):
+        fr.declared_examples("formula", "zz", examples)
