@@ -18,19 +18,24 @@ def test_chat_project_memory_is_tenant_scoped(tmp_path, monkeypatch):
     users_mod.ensure_user_exists("user-B")
     proj = projects_store.create_project("Tenant A project", user_id="user-A")
     pid = proj["id"]
-    projects_store.set_fact(pid, "site_address", "42 Secret Lane")
+    # The owner confirmed the address; only a verified fact reaches a prompt.
+    projects_store.set_fact(pid, "site_address", "42 Secret Lane", verified_by="user-A")
+    # A value the app saved by itself (no verifier) never reaches a prompt.
+    projects_store.set_fact(pid, "crane_hire", "Unconfirmed Crane Co")
 
     prompt = "where is the site located"
 
     # The owner's own project facts ARE injected (feature still works).
     owner = _with_project_memory(prompt, pid, "user-A")
     assert "42 Secret Lane" in owner
+    assert "Unconfirmed Crane Co" not in owner
 
     # A different tenant must NOT receive the project's facts — the prompt is
     # returned unchanged, with no fact content leaked.
     attacker = _with_project_memory(prompt, pid, "user-B")
     assert attacker == prompt
     assert "Secret Lane" not in attacker
+    assert "Unconfirmed Crane Co" not in attacker
 
     # An unknown project id is a safe no-op even for the owner.
     assert _with_project_memory(prompt, "nope1234", "user-A") == prompt
