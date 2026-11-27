@@ -145,6 +145,13 @@ class FormulaSpec:
     #: The published standard / code the formula implements, declared with
     #: the kernel (empty: none declared). Half of what "certified" needs.
     standard: str = ""
+    #: Catalogue declarations (all optional; a missing one is listed in the
+    #: catalogue entry's ``gaps``): when the formula is the right one, when it
+    #: is not and what to use instead -- type-level conditions only -- and
+    #: worked examples with invented figures (``declared_examples``).
+    when_to_use: str = ""
+    when_not: str = ""
+    examples: Tuple[Dict[str, Any], ...] = ()
 
 
 _REGISTRY: Dict[str, FormulaSpec] = {}
@@ -190,6 +197,9 @@ def formula(
     main_output: str = "",
     required_groups: Tuple[Tuple[str, ...], ...] = (),
     standard: str = "",
+    when_to_use: str = "",
+    when_not: str = "",
+    examples: Tuple[Dict[str, Any], ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Declare a formula. Raises at import on an unknown owner, an empty
     description, an empty display name or a duplicate name -- a formula
@@ -206,6 +216,7 @@ def formula(
 
     def _register(fn: Callable[..., Any]) -> Callable[..., Any]:
         key = name or fn.__name__
+        shown = declared_examples("formula", key, examples)
         existing = _REGISTRY.get(key)
         if existing is not None and existing.fn is not fn:
             raise ValueError(f"formula {key!r} is declared twice")
@@ -215,11 +226,46 @@ def formula(
                                      {k: p.unit for k, p in params.items()},
                                      dict(outputs), params, main_output,
                                      tuple(tuple(g) for g in required_groups),
-                                     (standard or "").strip())
+                                     (standard or "").strip(),
+                                     (when_to_use or "").strip(), (when_not or "").strip(),
+                                     shown)
         fn.__formula__ = _REGISTRY[key]  # type: ignore[attr-defined]
         return fn
 
     return _register
+
+
+#: The keys a declared example carries. ``invented`` must be True: an
+#: example's figures are made up for the example, never a document's figure
+#: and never a test question's.
+EXAMPLE_KEYS = ("invented", "given", "chain", "result")
+
+
+def declared_examples(kind: str, name: str, examples: Any) -> Tuple[Dict[str, Any], ...]:
+    """Check a registry entry's declared ``examples``: a sequence of dicts,
+    each with ``invented: True``, a non-empty ``given`` and ``result`` text
+    and an optional ``chain`` list of strings, and no other key. Raises
+    ``ValueError`` at declaration on anything else."""
+    if isinstance(examples, (str, bytes, dict)) or (examples is not None and not hasattr(examples, "__iter__")):
+        raise ValueError(f"{kind} {name!r}: examples must be a sequence of dicts")
+    out = []
+    for example in examples or ():
+        if not isinstance(example, dict):
+            raise ValueError(f"{kind} {name!r}: an example must be a dict")
+        extra = set(example) - set(EXAMPLE_KEYS)
+        if extra:
+            raise ValueError(f"{kind} {name!r}: unknown example keys {sorted(extra)}")
+        if example.get("invented") is not True:
+            raise ValueError(f"{kind} {name!r}: an example must say invented: True")
+        for key in ("given", "result"):
+            if not isinstance(example.get(key), str) or not example[key].strip():
+                raise ValueError(f"{kind} {name!r}: an example needs a {key} text")
+        chain = example.get("chain", [])
+        if not isinstance(chain, (list, tuple)) or not all(isinstance(c, str) for c in chain):
+            raise ValueError(f"{kind} {name!r}: an example's chain is a list of strings")
+        out.append({"invented": True, "given": example["given"].strip(),
+                    "chain": list(chain), "result": example["result"].strip()})
+    return tuple(out)
 
 
 def all_specs() -> List[FormulaSpec]:

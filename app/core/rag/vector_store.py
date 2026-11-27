@@ -1904,6 +1904,7 @@ class VectorStore:
         from_end: bool = False,
         all_rows: bool = False,
         offset: int = 0,
+        raise_errors: bool = False,
     ) -> List[Chunk]:
         """Return indexed chunks for specific documents, ordered by chunk_index.
 
@@ -1927,6 +1928,11 @@ class VectorStore:
         store that ignores ``all_rows`` and caps ``k_per_doc`` at 400
         still misses chunk 500 of a 1200-row volume; windowed offsets
         walk the middle.
+
+        ``raise_errors=True`` lets a store failure raise (after the same log
+        line) instead of returning ``[]``: a caller that must tell "this
+        document has no text" from "the store failed" asks for it. Default
+        unchanged.
         """
         if not project_id or not doc_ids:
             return []
@@ -1985,6 +1991,8 @@ class VectorStore:
                 "chunks_for_docs failed for project=%s docs=%s: %s",
                 project_id, unique, exc,
             )
+            if raise_errors:
+                raise
             return []
 
         chunks = [self._row_as_chunk(r) for r in rows]

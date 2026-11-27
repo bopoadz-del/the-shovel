@@ -1,0 +1,14 @@
+[
+  {
+    "formula": "break_even_point",
+    "inputs": {"fixed_costs": 12000, "price_per_unit": 50, "variable_cost_per_unit": 30},
+    "expect": {"contribution_per_unit": 20, "break_even_units": 600, "break_even_revenue": 30000},
+    "working": "Contribution per unit = price 50 - variable cost 30 = 20; break-even quantity = fixed costs 12,000 / 20 = 600 units; break-even revenue = 600 x 50 = 30,000."
+  },
+  {
+    "formula": "break_even_point",
+    "inputs": {"fixed_costs": 10000, "price_per_unit": 45, "variable_cost_per_unit": 30},
+    "expect": {"contribution_per_unit": 15, "break_even_units": 666.6667, "units_to_cover_fixed_costs": 667},
+    "working": "Contribution 45 - 30 = 15; 10,000 / 15 = 666.67 units exactly, so 667 whole units are the smallest quantity that covers the fixed costs."
+  }
+]
