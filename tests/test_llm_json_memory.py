@@ -855,3 +855,41 @@ def test_a_notes_size_is_its_utf8_byte_count_and_the_text_reads_back_unchanged(d
     assert llm_memory.write(pid, "word", json.dumps(doc), "t#1")["bytes"] == size
     got = llm_memory.read(pid, "word")
     assert got["bytes"] == size and got["data"] == doc
+
+
+@pytest.mark.parametrize("limit,held", [(3, 2), (2, 1), (5, 0)])
+def test_a_note_another_turn_created_while_this_one_waited_is_replaced_not_refused(monkeypatch, limit, held):
+    """The other writer's row becomes visible at the moment the lock is
+    granted (what READ COMMITTED does on Postgres). With one place left, this
+    write must replace that note, not be refused for the limit."""
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", str(limit))
+    pid = f"mem-wait-{uuid.uuid4().hex[:8]}"
+    for i in range(held):
+        llm_memory.write(pid, f"held{i}", "{}", "t#0")
+    real = llm_memory._one_new_note_at_a_time
+
+    def other_writer_commits_first(session, project_id):
+        real(session, project_id)
+        session.add(llm_memory.LlmMemory(project_id=project_id, name="x", data='{"by":"other"}', size_bytes=14,
+                                         written_at=llm_memory._now(), written_by_turn="other#1"))
+        session.flush()
+
+    monkeypatch.setattr(llm_memory, "_one_new_note_at_a_time", other_writer_commits_first)
+    done = llm_memory.write_retrying(pid, "x", json.dumps({"by": "me"}), "me#1")
+    assert done["created"] is False
+    assert llm_memory.read(pid, "x")["data"] == {"by": "me"}
+    assert len(llm_memory.listing(pid)) == held + 1
+
+
+@pytest.mark.parametrize("first,second", [({"v": 1}, {"v": 2}), ([1], [2, 3])])
+def test_replace_reports_whether_there_was_a_note_to_replace(first, second):
+    from app.core.db import SessionLocal
+
+    pid = f"mem-rep-{uuid.uuid4().hex[:8]}"
+    row = {"data": json.dumps(second), "size_bytes": 9, "written_at": llm_memory._now(), "written_by_turn": "t#2"}
+    with SessionLocal() as s, s.begin():
+        assert llm_memory._replace(s, pid, "n", row) == 0
+    llm_memory.write(pid, "n", json.dumps(first), "t#1")
+    with SessionLocal() as s, s.begin():
+        assert llm_memory._replace(s, pid, "n", row) == 1
+    assert llm_memory.read(pid, "n")["data"] == second

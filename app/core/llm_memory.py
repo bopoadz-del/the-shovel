@@ -178,18 +178,18 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
             # comes first: on SQLite it takes the one writer's lock, so the
             # count below is the count the insert is made against.
             revived = 0
-            done = s.execute(update(LlmMemory)
-                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem,
-                                    LlmMemory.review != DISCARDED)
-                             .values(**row)).rowcount
+            done = _replace(s, project_id, stem, row)
             if not done:
                 _one_new_note_at_a_time(s, project_id)
+                # Asked again now the lock is held: another turn may have
+                # created this same note while this one waited, and then
+                # this write is a replace, not a new note against the limit.
+                done = _replace(s, project_id, stem, row)
+            if not done:
                 # Discarded notes are out of the model's sight, so they do not
                 # take a place it could only free by replacing them; writing
                 # one again brings it back into sight, so it needs a place.
-                count = s.scalar(select(func.count()).select_from(LlmMemory)
-                                 .where(LlmMemory.project_id == project_id,
-                                        LlmMemory.review != DISCARDED)) or 0
+                count = _notes_in_sight(s, project_id)
                 if count >= max_docs():
                     raise MemoryRefused(f"this project already holds {count} notes (the limit); "
                                        "replace or reuse one of them (list_memory shows them)")
@@ -200,6 +200,24 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                     s.add(LlmMemory(project_id=project_id, name=stem, **row))
         created = not (done or revived)
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
+
+
+def _replace(session: Any, project_id: str, stem: str, row: Dict[str, Any]) -> int:
+    """Replace the note ``stem`` of ``project_id`` with ``row`` when it is in
+    the model's sight; the number of notes replaced (0 when there is no such
+    note yet, or it is discarded)."""
+    return session.execute(update(LlmMemory)
+                           .where(LlmMemory.project_id == project_id, LlmMemory.name == stem,
+                                  LlmMemory.review != DISCARDED)
+                           .values(**row)).rowcount
+
+
+def _notes_in_sight(session: Any, project_id: str) -> int:
+    """How many of the project's notes the model can see: the places taken
+    under ``LLM_MEMORY_MAX_DOCS``. A discarded note takes no place."""
+    return session.scalar(select(func.count()).select_from(LlmMemory)
+                          .where(LlmMemory.project_id == project_id,
+                                 LlmMemory.review != DISCARDED)) or 0
 
 
 def _one_new_note_at_a_time(session: Any, project_id: str) -> None:
