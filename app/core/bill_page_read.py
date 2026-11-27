@@ -174,3 +174,76 @@ def rows_of_model_reads(
         return got.rows, got.pages_not_read
 
     return rows_of
+
+
+ITEM = "item"
+STATE_RECONCILED = "RECONCILED"
+STATE_FAILED = "FAILED"
+STATE_UNCHECKED = "UNCHECKED"
+STATE_NOT_READ = "NOT READ"
+
+
+@dataclass(frozen=True)
+class BillSpan:
+    """One bill of the document as its own summary states it: label, 1-based
+    inclusive page range, and the printed bill total (``None`` = not printed)."""
+
+    label: str
+    first_page: int
+    last_page: int
+    printed_total: float | None = None
+
+
+def bill_states(
+    rows: Sequence[g.BillRow],
+    pages_not_read: Sequence[int],
+    *,
+    spans: Sequence[BillSpan],
+    tolerance: float,
+) -> dict[str, Any]:
+    """Per bill, the check of its item rows against its printed total.
+
+    A row belongs to the bill whose page range holds its source page. Only
+    rows the model typed ``item`` are summed. The state is ``NOT READ`` when a
+    page of the bill was not read, ``UNCHECKED`` when the bill prints no total,
+    ``FAILED`` when the item sum differs from the printed total by more than
+    ``tolerance`` (the caller states it from the bill's own rounding) or any
+    row of the bill is flagged, else ``RECONCILED``. Rows under no bill are
+    counted, never moved into one. Figures are read, never repaired."""
+    out: list[dict[str, Any]] = []
+    placed: set[int] = set()
+    missing = set(pages_not_read)
+    for span in spans:
+        members = [i for i, r in enumerate(rows)
+                   if span.first_page <= r.source_page <= span.last_page]
+        placed.update(members)
+        items_sum = 0.0
+        summed = without = flagged = 0
+        for i in members:
+            r = rows[i]
+            flagged += 1 if r.check else 0
+            if r.extra.get(LINE_TYPE_LABEL) != ITEM:
+                continue
+            amount = g.parse_number(r.fields.get("total", ""))
+            if amount is None:
+                without += 1
+                continue
+            summed += 1
+            items_sum += amount
+        not_read = sorted(p for p in missing if span.first_page <= p <= span.last_page)
+        printed = span.printed_total
+        diff = None if printed is None else items_sum - printed
+        if not_read:
+            state = STATE_NOT_READ
+        elif diff is None:
+            state = STATE_UNCHECKED
+        elif abs(diff) > tolerance or flagged:
+            state = STATE_FAILED
+        else:
+            state = STATE_RECONCILED
+        out.append({"label": span.label, "pages": [span.first_page, span.last_page],
+                    "rows": len(members), "rows_summed": summed,
+                    "rows_without_amount": without, "rows_flagged": flagged,
+                    "items_sum": items_sum, "printed_total": printed, "diff": diff,
+                    "pages_not_read": not_read, "state": state})
+    return {"bills": out, "rows_unassigned": len(rows) - len(placed)}

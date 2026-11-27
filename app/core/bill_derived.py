@@ -81,6 +81,9 @@ PageSource = bc.PageSource
 #: (``bill_table_geometry.extract_bill_rows``); another reader (for example a
 #: model's read of the page, ``bill_page_read``) is passed by the caller.
 RowsOfReads = Callable[[Sequence[bc.PageRead]], tuple[Sequence[g.BillRow], Sequence[int]]]
+#: Rows and the 1-based pages not read -> the per-bill check stored with the
+#: copy (``bill_page_read.bill_states`` with the document's own bill spans).
+StatesOfRows = Callable[[Sequence[g.BillRow], Sequence[int]], dict[str, Any]]
 
 
 class WebRequestRefused(RuntimeError):
@@ -194,11 +197,11 @@ def _sections(rows: Sequence[g.BillRow]) -> list[dict[str, Any]]:
 
 
 def _plan_hash(document_id: str, pages: tuple[int, int], rows: Sequence[g.BillRow],
-               not_read: Sequence[int] = ()) -> str:
+               not_read: Sequence[int] = (), states: dict[str, Any] | None = None) -> str:
     body = json.dumps(
         {"document_id": document_id, "pages": list(pages),
          "rows": [dataclasses.asdict(r) for r in rows],
-         "pages_not_read": list(not_read)},
+         "pages_not_read": list(not_read), "bill_states": states},
         sort_keys=True, default=list,
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -212,6 +215,7 @@ def _prepare(
     block,
     work_dir: str | None,
     rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """Shared by plan and execute: a skip dict, or the plan with its rows."""
     from app.core import projects
@@ -255,6 +259,7 @@ def _prepare(
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
                 "bill_verdict": verdict.reason, **sources}
+    states = None if states_of_rows is None else states_of_rows(rows, not_read)
     return {
         "doc": doc,
         "verdict": verdict,
@@ -271,7 +276,8 @@ def _prepare(
             "pages_not_read": not_read,
             "sections": _sections(rows),
             "columns": column_stats.as_dict(rows),
-            "plan_hash": _plan_hash(document_id, (first, stop), rows, not_read),
+            "bill_states": states,
+            "plan_hash": _plan_hash(document_id, (first, stop), rows, not_read, states),
         },
     }
 
@@ -286,12 +292,14 @@ def plan_bill_sheet(
     block=None,
     work_dir: str | None = None,
     rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """What the derivation would write, without writing it. ``pages`` is a
     0-based half-open range (default: every page). ``rows_of_reads`` replaces
-    the geometry row reader (see :data:`RowsOfReads`)."""
+    the geometry row reader (see :data:`RowsOfReads`); ``states_of_rows``
+    adds the per-bill check (see :data:`StatesOfRows`)."""
     prepared = _prepare(document_id, pages, classify, page_source, block, work_dir,
-                        rows_of_reads)
+                        rows_of_reads, states_of_rows)
     return prepared.get("plan", prepared)
 
 
@@ -305,6 +313,7 @@ def derive_bill_sheet(
     block=None,
     work_dir: str | None = None,
     rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """Add and index the derived spreadsheet row for a whole-document plan
     whose hash is ``plan_hash``. Returns what happened, as counts and ids.
@@ -313,7 +322,7 @@ def derive_bill_sheet(
     from app.core import byte_store, doc_index, projects
 
     prepared = _prepare(document_id, None, classify, page_source, block, work_dir,
-                        rows_of_reads)
+                        rows_of_reads, states_of_rows)
     plan = prepared.get("plan")
     if plan is None:
         return prepared
@@ -347,6 +356,7 @@ def derive_bill_sheet(
             "rows": len(rows),
             "rows_flagged": plan["unreconciled"],
             "sheets": sheets,
+            **({"bill_states": plan["bill_states"]} if plan["bill_states"] is not None else {}),
         },
         reingest_of=previous,
     )

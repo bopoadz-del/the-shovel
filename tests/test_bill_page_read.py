@@ -164,3 +164,75 @@ def test_rows_of_reads_each_page_and_numbers_it_from_one(reads, want_pages, want
     assert [r.source_page for r in rows] == want_pages
     assert not_read == want_not_read
     assert all(tuple(r.path[:1]) == ("Bill 9",) for r in rows)
+
+
+# --- per-bill state against the printed total -------------------------------
+
+def _rows(pages):
+    return bpr.rows_from_page_reads(pages).rows
+
+
+_TWO_BILLS = {"1": [_item("A", 10, 5, 50), _item("B", 2, 3, 6)],
+              "2": [_carried(56)],
+              "3": [_item("C", 4, 25, 100), {"type": "item", "description": "lump"}],
+              "5": [_item("D", 1, 7, 7)]}
+
+
+@pytest.mark.parametrize("printed_one, printed_two, want_one, want_two", [
+    (56, 100, bpr.STATE_RECONCILED, bpr.STATE_RECONCILED),
+    (57, 99, bpr.STATE_FAILED, bpr.STATE_FAILED),
+    (56.5, 100.5, bpr.STATE_RECONCILED, bpr.STATE_RECONCILED),
+    (None, 100, bpr.STATE_UNCHECKED, bpr.STATE_RECONCILED),
+])
+def test_each_bill_is_checked_against_its_printed_total(printed_one, printed_two,
+                                                        want_one, want_two):
+    spans = [bpr.BillSpan("one", 1, 2, printed_one), bpr.BillSpan("two", 3, 4, printed_two)]
+    got = bpr.bill_states(_rows(_TWO_BILLS), [], spans=spans, tolerance=0.5)
+    one, two = got["bills"]
+    assert (one["state"], two["state"]) == (want_one, want_two)
+    # only item rows are summed: the carried line on page 2 is a row, not an item
+    assert (one["rows"], one["rows_summed"], one["items_sum"]) == (3, 2, 56)
+    assert (two["rows"], two["rows_summed"], two["rows_without_amount"]) == (2, 1, 1)
+    assert two["items_sum"] == 100
+    assert got["rows_unassigned"] == 1  # page 5 lies under no bill
+
+
+@pytest.mark.parametrize("missing, want", [
+    ([2], [bpr.STATE_NOT_READ, bpr.STATE_RECONCILED]),
+    ([4], [bpr.STATE_RECONCILED, bpr.STATE_NOT_READ]),
+    ([5], [bpr.STATE_RECONCILED, bpr.STATE_RECONCILED]),
+])
+def test_bill_with_a_page_not_read_is_not_read(missing, want):
+    spans = [bpr.BillSpan("one", 1, 2, 56), bpr.BillSpan("two", 3, 4, 100)]
+    got = bpr.bill_states(_rows(_TWO_BILLS), missing, spans=spans, tolerance=0)
+    assert [b["state"] for b in got["bills"]] == want
+    assert [b["pages_not_read"] for b in got["bills"]] == [
+        [p for p in missing if 1 <= p <= 2], [p for p in missing if 3 <= p <= 4]]
+
+
+@pytest.mark.parametrize("bad_amount", [57, "x"])
+def test_bill_with_a_flagged_row_fails_even_when_the_sum_matches(bad_amount):
+    pages = {"1": [_item("A", 10, 5, bad_amount)]}
+    printed = 57 if bad_amount == 57 else 0
+    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 1, printed)],
+                          tolerance=0)
+    (b,) = got["bills"]
+    assert b["rows_flagged"] == 1
+    assert b["state"] == bpr.STATE_FAILED
+
+
+@pytest.mark.parametrize("tolerance, want", [(0.99, bpr.STATE_FAILED),
+                                             (1, bpr.STATE_RECONCILED)])
+def test_tolerance_boundary_is_inclusive(tolerance, want):
+    got = bpr.bill_states(_rows({"1": [_item("A", 10, 5, 50)]}), [],
+                          spans=[bpr.BillSpan("b", 1, 1, 51)], tolerance=tolerance)
+    assert got["bills"][0]["state"] == want
+    assert got["bills"][0]["diff"] == -1
+
+
+@pytest.mark.parametrize("spans", [[], [bpr.BillSpan("far", 9, 12, 0)]])
+def test_no_bill_holds_the_rows_they_are_unassigned(spans):
+    rows = _rows(_TWO_BILLS)
+    got = bpr.bill_states(rows, [], spans=spans, tolerance=0)
+    assert got["rows_unassigned"] == len(rows)
+    assert [b["rows"] for b in got["bills"]] == [0] * len(spans)

@@ -718,3 +718,64 @@ def test_page_not_read_is_in_the_plan_hash_even_when_the_rows_are_the_same(
     assert a["rows"] == b["rows"] == 3
     assert (a["pages_not_read"], b["pages_not_read"]) == ([3], [])
     assert a["plan_hash"] != b["plan_hash"]
+
+
+@pytest.mark.parametrize("printed, want_state", [(171, "RECONCILED"), (170, "FAILED")])
+def test_bill_states_are_planned_hashed_and_stored_with_the_copy(tmp_path, monkeypatch,
+                                                                printed, want_state):
+    import functools
+
+    from app.core import bill_page_read as bpr
+
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    reads = {0: [_line("A", 10, 5), _line("B", 3, 7)], 1: [_line("C", 2, 50)],
+             2: [_line("D", 0, 9)]}
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    states = functools.partial(bpr.bill_states, tolerance=0,
+                               spans=[bpr.BillSpan("all", 1, 3, printed)])
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads),
+                              states_of_rows=states, **kw)
+    (bill,) = plan["bill_states"]["bills"]
+    assert (bill["state"], bill["items_sum"]) == (want_state, 171)
+    bare = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads), **kw)
+    assert bare["bill_states"] is None
+    assert bare["plan_hash"] != plan["plan_hash"]  # the states are part of the plan
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               rows_of_reads=_model_reader(reads), states_of_rows=states, **kw)
+    assert out["derived"] is True
+    (row,) = docs.added
+    assert row["metadata"]["bill_states"]["bills"][0]["state"] == want_state
+
+
+@pytest.mark.parametrize("reads", [_READS_A, _READS_B])
+def test_copy_without_states_stores_no_states(tmp_path, monkeypatch, reads):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads), **kw)
+    bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                         rows_of_reads=_model_reader(reads), **kw)
+    (row,) = docs.added
+    assert "bill_states" not in row["metadata"]
+
+
+@pytest.mark.parametrize("unread_index, want", [
+    (1, ["RECONCILED", "NOT READ"]),
+    (0, ["NOT READ", "RECONCILED"]),
+])
+def test_planned_states_see_the_pages_not_read(tmp_path, monkeypatch, unread_index, want):
+    import functools
+
+    from app.core import bill_page_read as bpr
+
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    reads = {0: [_line("A", 10, 5)], 1: [_line("B", 2, 50)], 2: [_line("C", 1, 1)]}
+    reads[unread_index * 2] = None  # page 1 or page 3 not read
+    spans = [bpr.BillSpan("first", 1, 1, 50), bpr.BillSpan("rest", 2, 3, 101)]
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads),
+                              states_of_rows=functools.partial(bpr.bill_states, spans=spans,
+                                                               tolerance=0),
+                              classify=_BILL, page_source=_blank_pages())
+    assert [b["state"] for b in plan["bill_states"]["bills"]] == want
