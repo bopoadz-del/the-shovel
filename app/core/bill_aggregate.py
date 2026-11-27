@@ -225,11 +225,21 @@ def row_kinds(items: Sequence[SheetRow]) -> list[str]:
     page). A line that prints only an amount is
 
     * a ``collection`` when that amount equals the sum of the lines it follows
-      on its page since the last collection (at least one line), within one
-      unit of the amount cell's own last printed place;
+      on its page since the last collection, within one unit of the amount
+      cell's own last printed place, and those are at least two lines -- or
+      one line, when the document restates the figure as an amount-only line
+      on a later page of the same bill (brought forward, or listed on the
+      bill's collection page). One line equal to the line above it is also
+      what two equal lump sums look like; without that later restatement the
+      arithmetic cannot tell them apart, so it stays an item and a sum it
+      touches can only come out too high (FAILED), never short of a line and
+      still RECONCILED;
     * a ``repeat`` when it equals a collection already read on an earlier page
-      (a figure brought forward, or a page total listed on a collection page).
-      A repeat is covered by the next collection of its page, as an item is.
+      of the same bill (a figure brought forward, or a page total listed on
+      that bill's collection page; the bill is the row's own path,
+      :func:`row_bills`). A figure equal to another bill's page total is not
+      a repeat of it. A repeat is covered by the next collection of its page,
+      as an item is.
 
     Every other row, and every row with no recorded page, is an ``item``. A
     bill's total is the sum of its items; a collection or a repeat restates
@@ -246,10 +256,12 @@ def _classify(items: Sequence[SheetRow]) -> tuple[list[str], set[int]]:
     wrong does not hide the total it must be checked against."""
     kinds = [ROW_ITEM] * len(items)
     summaries: set[int] = set()
+    restated = _restated_later(items)
     order = sorted((i for i, r in enumerate(items) if r.pages), key=lambda i: items[i].pages[-1])
-    earlier: list[tuple[float, float]] = []   # (amount, tolerance) of collections on earlier pages
+    # (amount, tolerance, bills) of the collections on earlier pages
+    earlier: list[tuple[float, float, frozenset[str]]] = []
     page: int | None = None
-    page_collections: list[tuple[float, float]] = []
+    page_collections: list[tuple[float, float, frozenset[str]]] = []
     covered, lines, totals = 0.0, 0, 0
     for i in order:
         row = items[i]
@@ -261,19 +273,41 @@ def _classify(items: Sequence[SheetRow]) -> tuple[list[str], set[int]]:
             continue
         tol = _last_place(row.amount)
         if _amount_only(row):
-            if lines and _same_figure(amount, covered, tol):
+            bills = frozenset(row_bills(row))
+            if (lines >= 2 or (lines == 1 and i in restated)) and _same_figure(
+                    amount, covered, tol):
                 kinds[i] = ROW_COLLECTION
                 if totals == lines:
                     summaries.add(i)
-                page_collections.append((amount, tol))
+                page_collections.append((amount, tol, bills))
                 covered, lines, totals = 0.0, 0, 0
                 continue
-            if any(_same_figure(amount, a, max(t, tol)) for a, t in earlier):
+            if any(b == bills and _same_figure(amount, a, max(t, tol))
+                   for a, t, b in earlier):
                 kinds[i] = ROW_REPEAT
             totals += 1
         covered += amount
         lines += 1
     return kinds, summaries
+
+
+def _restated_later(items: Sequence[SheetRow]) -> set[int]:
+    """Indices of amount-only rows whose figure an amount-only row of the same
+    bill (:func:`row_bills`) prints again on a later page, within one unit of
+    either cell's last printed place."""
+    by_bills: dict[frozenset[str], list[tuple[int, int, float, float]]] = {}
+    for i, row in enumerate(items):
+        amount = g.parse_number(row.amount)
+        if row.pages and amount is not None and _amount_only(row):
+            by_bills.setdefault(frozenset(row_bills(row)), []).append(
+                (i, row.pages[-1], amount, _last_place(row.amount)))
+    out: set[int] = set()
+    for lines in by_bills.values():
+        for i, page, amount, tol in lines:
+            if any(p > page and _same_figure(amount, a, max(t, tol))
+                   for _j, p, a, t in lines):
+                out.add(i)
+    return out
 
 
 STATE_RECONCILED = "RECONCILED"
@@ -853,8 +887,9 @@ def aggregate(
     leaves ``terms`` and ``section`` to select, exactly as before, so a
     question asked in several parts still gets one result per part.
 
-    Collection and repeat lines are never summed (:func:`row_kinds`); they are
-    listed in ``not_items``. Each bill the ask names gets its check in
+    Collection and repeat lines are never summed (:func:`row_kinds`); those
+    the same selection admits are listed in ``not_items`` (a bill ask lists
+    that bill's lines only, never the rest of the sheet's). Each bill the ask names gets its check in
     ``bill_checks`` (:func:`bill_checks`): rows summed, rows without an amount,
     the bill's printed total and the state, so a sum is never handed back as
     a bill's total without saying whether it reconciles.
@@ -874,16 +909,21 @@ def aggregate(
     sums: dict[str, float] = {}
     joined = items
     kinds = row_kinds(items)
+    others = [(row, kind) for row, kind in zip(items, kinds) if kind != ROW_ITEM]
+    items = [row for row, kind in zip(items, kinds) if kind == ROW_ITEM]
+
+    def admitted(row: SheetRow) -> bool:
+        return scope.admits(row, measure) if scope is not None else matches(row, want, where)
+
     not_items = [
         {"ref": row.ref, "pages": row.pages, "section": list(row.path),
          "description": row.description, "kind": kind, "amount": g.parse_number(row.amount)}
-        for row, kind in zip(items, kinds) if kind != ROW_ITEM
+        for row, kind in others if admitted(row)
     ]
-    items = [row for row, kind in zip(items, kinds) if kind == ROW_ITEM]
     if scope is not None:
-        selected = fullest_sections(scope, [row for row in items if scope.admits(row, measure)])
+        selected = fullest_sections(scope, [row for row in items if admitted(row)])
     else:
-        selected = [row for row in items if matches(row, want, where)]
+        selected = [row for row in items if admitted(row)]
     for row in selected:
         value = row.figure(measure)
         entry = {
@@ -914,7 +954,7 @@ def aggregate(
             "item": sorted(scope.item),
             "either": sorted(scope.either),
         } if scope is not None else None),
-        "rows_scanned": len(items) + len(not_items),
+        "rows_scanned": len(items) + len(others),
         "not_items": not_items,
         "bill_checks": bill_checks(joined, scope.bills if scope is not None else ()),
         "count": len(used),

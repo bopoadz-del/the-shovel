@@ -57,7 +57,7 @@ def test_first_amount_line_of_a_page_is_an_item(amount):
     ("100", "102", "item"),
 ])
 def test_tolerance_is_one_unit_of_the_amount_cells_own_last_place(cell, total, kind):
-    rows = [_r(1, "x", cell, "1", cell), _r(1, "t", total)]
+    rows = [_r(1, "x", cell, "1", cell), _r(1, "y", "0", "1", "0"), _r(1, "t", total)]
     assert _kinds(rows)[-1] == kind
 
 
@@ -71,8 +71,10 @@ def test_lines_on_another_page_are_not_collected(a, b):
 @pytest.mark.parametrize("a, b, both", [("10", "5", "15"), ("200.00", "35.50", "235.50")])
 def test_a_collection_resets_the_running_sum(a, b, both):
     rows = [_r(1, "a", a, "1", a), _r(1, "s1", a),
-            _r(1, "b", b, "1", b), _r(1, "s2", b), _r(1, "lump", both)]
-    assert _kinds(rows) == ["item", "collection", "item", "collection", "item"]
+            _r(1, "b", b, "1", b), _r(1, "s2", b), _r(1, "lump", both),
+            _r(2, "brought 1", a), _r(2, "brought 2", b)]
+    assert _kinds(rows) == ["item", "collection", "item", "collection", "item",
+                            "repeat", "repeat"]
 
 
 # --- repeat: a figure brought forward or listed on a collection page ---------
@@ -94,8 +96,9 @@ def test_brought_forward_and_collection_page(p1, p2):
 @pytest.mark.parametrize("fig", ["90", "4,321.75"])
 def test_a_lump_equal_to_a_later_page_total_is_not_a_repeat(fig):
     """A repeat restates a collection read on an EARLIER page only."""
-    rows = [_r(1, "lump", fig), _r(2, "a", fig, "1", fig), _r(2, "t", fig)]
-    assert _kinds(rows) == ["item", "item", "collection"]
+    rows = [_r(1, "lump", fig), _r(2, "a", fig, "1", fig), _r(2, "b", "0", "1", "0"),
+            _r(2, "t", fig)]
+    assert _kinds(rows) == ["item", "item", "item", "collection"]
 
 
 @pytest.mark.parametrize("fig", ["10", "880.25"])
@@ -380,3 +383,151 @@ def test_not_priced_is_per_bill(n, other):
     checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other})}
     assert checks[n]["state"] == "NOT_PRICED"
     assert checks[other]["state"] == "RECONCILED"
+
+
+# --- one line equal to the line above it: a collection only when restated ---
+
+def _num(text):
+    return agg.g.parse_number(text)
+
+
+@pytest.mark.parametrize("fig", ["50,000", "1,234.50"])
+def test_two_equal_lump_sums_are_both_items(fig):
+    """Nothing later restates the second figure: it cannot be told from a
+    second lump sum, so it is summed, and the bill has no printed total."""
+    path = ("Bill No. 5 - Works",)
+    rows = [_r(10, "provisional sum one", fig, path=path),
+            _r(10, "provisional sum two", fig, path=path)]
+    assert _kinds(rows) == ["item", "item"]
+    out = agg.aggregate(rows, terms=[], ask="What is the total amount of Bill No. 5?",
+                        measure=agg.MEASURE_AMOUNT)
+    assert out["sum"] == pytest.approx(2 * _num(fig))
+    assert out["count"] == 2
+    [check] = out["bill_checks"]
+    assert check["state"] == "UNCHECKED" and check["printed_total"] is None
+
+
+@pytest.mark.parametrize("q, rate, amount", [("10", "100", "1,000"), ("4", "2.50", "10.00")])
+def test_priced_item_then_an_equal_lump_sum_are_both_items(q, rate, amount):
+    rows = [_r(3, "priced", amount, q, rate), _r(3, "allow for", amount)]
+    assert _kinds(rows) == ["item", "item"]
+
+
+@pytest.mark.parametrize("q, rate, amount", [("10", "100", "1,000"), ("4", "2.50", "10.00")])
+def test_one_line_cover_restated_on_a_later_page_is_a_collection(q, rate, amount):
+    rows = [_r(3, "priced", amount, q, rate), _r(3, "carried", amount),
+            _r(4, "brought forward", amount)]
+    assert _kinds(rows) == ["item", "collection", "repeat"]
+
+
+@pytest.mark.parametrize("pages, page_total", [(5, "20,000"), (3, "7,500.50")])
+def test_equal_page_totals_on_the_collection_page_add_to_the_bill_total(pages, page_total):
+    path = ("Bill No. 5 - Works",)
+    each = _num(page_total)
+    half = f"{each / 2:.2f}"
+    rows = []
+    for p in range(1, pages + 1):
+        rows += [_r(p, "a", half, "1", half, path=path), _r(p, "b", half, "1", half, path=path),
+                 _r(p, "page total", page_total, path=path)]
+    rows += [_r(pages + 1, f"page {p}", page_total, path=path) for p in range(1, pages + 1)]
+    rows.append(_r(pages + 1, "bill total", f"{each * pages:.2f}", path=path))
+    kinds = _kinds(rows)
+    assert kinds[-1] == "collection"
+    assert kinds[-1 - pages:-1] == ["repeat"] * pages
+    [check] = agg.bill_checks(rows, {"5"})
+    assert check["state"] == "RECONCILED"
+    assert check["items_sum"] == pytest.approx(each * pages)
+    assert check["printed_total"] == pytest.approx(each * pages)
+    assert check["rows_summed"] == 2 * pages
+
+
+# --- a repeat restates a collection of its OWN bill -------------------------
+
+@pytest.mark.parametrize("same_bill, want", [(False, "item"), (True, "repeat")])
+def test_a_figure_equal_to_another_bills_page_total_is_not_a_repeat(same_bill, want):
+    five, six = ("Bill No. 5 - Works",), ("Bill No. 6 - Planting",)
+    later = five if same_bill else six
+    rows = [_r(10, "a", "30,000", "1", "30000", path=five),
+            _r(10, "b", "20,000", "1", "20000", path=five),
+            _r(10, "page total", "50,000", path=five),
+            _r(12, "allow for irrigation", "50,000", path=later),
+            _r(12, "plant trees", "7,000", "7", "1000", path=later)]
+    assert _kinds(rows)[3] == want
+
+
+@pytest.mark.parametrize("lump, trees", [("50,000", "7,000"), ("50,000", "12,500")])
+def test_bill_total_keeps_a_lump_equal_to_another_bills_page_total(lump, trees):
+    five, six = ("Bill No. 5 - Works",), ("Bill No. 6 - Planting",)
+    rows = [_r(10, "a", "30,000", "1", "30000", path=five),
+            _r(10, "b", "20,000", "1", "20000", path=five),
+            _r(10, "page total", "50,000", path=five),
+            _r(12, "allow for irrigation", lump, path=six),
+            _r(12, "plant trees", trees, "1", trees.replace(",", ""), path=six)]
+    out = agg.aggregate(rows, terms=[], ask="What is the total amount of Bill No. 6?",
+                        measure=agg.MEASURE_AMOUNT)
+    assert out["sum"] == pytest.approx(_num(lump) + _num(trees))
+    assert out["count"] == 2
+
+
+# --- not_items lists what THIS selection left out, not the whole sheet ------
+
+def _two_bills():
+    rows = []
+    for n, first in (("5", 10), ("6", 20)):
+        path = (f"Bill No. {n} - Works",)
+        rows += [_r(first, "a", "100", "1", "100", path=path),
+                 _r(first, "b", "200", "1", "200", path=path),
+                 _r(first, "page total", "300", path=path)]
+    return rows
+
+
+@pytest.mark.parametrize("bill, page", [("5", 10), ("6", 20)])
+def test_not_items_of_a_bill_ask_are_that_bills_own(bill, page):
+    out = agg.aggregate(_two_bills(), terms=[], ask=f"What is the total amount of Bill No. {bill}?",
+                        measure=agg.MEASURE_AMOUNT)
+    assert [(n["kind"], n["pages"]) for n in out["not_items"]] == [("collection", [page])]
+    assert out["rows_scanned"] == 6
+    assert out["sum"] == pytest.approx(300)
+
+
+@pytest.mark.parametrize("terms, want", [(["page"], 2), (["nothing"], 0)])
+def test_not_items_of_a_terms_ask_are_the_matching_lines(terms, want):
+    out = agg.aggregate(_two_bills(), terms=terms, measure=agg.MEASURE_AMOUNT)
+    assert len(out["not_items"]) == want
+
+
+# --- tolerances and the page a joined row stands on -------------------------
+
+@pytest.mark.parametrize("earlier, cell, want", [
+    ("1,234.50", "1,235", "repeat"),    # the coarser cell's place decides
+    ("1,234.50", "1,236", "item"),
+])
+def test_repeat_tolerance_is_the_coarser_of_the_two_cells(earlier, cell, want):
+    rows = [_r(1, "a", "1,000.00", "1", "1000"), _r(1, "b", "234.50", "1", "234.5"),
+            _r(1, "page total", earlier), _r(2, "brought", cell)]
+    assert _kinds(rows)[3] == want
+
+
+@pytest.mark.parametrize("a, b", [("40", "60"), ("125.50", "74.50")])
+def test_a_joined_row_stands_on_its_last_page(a, b):
+    tot = f"{_num(a) + _num(b):.2f}"
+    joined = agg.SheetRow(path=("Bill A",), ref="", description="joined", unit="",
+                          quantity="1", rate=a, amount=a, pages=[5, 6])
+    rows = [joined, _r(6, "y", b, "1", b), _r(6, "page total", tot)]
+    assert _kinds(rows) == ["item", "item", "collection"]
+
+
+@pytest.mark.parametrize("text, want", [("(100.50)", 0.01), ("-1,000.5", 0.1), ("(7)", 1.0)])
+def test_last_place_reads_through_brackets_and_signs(text, want):
+    assert agg._last_place(text) == pytest.approx(want)
+
+
+@pytest.mark.parametrize("later_bill, want", [
+    ("Bill No. 6 - Planting", "item"),     # restated only by another bill
+    ("Bill No. 5 - Works", "collection"),
+])
+def test_the_restatement_must_be_in_the_same_bill(later_bill, want):
+    five = ("Bill No. 5 - Works",)
+    rows = [_r(3, "priced", "1,000", "10", "100", path=five), _r(3, "line", "1,000", path=five),
+            _r(4, "later line", "1,000", path=(later_bill,))]
+    assert _kinds(rows)[1] == want
