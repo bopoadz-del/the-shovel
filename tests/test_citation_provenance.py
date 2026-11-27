@@ -1015,6 +1015,11 @@ def test_on_a_sheet_turn_a_moment_is_credited_only_in_a_unit_of_a_moment(udl, sp
     ("SAR/m3*m3", "currency", 1.0), ("m2/m2", "fraction", 1.0),
     ("kPa*m2", "force", 1000.0), ("MPa*mm2", "force", 1.0),             # a pressure on an area
     ("kN.m", "[m^2 kg^1 s^-2]", 1000.0), ("N*mm", "[m^2 kg^1 s^-2]", 0.001), ("m*h", "[m^1 s^1]", 3600.0),
+    # a count says how many of what it multiplies; divided by, it stays
+    ("m*m*nr", "area", 1.0), ("m*m*nr*nr", "area", 1.0), ("mm*m*nos", "area", 0.001), ("t*nr", "mass", 1000.0),
+    ("nr*nr", "count", 1.0), ("nos*no*nr", "count", 1.0), ("nr/nr", "fraction", 1.0),
+    ("SAR/nr", "[currency^1 nr^-1]", 1.0), ("m2/nr", "[m^2 nr^-1]", 1.0), ("SAR/nr*nr", "currency", 1.0),
+    ("nr*SAR/nr", "currency", 1.0),
 ])
 def test_parse_compound_unit_multiplies_out_a_product_or_quotient_of_units(unit, dimension, scale):
     from app.agents.base.formulas.construction_formulas_planning import parse_compound_unit

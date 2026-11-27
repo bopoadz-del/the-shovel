@@ -1,0 +1,66 @@
+{
+  "_note": "The SSE 'end' event of a real catalogue-path turn (app.agents.driver.loop.stream, scripted model): a chain that stopped on a missing input and asked for it; one given was written by the model and not checked. Recorded by tests/test_driver_catalogue_path.py::test_the_panel_fixtures_are_real_end_events, which re-runs the turn and compares. The turn and conversation ids in it are the recording's own.",
+  "content": "What is the pit plan area?",
+  "ended": "asked_input",
+  "provenance": [],
+  "sheet": {
+    "turn": "ws-rec-2@1795807812758",
+    "question": "the pit is 1.75 m deep; work out the loose excavation volume",
+    "givens": [
+      {
+        "id": "g1",
+        "what": "pit depth",
+        "value": 1.75,
+        "unit": "m",
+        "source": "user",
+        "checked": "user"
+      },
+      {
+        "id": "g2",
+        "what": "bulking factor",
+        "value": 1.25,
+        "unit": "-",
+        "source": "general knowledge"
+      }
+    ],
+    "plan": [
+      {
+        "id": "s1",
+        "entry": "formula:arithmetic_step",
+        "inputs": {
+          "operator": "multiply",
+          "a": "g1"
+        }
+      },
+      {
+        "id": "s2",
+        "entry": "formula:arithmetic_step",
+        "inputs": {
+          "operator": "multiply",
+          "a": "s1",
+          "b": "g2"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "call_id": "c2",
+        "entry": "formula:arithmetic_step",
+        "status": "waiting_input",
+        "needs": [
+          "second value"
+        ]
+      }
+    ],
+    "missing": [
+      {
+        "for": "s1",
+        "input": "b",
+        "label": "pit plan area",
+        "asked": true
+      }
+    ],
+    "done": false
+  }
+}

@@ -314,6 +314,12 @@ def parse_compound_unit(token: Any) -> Optional[Unit]:
     if whole is None or pos != len(pieces):
         return None
     vec, factor = whole
+    *rest, count = vec
+    if count > 0:
+        # A count says how many there are of what it multiplies: 7 walls of
+        # 7.2 m2 are 50.4 m2, and floors times doors per floor are doors. A
+        # count divided by stays, so a price per item is not money.
+        vec = (*rest, 0 if any(rest) else 1)
     family = _FAMILY_OF_BASE.get(vec)
     if family is not None:
         return Unit(family, factor / _FAMILY_BASE[family][1], 0.0, (), str(token))
