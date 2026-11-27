@@ -110,6 +110,15 @@ def test_a_positive_due_carries_no_deduction_note(work, prev):
     assert "note" not in r
 
 
+@pytest.mark.parametrize("work,rate", [(200_000, 10), (3_000_000, 5)])
+def test_earlier_certificates_equal_to_net_give_nil_due_and_no_note(work, rate):
+    # boundary: earlier certificates exactly equal to the net to date
+    prev = work - work * rate / 100.0
+    r = interim_payment_to_date(work, rate, prev)
+    assert r["amount_due"] == 0
+    assert "note" not in r
+
+
 @pytest.mark.parametrize("prev", [0, 25_000])
 def test_the_retention_rate_has_no_default(prev):
     r = interim_payment_to_date(100_000, None, prev)
