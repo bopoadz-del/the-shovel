@@ -1250,3 +1250,26 @@ def test_a_page_read_without_its_context_is_asked_again_once_the_page_before_is_
 def test_not_read_causes_counts_a_failed_call_and_a_reply_without_lines_apart(errors, replies, want):
     plan = {"pages_not_read_why": {"1": {bpr.ERRORS_KEY: errors, "replies": replies}}}
     assert bpo.not_read_causes(plan) == want
+
+
+@pytest.mark.parametrize("document, path", [({}, None), ({"id": "d7"}, None), (None, "")])
+def test_production_model_read_says_so_when_the_documents_bytes_are_not_found(tmp_path, monkeypatch, document, path):
+    """No bytes to render a page from is an error named as such, never a page
+    sent to the model without its image."""
+    from app.core import llm_client, projects
+
+    monkeypatch.setattr(projects, "get_document", lambda d: document)
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: path)
+    asked: list[int] = []
+
+    async def complete(messages, **kw):
+        asked.append(1)
+        return json.dumps({"lines": [{"type": "item", "bill": "A", "amount": 1}]})
+
+    monkeypatch.setattr(llm_client, "complete", complete)
+    monkeypatch.setattr(bpr, "render_page_png", lambda p, i: b"png")
+    rows_of, _states_of = bpo.production_model_read("d7", str(tmp_path / "wd"), 0.5)
+    with pytest.raises(OSError, match="document bytes not found"):
+        rows_of([_Page(0)])
+    assert asked == []
+
