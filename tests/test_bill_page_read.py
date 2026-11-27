@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -187,6 +188,18 @@ def _rows(pages):
     return bpr.rows_from_page_reads(pages).rows
 
 
+def _states(pages, missing, *, spans, tolerance):
+    """``bill_states`` of reads whose every line names the bill whose span
+    holds its page, as the model names it (a page no span holds names none)."""
+    named = {}
+    for key, lines in pages.items():
+        owner = next((sp.label for sp in spans if sp.first_page is not None
+                      and sp.first_page <= int(key) <= sp.last_page), None)
+        named[key] = [dict(ln, bill=owner) if owner and ln.get("type") != "summary"
+                      else ln for ln in lines]
+    return bpr.bill_states(_rows(named), missing, spans=spans, tolerance=tolerance)
+
+
 _TWO_BILLS = {"1": [_item("A", 10, 5, 50), _item("B", 2, 3, 6)],
               "2": [_carried(56)],
               "3": [_item("C", 4, 25, 100), {"type": "item", "description": "lump"}],
@@ -202,7 +215,7 @@ _TWO_BILLS = {"1": [_item("A", 10, 5, 50), _item("B", 2, 3, 6)],
 def test_each_bill_is_checked_against_its_printed_total(printed_one, printed_two,
                                                         want_one, want_two):
     spans = [bpr.BillSpan("one", 1, 2, printed_one), bpr.BillSpan("two", 3, 4, printed_two)]
-    got = bpr.bill_states(_rows(_TWO_BILLS), [], spans=spans, tolerance=0.5)
+    got = _states(_TWO_BILLS, [], spans=spans, tolerance=0.5)
     one, two = got["bills"]
     assert (one["state"], two["state"]) == (want_one, want_two)
     # only item rows are summed: the carried line on page 2 is a row, not an item
@@ -219,7 +232,7 @@ def test_each_bill_is_checked_against_its_printed_total(printed_one, printed_two
 ])
 def test_bill_with_a_page_not_read_is_not_read(missing, want):
     spans = [bpr.BillSpan("one", 1, 2, 56), bpr.BillSpan("two", 3, 4, 100)]
-    got = bpr.bill_states(_rows(_TWO_BILLS), missing, spans=spans, tolerance=0)
+    got = _states(_TWO_BILLS, missing, spans=spans, tolerance=0)
     assert [b["state"] for b in got["bills"]] == want
     assert [b["pages_not_read"] for b in got["bills"]] == [
         [p for p in missing if 1 <= p <= 2], [p for p in missing if 3 <= p <= 4]]
@@ -229,7 +242,7 @@ def test_bill_with_a_page_not_read_is_not_read(missing, want):
 def test_bill_with_a_flagged_row_fails_even_when_the_sum_matches(bad_amount):
     pages = {"1": [_item("A", 10, 5, bad_amount)]}
     printed = 57 if bad_amount == 57 else 0
-    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 1, printed)],
+    got = _states(pages, [], spans=[bpr.BillSpan("b", 1, 1, printed)],
                           tolerance=0)
     (b,) = got["bills"]
     assert b["rows_flagged"] == 1
@@ -239,7 +252,7 @@ def test_bill_with_a_flagged_row_fails_even_when_the_sum_matches(bad_amount):
 @pytest.mark.parametrize("tolerance, want", [(0.99, bpr.STATE_FAILED),
                                              (1, bpr.STATE_RECONCILED)])
 def test_tolerance_boundary_is_inclusive(tolerance, want):
-    got = bpr.bill_states(_rows({"1": [_item("A", 10, 5, 50)]}), [],
+    got = _states({"1": [_item("A", 10, 5, 50)]}, [],
                           spans=[bpr.BillSpan("b", 1, 1, 51)], tolerance=tolerance)
     assert got["bills"][0]["state"] == want
     assert got["bills"][0]["diff"] == -1
@@ -265,7 +278,7 @@ def _unpriced(ref, q, **kw):
     ({"1": [_unpriced("A", None, rate=None, amount="")], "2": [_unpriced("C", 7)]}, 25),
 ])
 def test_bill_with_blank_money_columns_is_total_only(pages, printed):
-    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 2, printed)],
+    got = _states(pages, [], spans=[bpr.BillSpan("b", 1, 2, printed)],
                           tolerance=0)
     (b,) = got["bills"]
     assert b["state"] == bpr.STATE_TOTAL_ONLY
@@ -289,7 +302,7 @@ def test_bill_with_blank_money_columns_is_total_only(pages, printed):
 ])
 def test_total_only_does_not_fire_when_a_price_or_total_says_otherwise(pages, printed,
                                                                        want):
-    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 1, printed)],
+    got = _states(pages, [], spans=[bpr.BillSpan("b", 1, 1, printed)],
                           tolerance=0)
     assert got["bills"][0]["state"] == want
 
@@ -297,7 +310,7 @@ def test_total_only_does_not_fire_when_a_price_or_total_says_otherwise(pages, pr
 @pytest.mark.parametrize("missing", [[1], [2]])
 def test_total_only_bill_with_a_page_not_read_is_not_read(missing):
     pages = {"1": [_unpriced("A", 3)], "2": [_unpriced("B", 4)]}
-    got = bpr.bill_states(_rows(pages), missing, spans=[bpr.BillSpan("b", 1, 2, 9)],
+    got = _states(pages, missing, spans=[bpr.BillSpan("b", 1, 2, 9)],
                           tolerance=0)
     assert got["bills"][0]["state"] == bpr.STATE_NOT_READ
 
@@ -816,3 +829,57 @@ def test_row_keeps_the_bill_its_line_names_and_it_is_not_money(bill, own):
     assert not bpr._carries_money(row)
     priced = bpr.rows_from_page_reads({"1": [{**line, "amount": 5}]}).rows[0]
     assert bpr._carries_money(priced)
+
+
+# --- the page before's ending, given to the model; code never places a row --
+
+
+@pytest.mark.parametrize("entry, want", [
+    ([_item("A", 1, 1, 1, bill="Bill 3"), _item("B", 1, 1, 1, bill="Bill 4")], "Bill 4"),
+    ([_item("A", 1, 1, 1, bill="Bill 3"), _item("B", 1, 1, 1)], "Bill 3"),
+    # a summary line lists a whole bill's total: not where the page's text ends
+    ([_item("A", 1, 1, 1, bill="Bill 3"), {"type": "summary", "bill": "Bill 9"}], "Bill 3"),
+    # must not fire: no line names a bill, the page was not read, an empty read
+    ([_item("A", 1, 1, 1)], None),
+    (None, None),
+    ([], None),
+    ({bpr.NOT_READ_KEY: True}, None),
+])
+def test_bill_ended_is_the_last_bill_a_line_of_the_read_names(entry, want):
+    assert bpr.bill_ended(entry) == want
+
+
+@pytest.mark.parametrize("before, added", [
+    ("Bill 2", True), ("B-7 Drainage", True), (None, False), ("", False), ("  ", False),
+])
+def test_prompt_carries_the_page_before_only_when_it_named_a_bill(before, added):
+    got = bpr.prompt_for("PROMPT.", before)
+    want = "PROMPT." + (bpr.PAGE_READ_BEFORE.format(bill=json.dumps(before)) if added else "")
+    assert got == want
+
+
+@pytest.mark.parametrize("pages, want_before", [
+    ({0: [_item("A", 1, 1, 1, bill="X")], 1: [_item("B", 1, 1, 1)],
+      2: [_item("C", 1, 1, 1, bill="Y")]}, [None, "X", None]),  # page 2 named none: nothing carried
+    ({0: None, 1: [_item("B", 1, 1, 1, bill="Y")], 2: [_item("C", 1, 1, 1)]},
+     [None, None, "Y"]),
+])
+def test_pages_are_read_in_order_each_with_the_bill_before_it(pages, want_before):
+    seen = []
+
+    def read_page(page):
+        seen.append((page.index, page.bill_before))
+        return pages[page.index]
+
+    reads = [SimpleNamespace(index=i) for i in reversed(range(len(pages)))]
+    bpr.rows_of_model_reads(read_page)(reads)
+    assert seen == list(enumerate(want_before))
+
+
+@pytest.mark.parametrize("label, unnamed", [("!!", 2), ("  ", 1)])
+def test_a_label_with_no_bill_in_it_collects_no_unnamed_row(label, unnamed):
+    rows = _rows({"1": [_item(str(i), 1, 1, 1) for i in range(unnamed)]})
+    (bill,) = bpr.bill_states(rows, [], spans=[bpr.BillSpan(label, 1, 1, 1)],
+                              tolerance=0)["bills"]
+    assert (bill["rows"], bill["rows_unplaced"], bill["state"]) == (
+        0, unnamed, bpr.STATE_NOT_CHECKED)

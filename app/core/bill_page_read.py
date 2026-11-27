@@ -185,6 +185,34 @@ def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -
     )
 
 
+@dataclass(frozen=True)
+class PageInContext:
+    """A page to read with what the page before it ended on: the bill the
+    model's read of that page last named (``bill_before``), or ``None`` when
+    there is no page before, it was not read, or its read named no bill."""
+
+    index: int
+    source: str = ""
+    words: tuple = ()
+    bill_before: str | None = None
+
+
+def bill_ended(entry: Any) -> str | None:
+    """The bill the last line of a page read names, as printed; ``None`` when
+    the page was not read or no line of it names a bill (summary lines list a
+    whole bill's total and are not where the page's text runs to)."""
+    lines = read_lines(entry)
+    if lines is None:
+        return None
+    for line in reversed(lines):
+        if _text(line.get("type")).lower() == SUMMARY:
+            continue
+        bill = _text(line.get(BILL_KEY))
+        if bill:
+            return bill
+    return None
+
+
 def rows_of_model_reads(
     read_page: Callable[[Any], Any], bill_label: str = "",
 ) -> Callable[[Sequence[Any]], tuple[list[g.BillRow], list[int], dict[str, Any]]]:
@@ -195,12 +223,23 @@ def rows_of_model_reads(
     READ). The rows and the 1-based pages not read are what
     :func:`rows_from_page_reads` gives for those pages; the third value is
     every reply exactly as the model gave it, by 1-based page, so the copy
-    keeps the raw output beside the rows it accepted."""
+    keeps the raw output beside the rows it accepted.
+
+    Pages are read in order, and each is handed over as a
+    :class:`PageInContext` carrying the bill the read of the page before it
+    ended on (:func:`bill_ended`), so the model, not code, says which bill
+    the lines of a page that does not print its bill continue."""
 
     def rows_of(
         page_reads: Sequence[Any],
     ) -> tuple[list[g.BillRow], list[int], dict[str, Any]]:
-        pages = {str(r.index + 1): read_page(r) for r in page_reads}
+        pages: dict[str, Any] = {}
+        before: str | None = None
+        for r in sorted(page_reads, key=lambda pr: pr.index):
+            got = read_page(PageInContext(r.index, getattr(r, "source", ""),
+                                          tuple(getattr(r, "words", ()) or ()), before))
+            pages[str(r.index + 1)] = got
+            before = bill_ended(got)
         got = rows_from_page_reads(pages, bill_label)
         return got.rows, got.pages_not_read, pages
 
@@ -236,6 +275,21 @@ PAGE_READ_PROMPT = (
     "separators. Use null for anything not printed; never calculate or guess "
     "a figure."
 )
+
+
+#: Added to the instruction when the page before was read and its last line
+#: named a bill: the model says which lines continue it; code never does.
+PAGE_READ_BEFORE = (
+    " The page before this one ended in bill {bill}. A line of this page that "
+    "continues that bill gives it in bill; a line under a new bill gives the "
+    "new one."
+)
+
+
+def prompt_for(prompt: str, bill_before: Any) -> str:
+    """``prompt`` with the page before's last bill added when there is one."""
+    bill = _text(bill_before)
+    return prompt + PAGE_READ_BEFORE.format(bill=json.dumps(bill)) if bill else prompt
 
 
 def page_read_messages(prompt: str, png: bytes) -> list[dict[str, Any]]:
@@ -316,7 +370,9 @@ def model_page_reader(
         raise ValueError("attempts must be at least 1")
 
     def read_page(page_read: Any) -> Any:
-        messages = page_read_messages(prompt, render_png(page_read.index))
+        messages = page_read_messages(
+            prompt_for(prompt, getattr(page_read, "bill_before", None)),
+            render_png(page_read.index))
         replies: list[str] = []
         errors: list[str] = []
         for _ in range(attempts):
@@ -376,7 +432,9 @@ STATE_FAILED = "FAILED"
 STATE_UNCHECKED = "UNCHECKED"
 STATE_NOT_READ = "NOT READ"
 STATE_TOTAL_ONLY = "TOTAL ONLY"
-STATE_NOT_PLACED = "NOT PLACED"
+#: A bill some item row could belong to that the model named no bill for:
+#: code cannot check its sum, so it is never FAILED for those rows.
+STATE_NOT_CHECKED = "NOT CHECKED"
 
 
 @dataclass(frozen=True)
@@ -394,7 +452,7 @@ class BillSpan:
     pages_unread_reach: tuple[int, ...] = ()
     #: Read pages holding item lines that name no bill and that no bill's range
     #: holds (or a page naming two bills), which this bill could own. Code
-    #: cannot place those rows, so the bill is NOT PLACED, never FAILED.
+    #: cannot place those rows, so the bill is NOT CHECKED, never FAILED.
     pages_unplaced_reach: tuple[int, ...] = ()
 
 
@@ -418,9 +476,8 @@ def bill_states(
 ) -> dict[str, Any]:
     """Per bill, the check of its item rows against its printed total.
 
-    A row whose line names a bill belongs to that bill; a row naming none (and
-    every summary row) belongs to the bill whose page range holds its source
-    page. Only
+    A row belongs to the bill its own line names (the model's read, line by
+    line); code never moves a row into a bill by its page. Only
     rows the model typed ``item`` are summed. The state is ``NOT READ`` when a
     page of the bill was not read, ``UNCHECKED`` when the bill prints no total,
     ``TOTAL ONLY`` when the bill prints a total and has item rows but not one
@@ -428,10 +485,12 @@ def bill_states(
     column of its own): the document prints no item prices for that bill.
     ``FAILED`` when the item sum differs from the printed total by more than
     ``tolerance`` (the caller states it from the bill's own rounding) or any
-    row of the bill is flagged, else ``RECONCILED``. A bill with a read page of
-    item rows code could not place (``pages_unplaced_reach``) is ``NOT PLACED``:
-    its sum is not the document's, so it is never FAILED for them. Rows under no bill are
-    counted, never moved into one. Figures are read, never repaired."""
+    row of the bill is flagged, else ``RECONCILED``. An item row whose line
+    names no bill could belong to every bill whose range holds its page or
+    that reaches it (``pages_unplaced_reach``): each such bill is ``NOT
+    CHECKED`` with the count (``rows_unplaced``), never FAILED for them. Rows
+    under no bill are counted, never moved into one. Figures are read, never
+    repaired."""
     out: list[dict[str, Any]] = []
     placed: set[int] = set()
     missing = set(pages_not_read)
@@ -439,9 +498,13 @@ def bill_states(
     for span in spans:
         ranged = span.first_page is not None and span.last_page is not None
         key = _bill_key(span.label)
-        members = [i for i, r in enumerate(rows)
-                   if (own[i] == key if own[i] else
-                       ranged and span.first_page <= r.source_page <= span.last_page)]
+        members = [i for i in range(len(rows)) if own[i] and own[i] == key]
+        reach = set(span.pages_unplaced_reach)
+        rows_unplaced = sum(
+            1 for i, r in enumerate(rows)
+            if not own[i] and _text(r.extra.get(LINE_TYPE_LABEL)).lower() == ITEM
+            and ((ranged and span.first_page <= r.source_page <= span.last_page)
+                 or r.source_page in reach))
         placed.update(members)
         items_sum = 0.0
         summed = without = flagged = items = priced = 0
@@ -466,8 +529,8 @@ def bill_states(
         unplaced = sorted(span.pages_unplaced_reach)
         if not_read:
             state = STATE_NOT_READ
-        elif unplaced:
-            state = STATE_NOT_PLACED
+        elif rows_unplaced:
+            state = STATE_NOT_CHECKED
         elif diff is None:
             state = STATE_UNCHECKED
         elif items and not priced and not flagged:
@@ -483,6 +546,7 @@ def bill_states(
                     "item_rows_priced": priced,
                     "items_sum": items_sum, "printed_total": printed, "diff": diff,
                     "pages_not_read": not_read, "pages_unplaced": unplaced,
+                    "rows_unplaced": rows_unplaced,
                     "state": state})
     return {"bills": out, "rows_unassigned": len(rows) - len(placed)}
 
@@ -498,7 +562,7 @@ def _bill_key(value: Any) -> str:
 
 def _row_bill(row: g.BillRow) -> str:
     """The bill a row's own line names (compared form); empty for a summary row,
-    which lists a bill's total and is placed by its page like before."""
+    which lists a bill's total and is no row of that bill."""
     if _text(row.extra.get(LINE_TYPE_LABEL)).lower() == SUMMARY:
         return ""
     return _bill_key(row.extra.get(BILL_LABEL))
@@ -547,7 +611,7 @@ def spans_from_page_reads(pages: Mapping[Any, Any]) -> SpanRead:
     no bill on a page no bill's range holds, or on a page naming two bills,
     are rows code cannot place: every bill that could own them keeps the page
     (``pages_unplaced_reach``, the same reach as an unread page; a page naming
-    two bills is reached by those two), so the bill is NOT PLACED, not FAILED.
+    two bills is reached by those two), so the bill is NOT CHECKED, not FAILED.
     Item lines that do name their bill are placed by that name
     (``bill_states``), wherever the page sits."""
     out = SpanRead()

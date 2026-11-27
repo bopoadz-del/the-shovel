@@ -874,7 +874,7 @@ def _none(amount):
     ("10", False, {"reconciled": 2}),
     ("11", False, {"reconciled": 1, "failed": 1}),
     # an item on that page that names no bill could be either bill's
-    ("10", True, {"not_placed": 2}),
+    ("10", True, {"not_checked": 2}),
 ])
 def test_page_shared_by_two_bills_places_each_line_by_the_bill_it_names(
         tmp_path, monkeypatch, total_b, unnamed_on_split, want):
@@ -892,20 +892,20 @@ def test_page_shared_by_two_bills_places_each_line_by_the_bill_it_names(
 
 
 @pytest.mark.parametrize("reads, pages, want, unplaced", [
-    # the bill's last page prints no bill name: NOT PLACED, never FAILED
+    # the bill's last page prints no bill name: NOT CHECKED, never FAILED
     ({0: [_a("10")], 1: [_a("10")], 2: [_none("10")],
-      3: [_line("summary", "Bill A", "30")]}, 4, {"not_placed": 1}, {"Bill A": [3]}),
+      3: [_line("summary", "Bill A", "30")]}, 4, {"not_checked": 1}, {"Bill A": [3]}),
     ({0: [_none("7")], 1: [_a("10")], 2: [_a("10")],
-      3: [_line("summary", "Bill A", "27")]}, 4, {"not_placed": 1}, {"Bill A": [1]}),
-    # between two bills: either could own it, so both are NOT PLACED
+      3: [_line("summary", "Bill A", "27")]}, 4, {"not_checked": 1}, {"Bill A": [1]}),
+    # between two bills: either could own it, so both are NOT CHECKED
     ({0: [_a("10")], 1: [_none("4")], 2: [_b("5")],
       3: [_line("summary", "Bill A", "10"), _line("summary", "Bill B", "5")]}, 4,
-     {"not_placed": 2}, {"Bill A": [2], "Bill B": [2]}),
+     {"not_checked": 2}, {"Bill A": [2], "Bill B": [2]}),
     # no page names a bill: the summary's bill reaches every unplaced page
     ({0: [_none("10")], 1: [_none("20")], 2: [_line("summary", "Bill A", "30")]}, 3,
-     {"not_placed": 1}, {"Bill A": [1, 2]}),
+     {"not_checked": 1}, {"Bill A": [1, 2]}),
 ])
-def test_item_page_naming_no_bill_outside_every_range_is_not_placed(
+def test_item_page_naming_no_bill_outside_every_range_is_not_checked(
         tmp_path, monkeypatch, reads, pages, want, unplaced):
     rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
     assert rc == 0 and rep["bill_state_counts"] == want
@@ -913,27 +913,83 @@ def test_item_page_naming_no_bill_outside_every_range_is_not_placed(
     assert got == unplaced
 
 
+@pytest.mark.parametrize("reads, pages, want_sum", [
+    # inside the bill's own range an item naming no bill is still not placed:
+    # the model, not the page range, says which bill a line is; never FAILED
+    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, 20),
+    ({0: [_a("10")], 1: [_none("10"), _none("3")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "25")]}, 4, 20),
+])
+def test_item_naming_no_bill_inside_a_range_is_not_checked_with_its_count(
+        tmp_path, monkeypatch, reads, pages, want_sum):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == {"not_checked": 1}
+    (bill,) = saved["bill_states"]["bills"]
+    assert bill["items_sum"] == want_sum
+    assert bill["rows_unplaced"] == len(reads[1])
+    assert saved["bill_states"]["rows_unassigned"] == len(reads[1]) + 1  # + the summary line
+
+
 @pytest.mark.parametrize("reads, pages, want", [
-    # inside the bill's own range a page naming no bill is the bill's: checked
-    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+    # the model names the bill each line continues: checked, both ways
+    ({0: [_a("10")], 1: [_a("10")], 2: [_a("10")],
       3: [_line("summary", "Bill A", "30")]}, 4, {"reconciled": 1}),
-    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+    ({0: [_a("10")], 1: [_a("10")], 2: [_a("10")],
       3: [_line("summary", "Bill A", "25")]}, 4, {"failed": 1}),
     # a page of headings or sums that name no bill holds no item: still checked
     ({0: [_a("10")], 1: [_a("10")],
       2: [_line("total", None, "20"), _line("heading", None, None, description="h")],
       3: [_line("summary", "Bill A", "20")]}, 4, {"reconciled": 1}),
-    # a page inside one bill's range is that bill's: never reach for a bill
-    # the summary lists with no page
-    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
-      3: [_line("summary", "Bill A", "30"), _line("summary", "Bill C", "5")]}, 4,
-     {"reconciled": 1}),
 ])
-def test_page_naming_no_bill_does_not_unplace_a_bill_it_cannot_change(
+def test_rows_the_model_placed_are_checked_and_no_item_page_unplaces_nothing(
         tmp_path, monkeypatch, reads, pages, want):
     rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
     assert rc == 0 and rep["bill_state_counts"] == want
-    assert all(b["pages_unplaced"] == [] for b in saved["bill_states"]["bills"])
+    assert all(b["pages_unplaced"] == [] and b["rows_unplaced"] == 0
+               for b in saved["bill_states"]["bills"])
+
+
+@pytest.mark.parametrize("ending", ["Bill A", "Bill 7"])
+def test_each_page_is_read_with_the_bill_the_page_before_ended_on(
+        tmp_path, monkeypatch, ending):
+    """Through main: page 2's prompt carries the bill page 1's last line names;
+    page 1 (no page before) and page 4 (the page before was not read) carry none."""
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    replies = {
+        0: {"lines": [_line("item", "Bill 0", "5", quantity="1", rate="5"),
+                      _line("item", ending, "4", quantity="1", rate="4"),
+                      _line("summary", "Bill Z", "9")]},
+        1: {"lines": [_line("item", None, "6", quantity="1", rate="6")]},
+        2: None,
+        3: {"lines": [_line("item", None, "1", quantity="1", rate="1")]},
+    }
+    prompts: dict[int, str] = {}
+
+    def model_read(doc, wd, tol):
+        calls: dict[str, int] = {}
+
+        def render(i):
+            calls["i"] = i
+            return b"png"
+
+        def asking(messages):
+            i = calls["i"]
+            prompts[i] = messages[0]["content"][0]["text"]
+            reply = replies[i]
+            return "" if reply is None else json.dumps(reply)
+
+        reader = bpr.model_page_reader(asking, render)
+        return bpr.model_bill_read(bpr.saved_page_reader(reader, wd), tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    bpo.main_from_env(_model_env(tmp_path), deps=deps)
+    added = bpr.PAGE_READ_BEFORE.format(bill=json.dumps(ending))
+    assert prompts[1] == bpr.PAGE_READ_PROMPT + added
+    assert prompts[0] == prompts[2] == prompts[3] == bpr.PAGE_READ_PROMPT
 
 
 def _status_error(code: int) -> httpx.HTTPStatusError:

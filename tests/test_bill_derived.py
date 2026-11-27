@@ -733,6 +733,7 @@ def test_bill_states_are_planned_hashed_and_stored_with_the_copy(tmp_path, monke
     docs.install(monkeypatch, tmp_path)
     reads = {0: [_line("A", 10, 5), _line("B", 3, 7)], 1: [_line("C", 2, 50)],
              2: [_line("D", 0, 9)]}
+    reads = {p: [{**ln, "bill": "all"} for ln in lines] for p, lines in reads.items()}
     kw = {"classify": _BILL, "page_source": _blank_pages()}
     states = functools.partial(bpr.bill_states, tolerance=0,
                                spans=[bpr.BillSpan("all", 1, 3, printed)])
@@ -773,7 +774,8 @@ def test_planned_states_see_the_pages_not_read(tmp_path, monkeypatch, unread_ind
 
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
-    reads = {0: [_line("A", 10, 5)], 1: [_line("B", 2, 50)], 2: [_line("C", 1, 1)]}
+    reads = {0: [{**_line("A", 10, 5), "bill": "first"}],
+             1: [{**_line("B", 2, 50), "bill": "rest"}], 2: [{**_line("C", 1, 1), "bill": "rest"}]}
     reads[unread_index * 2] = None  # page 1 or page 3 not read
     spans = [bpr.BillSpan("first", 1, 1, 50), bpr.BillSpan("rest", 2, 3, 101)]
     plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads),
@@ -835,3 +837,18 @@ def test_geometry_copy_keeps_no_raw_output(tmp_path, monkeypatch, build):
     (row,) = docs.added
     assert "raw_reads" not in row["metadata"]
     assert not list(tmp_path.glob("*.raw.json"))
+
+
+@pytest.mark.parametrize("raw", [None, [{"not_read": True}], "page 1"])
+def test_why_not_read_of_a_raw_that_is_no_mapping_is_empty(raw):
+    assert bd._why_not_read(raw, [1, 2]) == {}
+
+
+@pytest.mark.parametrize("raw, not_read, want", [
+    ({"1": {"not_read": True, "errors": ["HTTPStatusError:401"]}, "2": [{"type": "item"}]},
+     [1, 2], {"1": {"not_read": True, "errors": ["HTTPStatusError:401"]}}),
+    ({"3": {"not_read": True, "errors": []}}, [3], {"3": {"not_read": True, "errors": []}}),
+    ({"3": {"not_read": True}}, [], {}),
+])
+def test_why_not_read_keeps_the_readers_entry_of_each_page_not_read(raw, not_read, want):
+    assert bd._why_not_read(raw, not_read) == want
