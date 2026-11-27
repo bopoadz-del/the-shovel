@@ -279,6 +279,7 @@ def _classify(items: Sequence[SheetRow]) -> tuple[list[str], set[int]]:
 STATE_RECONCILED = "RECONCILED"
 STATE_FAILED = "FAILED"
 STATE_UNCHECKED = "UNCHECKED"
+STATE_NOT_PRICED = "NOT_PRICED"
 
 
 def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[str, Any]]:
@@ -294,9 +295,13 @@ def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[st
       collection whose covered lines all print only an amount (the page
       totals a collection page lists), the last such line of the bill by
       page. No word of the line is read;
-    * ``state`` -- ``UNCHECKED`` when the bill prints no such line,
-      ``RECONCILED`` when ``items_sum`` equals it within one unit of the
-      printed total's own last place, ``FAILED`` otherwise.
+    * ``state`` -- ``NOT_PRICED`` when the bill has item rows and not one of
+      them prints a rate or an amount: the document prints no item prices for
+      this bill, so there is nothing to add up and nothing lost in the read
+      (any printed total is still reported). Otherwise ``UNCHECKED`` when the
+      bill prints no such line, ``RECONCILED`` when ``items_sum`` equals it
+      within one unit of the printed total's own last place, ``FAILED``
+      otherwise.
 
     The sum of a bill that does not reconcile is never stated as the bill's
     total: the state goes with it.
@@ -305,7 +310,10 @@ def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[st
     out: list[dict[str, Any]] = []
     for bill in sorted({_bill_number(b) for b in bills}):
         mine = [i for i, row in enumerate(items) if bill in row_bills(row)]
-        amounts = [g.parse_number(items[i].amount) for i in mine if kinds[i] == ROW_ITEM]
+        item_rows = [items[i] for i in mine if kinds[i] == ROW_ITEM]
+        amounts = [g.parse_number(row.amount) for row in item_rows]
+        priced = any(g.parse_number(row.rate) is not None or a is not None
+                     for row, a in zip(item_rows, amounts))
         summed = [a for a in amounts if a is not None]
         total = sum(summed)
         lines = sorted((i for i in mine if i in summaries), key=lambda i: items[i].pages[-1])
@@ -325,6 +333,8 @@ def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[st
             check["printed_page"] = line.pages[-1]
             check["state"] = (STATE_RECONCILED if _same_figure(total, printed, _last_place(line.amount))
                               else STATE_FAILED)
+        if item_rows and not priced:
+            check["state"] = STATE_NOT_PRICED
         out.append(check)
     return out
 

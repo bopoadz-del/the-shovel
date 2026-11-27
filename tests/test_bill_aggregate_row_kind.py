@@ -334,3 +334,49 @@ def test_a_description_split_by_the_page_break_still_joins(head):
     rows = [_r(1, "Supply and fix", ref="A"), _r(2, "pipes complete", amount, qty, rate, ref=ref)]
     [one] = agg.join_page_continuations(rows)
     assert (one.amount, one.pages) == (amount, [1, 2])
+
+
+# --- a bill the document prints no item prices for ---------------------------
+
+def _unpriced(n, qtys, *, total=None):
+    """Bill ``n``: item rows with a quantity (or none) and blank money cells."""
+    path = (f"Bill No. {n} - Works",)
+    rows = [_r(30 + k, f"item {k}", "", q, "", path=path) for k, q in enumerate(qtys)]
+    if total is not None:   # a figure printed for the bill with no item price under it
+        rows.append(_r(40, "bill total", total, path=path))
+    return rows
+
+
+@pytest.mark.parametrize("n, qtys", [("1", ["1", "1", ""]), ("14", ["", "250"])])
+def test_bill_with_no_rate_or_amount_on_any_item_is_not_priced(n, qtys):
+    [check] = agg.bill_checks(_unpriced(n, qtys), {n})
+    assert check["state"] == "NOT_PRICED"
+    assert (check["rows_summed"], check["rows_without_amount"]) == (0, len(qtys))
+    assert check["items_sum"] == 0
+
+
+@pytest.mark.parametrize("total", ["5,000", "123.45"])
+def test_an_amount_only_line_prices_the_bill(total):
+    """A line that prints only an amount, with nothing above it to collect, is
+    an item (a lump sum): the bill prints a price, so it is never NOT_PRICED."""
+    [check] = agg.bill_checks(_unpriced("2", ["1", "1"], total=total), {"2"})
+    assert check["state"] == "UNCHECKED"
+    assert check["items_sum"] == agg.g.parse_number(total)
+
+
+@pytest.mark.parametrize("cell", [("rate", "10.00"), ("amount", "75")])
+def test_one_priced_item_makes_the_bill_priced(cell):
+    """A single item that prints a rate or an amount: the document prices the
+    bill, so the blanks are counted as rows without an amount, never NOT_PRICED."""
+    rows = _unpriced("3", ["1", "2", "3"])
+    rows[1] = agg.SheetRow(**{**rows[1].__dict__, cell[0]: cell[1]})
+    [check] = agg.bill_checks(rows, {"3"})
+    assert check["state"] == "UNCHECKED"
+
+
+@pytest.mark.parametrize("n, other", [("1", "7"), ("20", "4")])
+def test_not_priced_is_per_bill(n, other):
+    rows = _unpriced(n, ["1", "1"]) + _bill(other, "300.00", "700.00", "1,000.00", first=50)
+    checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other})}
+    assert checks[n]["state"] == "NOT_PRICED"
+    assert checks[other]["state"] == "RECONCILED"
