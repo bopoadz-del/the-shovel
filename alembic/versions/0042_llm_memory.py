@@ -7,7 +7,7 @@ Primary key (project_id, name): a write replaces the whole document.
 Idempotent: a database that already has the table is left alone.
 
 Revision ID: 0042
-Revises: 0039
+Revises: 0040
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy import inspect
 
 revision = "0042"
-down_revision = "0039"
+down_revision = "0040"
 branch_labels = None
 depends_on = None
 
