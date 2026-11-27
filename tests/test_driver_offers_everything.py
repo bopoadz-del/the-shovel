@@ -107,3 +107,24 @@ def test_a_hat_tool_that_is_a_workflow_has_one_door(monkeypatch, pick):
     assert shared not in names
     others = _hat_tools() - {shared}
     assert others <= set(names)
+
+
+@pytest.mark.parametrize("name", ["invented_driver_tool_a", "invented_driver_tool_b"])
+def test_a_tool_that_declares_it_is_not_for_the_driver_is_not_offered(monkeypatch, name):
+    """``offered`` takes the registry's ``driver`` declaration; it holds no list."""
+    made = []
+    for n, flag in ((name, True), (name + "_off", False)):
+        async def handler(call, agent, ctx):  # never called here
+            return {}
+        schema = {"type": "function", "function": {
+            "name": n, "description": "invented", "parameters": {"type": "object", "properties": {}}}}
+        tool_registry.tool(n, owner="base", display_name=f"Invented {n}", schema=schema,
+                           driver=flag)(handler)
+        made.append(n)
+    try:
+        offered = _offer(monkeypatch, None)
+        assert name in offered
+        assert name + "_off" not in offered
+    finally:
+        for n in made:
+            tool_registry._TOOLS.pop(n, None)
