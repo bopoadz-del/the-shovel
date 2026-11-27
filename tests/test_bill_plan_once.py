@@ -923,6 +923,11 @@ def test_item_page_naming_no_bill_outside_every_range_is_not_placed(
     ({0: [_a("10")], 1: [_a("10")],
       2: [_line("total", None, "20"), _line("heading", None, None, description="h")],
       3: [_line("summary", "Bill A", "20")]}, 4, {"reconciled": 1}),
+    # a page inside one bill's range is that bill's: never reach for a bill
+    # the summary lists with no page
+    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "30"), _line("summary", "Bill C", "5")]}, 4,
+     {"reconciled": 1}),
 ])
 def test_page_naming_no_bill_does_not_unplace_a_bill_it_cannot_change(
         tmp_path, monkeypatch, reads, pages, want):

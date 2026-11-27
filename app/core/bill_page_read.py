@@ -187,7 +187,7 @@ def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -
 
 def rows_of_model_reads(
     read_page: Callable[[Any], Any], bill_label: str = "",
-) -> Callable[[Sequence[Any]], tuple[list[g.BillRow], list[int]]]:
+) -> Callable[[Sequence[Any]], tuple[list[g.BillRow], list[int], dict[str, Any]]]:
     """A ``bill_derived.RowsOfReads`` from a per-page model reader.
 
     ``read_page`` gets one ``bill_classify.PageRead`` (0-based ``index``) and
