@@ -1102,6 +1102,30 @@ def test_no_project_or_no_note_gives_no_index(pid):
     assert context.notes_index(f"empty-{uuid.uuid4().hex[:8]}") == ""
 
 
+@pytest.mark.parametrize("pid", [None, ""])
+def test_no_project_never_reads_the_store_for_an_index(monkeypatch, pid):
+    # A store that would answer with a note: only the missing project keeps it out.
+    from app.agents.driver import context
+    calls = []
+
+    def _listing(project_id, with_review=False):
+        calls.append(project_id)
+        return [{"name": "stray", "bytes": 2, "written_at": "2026-01-01", "review": ""}]
+
+    monkeypatch.setattr(llm_memory, "listing", _listing)
+    assert context.notes_index(pid) == ""
+    assert calls == []
+    assert context.notes_index("some-project").endswith("- stray | 2 bytes | written 2026-01-01 | not verified by the owner")
+    assert calls == ["some-project"]
+
+
+@pytest.mark.parametrize("review,words", [
+    ("kept", "kept by the owner (verified)"), ("", "not verified by the owner"),
+    ("discarded", "not verified by the owner"), (None, "not verified by the owner")])
+def test_verified_words_say_verified_only_for_a_kept_note(review, words):
+    assert llm_memory.verified_words(review) == words
+
+
 @pytest.mark.parametrize("first,second", [({"week": "Saturday to Thursday"}, {"week": "Sunday to Thursday"}),
                                           ({"datum": "+2.35 m"}, {"datum": "+2.40 m"})])
 def test_a_correction_replaces_the_note_and_the_old_value_is_not_returned(first, second):
