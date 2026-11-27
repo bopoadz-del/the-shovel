@@ -74,6 +74,10 @@ class Param:
     hi: Optional[float] = None
     label: str = ""
     grade: str = ""
+    #: The range begins above ``lo``: ``lo`` itself is not accepted ("more
+    #: than 0"). For a quantity that must be positive but has no smallest
+    #: value worth naming.
+    above_lo: bool = False
     #: A tool parameter's type (``number``, ``integer``, ``series``, ``text``,
     #: ``boolean``, ``list``, ``object``); a formula's comes from its signature.
     kind: str = ""
@@ -121,6 +125,7 @@ class ParamSpec:
     required: bool
     default: Any = None
     basis: str = ""
+    above_lo: bool = False
     per: str = ""
 
     @property
@@ -147,6 +152,13 @@ class FormulaSpec:
     #: The published standard / code the formula implements, declared with
     #: the kernel (empty: none declared). Half of what "certified" needs.
     standard: str = ""
+    #: Catalogue declarations (all optional; a missing one is listed in the
+    #: catalogue entry's ``gaps``): when the formula is the right one, when it
+    #: is not and what to use instead -- type-level conditions only -- and
+    #: worked examples with invented figures (``declared_examples``).
+    when_to_use: str = ""
+    when_not: str = ""
+    examples: Tuple[Dict[str, Any], ...] = ()
 
 
 _REGISTRY: Dict[str, FormulaSpec] = {}
@@ -192,6 +204,9 @@ def formula(
     main_output: str = "",
     required_groups: Tuple[Tuple[str, ...], ...] = (),
     standard: str = "",
+    when_to_use: str = "",
+    when_not: str = "",
+    examples: Tuple[Dict[str, Any], ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Declare a formula. Raises at import on an unknown owner, an empty
     description, an empty display name or a duplicate name -- a formula
@@ -208,6 +223,7 @@ def formula(
 
     def _register(fn: Callable[..., Any]) -> Callable[..., Any]:
         key = name or fn.__name__
+        shown = declared_examples("formula", key, examples)
         existing = _REGISTRY.get(key)
         if existing is not None and existing.fn is not fn:
             raise ValueError(f"formula {key!r} is declared twice")
@@ -217,11 +233,46 @@ def formula(
                                      {k: p.unit for k, p in params.items()},
                                      dict(outputs), params, main_output,
                                      tuple(tuple(g) for g in required_groups),
-                                     (standard or "").strip())
+                                     (standard or "").strip(),
+                                     (when_to_use or "").strip(), (when_not or "").strip(),
+                                     shown)
         fn.__formula__ = _REGISTRY[key]  # type: ignore[attr-defined]
         return fn
 
     return _register
+
+
+#: The keys a declared example carries. ``invented`` must be True: an
+#: example's figures are made up for the example, never a document's figure
+#: and never a test question's.
+EXAMPLE_KEYS = ("invented", "given", "chain", "result")
+
+
+def declared_examples(kind: str, name: str, examples: Any) -> Tuple[Dict[str, Any], ...]:
+    """Check a registry entry's declared ``examples``: a sequence of dicts,
+    each with ``invented: True``, a non-empty ``given`` and ``result`` text
+    and an optional ``chain`` list of strings, and no other key. Raises
+    ``ValueError`` at declaration on anything else."""
+    if isinstance(examples, (str, bytes, dict)) or (examples is not None and not hasattr(examples, "__iter__")):
+        raise ValueError(f"{kind} {name!r}: examples must be a sequence of dicts")
+    out = []
+    for example in examples or ():
+        if not isinstance(example, dict):
+            raise ValueError(f"{kind} {name!r}: an example must be a dict")
+        extra = set(example) - set(EXAMPLE_KEYS)
+        if extra:
+            raise ValueError(f"{kind} {name!r}: unknown example keys {sorted(extra)}")
+        if example.get("invented") is not True:
+            raise ValueError(f"{kind} {name!r}: an example must say invented: True")
+        for key in ("given", "result"):
+            if not isinstance(example.get(key), str) or not example[key].strip():
+                raise ValueError(f"{kind} {name!r}: an example needs a {key} text")
+        chain = example.get("chain", [])
+        if not isinstance(chain, (list, tuple)) or not all(isinstance(c, str) for c in chain):
+            raise ValueError(f"{kind} {name!r}: an example's chain is a list of strings")
+        out.append({"invented": True, "given": example["given"].strip(),
+                    "chain": list(chain), "result": example["result"].strip()})
+    return tuple(out)
 
 
 def all_specs() -> List[FormulaSpec]:
@@ -279,12 +330,13 @@ class Constant:
         return self
 
 
-def _range_words(lo: Optional[float], hi: Optional[float], unit: str) -> str:
-    """The declared range as a reader sees it (``1 to 5 ratio``)."""
+def _range_words(lo: Optional[float], hi: Optional[float], unit: str, above_lo: bool = False) -> str:
+    """The declared range as a reader sees it (``1 to 5 ratio``; with a
+    lower bound that is not itself accepted, ``more than 0, up to 5 ratio``)."""
     if lo is not None and hi is not None:
-        span = f"{lo:g} to {hi:g}"
+        span = f"more than {lo:g}, up to {hi:g}" if above_lo else f"{lo:g} to {hi:g}"
     elif lo is not None:
-        span = f"at least {lo:g}"
+        span = f"more than {lo:g}" if above_lo else f"at least {lo:g}"
     else:
         span = f"at most {hi:g}"
     return f"{span} {unit}" if unit and unit != "-" else span
@@ -337,12 +389,12 @@ class KnowledgeConstant:
             value = math.inf
         if not math.isfinite(value):
             raise self._fault(f"field {self.field_path!r} is not a finite number")
-        lo, hi = self.within.lo, self.within.hi
-        if (lo is not None and value < lo) or (hi is not None and value > hi):
+        lo, hi, above = self.within.lo, self.within.hi, self.within.above_lo
+        if (lo is not None and (value <= lo if above else value < lo)) or (hi is not None and value > hi):
             raise self._fault(
                 f"field {self.field_path!r} states {value:g}, outside what the calculator "
                 f"accepts for {self.within.label or 'this input'} "
-                f"({_range_words(lo, hi, self.unit)})"
+                f"({_range_words(lo, hi, self.unit, above)})"
             )
         prov = entry.get("provenance") or {}
         written = prov.get("course_reference") or prov.get("source")
@@ -531,7 +583,7 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
             unit=declared.unit, lo=declared.lo, hi=declared.hi,
             label=declared.label, grade=declared.grade, required=required,
             default=None if no_default else param.default,
-            basis=declared.basis, per=declared.per,
+            basis=declared.basis, above_lo=declared.above_lo, per=declared.per,
         )
     return out
 
@@ -620,7 +672,8 @@ _NO = ("false", "no", "n", "0", "off")
 
 def _rejection(spec: ParamSpec, value: Any, reason: str) -> Dict[str, Any]:
     return {"parameter": spec.name, "label": spec.label, "unit": spec.unit, "value": value,
-            "reason": reason, "lo": spec.lo, "hi": spec.hi, "kind": spec.kind}
+            "reason": reason, "lo": spec.lo, "hi": spec.hi, "kind": spec.kind,
+            "above_lo": spec.above_lo}
 
 
 def _number(value: Any) -> Optional[float]:
@@ -630,7 +683,11 @@ def _number(value: Any) -> Optional[float]:
 
 
 def _in_range(spec: ParamSpec, number: float) -> bool:
-    return (spec.lo is None or number >= spec.lo) and (spec.hi is None or number <= spec.hi)
+    # Written as "is it inside", never "is it outside": NaN compares False to
+    # every bound, so it is inside no range that has one.
+    if spec.lo is not None and not (number > spec.lo if spec.above_lo else number >= spec.lo):
+        return False
+    return spec.hi is None or number <= spec.hi
 
 
 _SI_PREFIX = {"G": 1e9, "M": 1e6, "k": 1e3, "": 1.0, "c": 1e-2, "m": 1e-3}

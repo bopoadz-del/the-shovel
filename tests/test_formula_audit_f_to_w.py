@@ -35,6 +35,7 @@ _AUDIT_SLICE = [
     "generate_doc_number",
     "grout_pressure_calc",
     "guardrail_top_rail_height",
+    "interim_payment_to_date",
     "interior_finishes_takeoff",
     "laser_scan_accuracy",
     "leed_points_estimate",
@@ -45,6 +46,8 @@ _AUDIT_SLICE = [
     "mobilization_cost_estimate",
     "modulus_of_elasticity_concrete",
     "modulus_of_rupture",
+    "monte_carlo_cost_percentiles",
+    "monte_carlo_percentiles",
     "next_ncr_status",
     "pe_unit_convert",
     "plumbing_flow_programme",
@@ -102,9 +105,9 @@ def _err(name: str, *, expect: str = "error", **params):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_audit_slice_matches_live_registry():
-    """sorted(available_calculations())[51:] must stay the owned F–W set (51 = the A–F list, which gained cpm_network,
-    then check_review_timeline and enforce_critical_rules)."""
-    assert available_calculations()[51:] == _AUDIT_SLICE
+    """sorted(available_calculations())[52:] must stay the owned F–W set (52 = the A–F list, which gained cpm_network,
+    then check_review_timeline and enforce_critical_rules, then break_even_point)."""
+    assert available_calculations()[52:] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():
@@ -908,6 +911,42 @@ class TestModulusOfRupture:
         _err("modulus_of_rupture", fck_n_mm2=0)
 
 
+class TestMonteCarloPercentiles:
+    """Items with no spread (low = most likely = high) leave nothing to
+    sample: every trial total is the plain sum, so P50 = P80 = P90 = it."""
+
+    @pytest.mark.parametrize("items,total", [([3, 4.5], 7.5), ([10, 0, 2], 12)])
+    def test_no_spread_gives_the_sum(self, items, total):
+        # 3 + 4.5 = 7.5 and 10 + 0 + 2 = 12 on every trial.
+        r = _ok("monte_carlo_percentiles", low=items, most_likely=items,
+                high=items, iterations=200, seed=5)
+        assert (r["p50"], r["p80"], r["p90"]) == (total, total, total)
+
+    @pytest.mark.parametrize("low,most_likely,high", [
+        ([6], [5], [9]),          # low above most likely
+        ([1, 2], [2, 9], [3, 8]),  # most likely above high
+    ])
+    def test_item_out_of_order_is_error(self, low, most_likely, high):
+        _err("monte_carlo_percentiles", low=low, most_likely=most_likely, high=high)
+
+
+class TestMonteCarloCostPercentiles:
+    """The cost entry: fixed costs (low = most likely = high) sum exactly."""
+
+    @pytest.mark.parametrize("items,total", [([1200, 800], 2000), ([50000], 50000)])
+    def test_no_spread_gives_the_sum(self, items, total):
+        r = _ok("monte_carlo_cost_percentiles", low=items, most_likely=items,
+                high=items, iterations=200, seed=3)
+        assert (r["p50"], r["p80"], r["p90"]) == (total, total, total)
+
+    @pytest.mark.parametrize("low,most_likely,high", [
+        ([900], [800], [1000]),           # low above most likely
+        ([100, 200], [150, 700], [160, 600]),  # most likely above high
+    ])
+    def test_item_out_of_order_is_error(self, low, most_likely, high):
+        _err("monte_carlo_cost_percentiles", low=low, most_likely=most_likely, high=high)
+
+
 _LENGTH_SI = ("m", "meter", "metre")
 _LENGTH_FT = ("ft", "feet", "foot")
 _AREA_SI = ("m2", "m²", "sqm")
@@ -1492,6 +1531,37 @@ def test_audit_progress_kpi(planned, actual, total, want_pp, want_ap, want_var, 
     assert r["spi_progress"] == pytest.approx(want_spi)
 
     _err("progress_kpi", planned_cum=60, actual_cum=45, planned_total=0)
+
+
+# ── interim_payment_to_date ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("params,want", [
+    # FIDIC 14.3 from totals to date. Hand: gross = 800,000 + 20,000 = 820,000;
+    # retention 10% of the work = 80,000; net = 740,000; due = 740,000 - 500,000
+    # = 240,000.
+    (dict(work_value_to_date=800_000, retention_percent=10, previously_certified=500_000,
+          materials_on_site=20_000),
+     {"gross_to_date": 820_000.0, "retention_to_date": 80_000.0, "amount_due": 240_000.0}),
+    # Retention held at its limit and earlier certificates above the net: 10% of
+    # 800,000 = 80,000 > limit 30,000, so 30,000; net = 770,000; due = 770,000
+    # - 900,000 = -130,000, stated negative, never clipped.
+    (dict(work_value_to_date=800_000, retention_percent=10, previously_certified=900_000,
+          retention_limit=30_000),
+     {"gross_to_date": 800_000.0, "retention_to_date": 30_000.0, "amount_due": -130_000.0}),
+])
+def test_audit_interim_payment_to_date(params, want):
+    r = _ok("interim_payment_to_date", **params)
+    for key, value in want.items():
+        assert r[key] == pytest.approx(value), key
+
+
+@pytest.mark.parametrize("dropped", ["work_value_to_date", "retention_percent",
+                                     "previously_certified"])
+def test_audit_interim_payment_to_date_asks_for_a_missing_total(dropped):
+    params = dict(work_value_to_date=800_000, retention_percent=10, previously_certified=500_000)
+    params.pop(dropped)
+    env = _err("interim_payment_to_date", expect="needs_input", **params)
+    assert env["missing"] == [dropped]
 
 
 # ── procedure-rule checks in the F-W range ──────────────────────────────────

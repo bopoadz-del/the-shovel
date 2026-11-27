@@ -1497,7 +1497,7 @@ class ConstructionScheduleMixin:
 
         try:
             from app.lib.pm_computations import (
-                parse_xer_full, compute_cpm,
+                parse_xer_full, run_cpm,
                 resource_histogram as _lib_resource_histogram,
                 CircularDependencyError,
             )
@@ -1565,7 +1565,7 @@ class ConstructionScheduleMixin:
             )
 
         try:
-            cpm_out = compute_cpm(CPMInput(activities=activities))
+            cpm_out = run_cpm(CPMInput(activities=activities))
         except (CircularDependencyError, ValueError) as exc:
             return {
                 "status": "error",
@@ -1810,7 +1810,7 @@ class ConstructionScheduleMixin:
         XER with no crew payload; the chat still needs period buckets.
         """
         try:
-            from app.lib.pm_computations import compute_cpm, CircularDependencyError
+            from app.lib.pm_computations import run_cpm, CircularDependencyError
             from app.schemas.cpm import CPMInput
         except Exception as exc:  # noqa: BLE001
             return {
@@ -1819,7 +1819,7 @@ class ConstructionScheduleMixin:
                 "error": f"pm_computations library unavailable: {exc}",
             }
         try:
-            cpm_out = compute_cpm(CPMInput(activities=activities))
+            cpm_out = run_cpm(CPMInput(activities=activities))
         except (CircularDependencyError, ValueError) as exc:
             return {
                 "status": "error",
@@ -2313,7 +2313,7 @@ class ConstructionScheduleMixin:
         summary dict will have zeros / empty lists.
         """
         from app.lib.pm_computations import (
-            compute_cpm, CircularDependencyError,
+            run_cpm, CircularDependencyError,
         )
         from app.schemas.cpm import (
             Activity as CPMActivity, CPMInput, Dependency,
@@ -2348,7 +2348,7 @@ class ConstructionScheduleMixin:
                 project_start=project_start,
                 calendar=WorkCalendar(),
             )
-            cpm_out = compute_cpm(cpm_input)
+            cpm_out = run_cpm(cpm_input)
         except (CircularDependencyError, ValueError) as exc:
             summary = {
                 "total_duration_days": 0,
@@ -2373,6 +2373,12 @@ class ConstructionScheduleMixin:
                     "total_float_days": r.total_float,
                     "critical": r.is_critical,
                 })
+                # The start date was parsed to date the network; a dated
+                # pass hands its calendar dates back with the day numbers.
+                if r.early_start is not None:
+                    new["early_start_date"] = r.early_start.isoformat()
+                if r.early_finish is not None:
+                    new["early_finish_date"] = r.early_finish.isoformat()
                 if r.is_critical:
                     critical_ids.append(r.id)
             enriched.append(new)
@@ -2382,6 +2388,8 @@ class ConstructionScheduleMixin:
             "critical_path_activity_ids": list(cpm_out.critical_path),
             "critical_count": len(cpm_out.critical_path),
         }
+        if cpm_out.project_finish is not None:
+            summary["project_finish"] = cpm_out.project_finish.isoformat()
         return enriched, summary, None
     # Install-verb keywords: a procurement item links to an activity only when
     # the activity names the equipment AND is an install/erect step — so
@@ -2479,7 +2487,7 @@ class ConstructionScheduleMixin:
         define a phase / sub-phase / activity scaffold; zone multipliers
         scale the activity count toward ``target_count``. Output activities
         carry CPM ES/EF/LS/LF/total_float + critical flag, computed via
-        :func:`app.lib.pm_computations.compute_cpm`.
+        :func:`app.lib.pm_computations.run_cpm`.
 
         Durations are rule-of-thumb working-day defaults. A chat turn like
         ``use 6 days per slab and re-run`` is parsed into

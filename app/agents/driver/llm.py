@@ -16,6 +16,16 @@ DECISION_TEMPERATURE = 0.0
 DECISION_SEED = 7
 
 
+def _unstrict(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """``tool`` without the function's ``strict`` flag, for a provider that
+    does not declare strict tool schemas (``supports_strict_tools``). The
+    schema itself is unchanged and the tool still validates its arguments."""
+    fn = tool.get("function")
+    if not isinstance(fn, dict) or "strict" not in fn:
+        return tool
+    return {**tool, "function": {k: v for k, v in fn.items() if k != "strict"}}
+
+
 def _payload(cfg: Dict[str, Any], agent: Any, messages: List[Dict[str, Any]],
              tools: Optional[List[Dict[str, Any]]], model: str, stream: bool) -> Dict[str, Any]:
     from app.agents.runtime import (
@@ -31,7 +41,7 @@ def _payload(cfg: Dict[str, Any], agent: Any, messages: List[Dict[str, Any]],
         "stream": stream,
     }
     if tools:
-        payload["tools"] = tools
+        payload["tools"] = tools if cfg.get("supports_strict_tools") else [_unstrict(t) for t in tools]
         payload["tool_choice"] = "auto"
         if cfg.get("supports_seed"):
             payload["seed"] = DECISION_SEED

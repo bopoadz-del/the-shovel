@@ -1,0 +1,53 @@
+[
+  {
+    "formula": "monte_carlo_cost_percentiles",
+    "inputs": {
+      "low": [
+        1200,
+        800
+      ],
+      "most_likely": [
+        1200,
+        800
+      ],
+      "high": [
+        1200,
+        800
+      ],
+      "iterations": 200,
+      "seed": 3
+    },
+    "expect": {
+      "p50": 2000,
+      "p80": 2000,
+      "p90": 2000,
+      "most_likely_total": 2000,
+      "probability_within_most_likely_percent": 100
+    },
+    "working": "No cost item has any spread, so every trial total is 1,200 + 800 = 2,000; every percentile is 2,000 and every trial comes in within the most likely total."
+  },
+  {
+    "formula": "monte_carlo_cost_percentiles",
+    "inputs": {
+      "low": [
+        50000
+      ],
+      "most_likely": [
+        50000
+      ],
+      "high": [
+        50000
+      ],
+      "iterations": 100,
+      "seed": 4
+    },
+    "expect": {
+      "p50": 50000,
+      "p90": 50000,
+      "mean": 50000,
+      "min_trial": 50000,
+      "max_trial": 50000
+    },
+    "working": "One fixed cost item of 50,000 on every trial: P50 = P90 = mean = 50,000."
+  }
+]

@@ -65,14 +65,14 @@ class FastTrackAnalyzerBlock(UniversalBlock):
             }
 
         try:
-            from app.lib.pm_computations import compress_schedule, compute_cpm
+            from app.lib.pm_computations import compress_schedule, run_cpm
             from app.schemas.cpm import Activity, CPMInput
 
             act_objects = [
                 Activity(**a) if isinstance(a, dict) else a for a in activities
             ]
             cpm_input = CPMInput(activities=act_objects)
-            baseline = compute_cpm(cpm_input)
+            baseline = run_cpm(cpm_input)
             revised, days_saved = compress_schedule(cpm_input, reductions)
 
             ratios = {

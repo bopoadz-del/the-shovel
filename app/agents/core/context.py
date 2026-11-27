@@ -397,10 +397,11 @@ def _build_messages(
             msgs.append({"role": "system", "content": ctx})
 
     # Remembered agent facts — durable across conversations, scoped to
-    # this project so one project's facts never leak into another.
+    # this project so one project's facts never leak into another. Only the
+    # rows someone confirmed: what the app saved by itself is not a fact.
     try:
         from app.core import agent_memory
-        facts = agent_memory.list_agent_facts(self.name, project_id)
+        facts = agent_memory.list_agent_facts(self.name, project_id, verified_only=True)
     except Exception:
         facts = []
     if facts:

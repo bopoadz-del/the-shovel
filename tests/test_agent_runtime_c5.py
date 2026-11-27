@@ -93,7 +93,7 @@ async def test_chat_injects_project_context(tmp_path, monkeypatch):
     import app.core.projects as store
     proj = store.create_project("C5 Context Project")
     pid = proj["id"]
-    store.set_fact(pid, "contract_value", "7777777")
+    store.set_fact(pid, "contract_value", "7777777", verified_by="u1")
 
     box = {}
     monkeypatch.setattr(Agent, "_call_llm", _llm_capture(box))
@@ -366,7 +366,7 @@ async def test_chat_stream_injects_project_context(tmp_path, monkeypatch):
     import app.core.projects as store
     proj = store.create_project("Stream Context Project")
     pid = proj["id"]
-    store.set_fact(pid, "contract_value", "9999999")
+    store.set_fact(pid, "contract_value", "9999999", verified_by="u1")
 
     box = {}
     monkeypatch.setattr(Agent, "_call_llm", _llm_capture(box))

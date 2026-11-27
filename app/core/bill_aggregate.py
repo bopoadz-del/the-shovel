@@ -174,6 +174,9 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
             and row.pages and prev.pages
             and row.pages[0] == prev.pages[-1] + 1
             and not (row.has_figure() and prev.has_figure())
+            # A line printing only an amount is a page total: it closes its
+            # page, so it is never the first half of an item the break split.
+            and not _amount_only(prev)
         ):
             prev.description = " ".join(t for t in (prev.description, row.description) if t)
             for attr in ("unit", "quantity", "rate", "amount"):
@@ -182,6 +185,255 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
             prev.pages.append(row.pages[0])
             continue
         out.append(SheetRow(**{**row.__dict__, "pages": list(row.pages)}))
+    return out
+
+
+ROW_ITEM = "item"
+ROW_COLLECTION = "collection"
+ROW_REPEAT = "repeat"
+ROW_KINDS = (ROW_ITEM, ROW_COLLECTION, ROW_REPEAT)
+
+
+def _amount_only(row: SheetRow) -> bool:
+    """A line that prints an amount and neither a quantity nor a rate: the
+    shape of a page or section total, read off the cells, not the words."""
+    return (g.parse_number(row.amount) is not None
+            and g.parse_number(row.quantity) is None
+            and g.parse_number(row.rate) is None)
+
+
+def _last_place(text: str) -> float:
+    """One unit in the last decimal place the amount cell prints: the
+    rounding the document itself states for that figure (``1,234.50`` ->
+    0.01, ``1,234`` -> 1)."""
+    t = (text or "").strip().strip("()-").replace(",", "").replace(" ", "")
+    if "." not in t:
+        return 1.0
+    return 10.0 ** -len(t.split(".", 1)[1])
+
+
+def _same_figure(a: float, b: float, tol: float) -> bool:
+    """``a`` and ``b`` agree within ``tol`` (the binary float error of the
+    subtraction itself is not a printed difference)."""
+    return abs(a - b) <= tol * (1 + 1e-9)
+
+
+def row_kinds(
+    items: Sequence[SheetRow],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> list[str]:
+    """The kind of each row, decided by arithmetic, in the order of ``items``.
+
+    Rows are walked page by page (stable, so the sheet order is kept inside a
+    page). A line that prints only an amount is
+
+    * a ``collection`` when that amount equals the sum of the lines it follows
+      on its page since the last collection, within one unit of the amount
+      cell's own last printed place, and those are at least two lines -- or
+      one line, when the document restates the figure as an amount-only line
+      on a later page of the same bill (brought forward, or listed on the
+      bill's collection page). One line equal to the line above it is also
+      what two equal lump sums look like; without that later restatement the
+      arithmetic cannot tell them apart, so it stays an item and a sum it
+      touches can only come out too high (FAILED), never short of a line and
+      still RECONCILED;
+    * a ``repeat`` when it equals a collection already read on an earlier page
+      of the same bill (a figure brought forward, or a page total listed on
+      that bill's collection page; the bill is the one the row is placed in,
+      :func:`placed_bills` over ``ranges``). A figure equal to another bill's page total is not
+      a repeat of it. A repeat is covered by the next collection of its page,
+      as an item is.
+
+    Every other row, and every row with no recorded page, is an ``item``. A
+    bill's total is the sum of its items; a collection or a repeat restates
+    figures that are already in that sum.
+    """
+    return _classify(items, ranges)[0]
+
+
+def _classify(
+    items: Sequence[SheetRow],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> tuple[list[str], set[int]]:
+    """:func:`row_kinds`, plus the indices of the collections whose covered
+    lines all print only an amount: a line that adds up other total lines (the
+    page totals a collection page lists), i.e. the total the document prints
+    for the pages it lists. It is read off the cells, so an item the read got
+    wrong does not hide the total it must be checked against."""
+    kinds = [ROW_ITEM] * len(items)
+    summaries: set[int] = set()
+    restated = _restated_later(items, ranges)
+    order = sorted((i for i, r in enumerate(items) if r.pages), key=lambda i: items[i].pages[-1])
+    # (amount, tolerance, bills) of the collections on earlier pages
+    earlier: list[tuple[float, float, frozenset[str]]] = []
+    page: int | None = None
+    page_collections: list[tuple[float, float, frozenset[str]]] = []
+    covered, lines, totals = 0.0, 0, 0
+    for i in order:
+        row = items[i]
+        if row.pages[-1] != page:
+            earlier.extend(page_collections)
+            page, page_collections, covered, lines, totals = row.pages[-1], [], 0.0, 0, 0
+        amount = g.parse_number(row.amount)
+        if amount is None:
+            continue
+        tol = _last_place(row.amount)
+        if _amount_only(row):
+            bills = frozenset(placed_bills(row, ranges))
+            if (lines >= 2 or (lines == 1 and i in restated)) and _same_figure(
+                    amount, covered, tol):
+                kinds[i] = ROW_COLLECTION
+                if totals == lines:
+                    summaries.add(i)
+                page_collections.append((amount, tol, bills))
+                covered, lines, totals = 0.0, 0, 0
+                continue
+            if any(b == bills and _same_figure(amount, a, max(t, tol))
+                   for a, t, b in earlier):
+                kinds[i] = ROW_REPEAT
+            totals += 1
+        covered += amount
+        lines += 1
+    return kinds, summaries
+
+
+def _restated_later(
+    items: Sequence[SheetRow],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> set[int]:
+    """Indices of amount-only rows whose figure an amount-only row of the same
+    bill (:func:`placed_bills`) prints again on a later page, within one unit of
+    either cell's last printed place."""
+    by_bills: dict[frozenset[str], list[tuple[int, int, float, float]]] = {}
+    for i, row in enumerate(items):
+        amount = g.parse_number(row.amount)
+        if row.pages and amount is not None and _amount_only(row):
+            by_bills.setdefault(frozenset(placed_bills(row, ranges)), []).append(
+                (i, row.pages[-1], amount, _last_place(row.amount)))
+    out: set[int] = set()
+    for lines in by_bills.values():
+        for i, page, amount, tol in lines:
+            if any(p > page and _same_figure(amount, a, max(t, tol))
+                   for _j, p, a, t in lines):
+                out.add(i)
+    return out
+
+
+STATE_RECONCILED = "RECONCILED"
+STATE_FAILED = "FAILED"
+STATE_UNCHECKED = "UNCHECKED"
+STATE_NOT_PRICED = "NOT_PRICED"
+
+
+MEMBERSHIP_PAGE_RANGE = "page_range"
+MEMBERSHIP_NOT_READ = "not_read"
+
+
+def bill_page_ranges(meta: dict[str, Any] | None) -> dict[str, tuple[int, int]] | None:
+    """Each bill's inclusive page range as the derived copy stores it
+    (``bill_states.bills[].pages``, read from the document's own summary
+    pages); ``None`` when the copy stores none. A bill label that is a page
+    label (part/bill/page) is keyed by its bill part."""
+    states = (meta or {}).get("bill_states")
+    bills = states.get("bills") if isinstance(states, dict) else None
+    if not isinstance(bills, list):
+        return None
+    out: dict[str, tuple[int, int]] = {}
+    for bill in bills:
+        pages = bill.get("pages") if isinstance(bill, dict) else None
+        if not (isinstance(pages, list) and len(pages) == 2
+                and all(isinstance(p, int) and not isinstance(p, bool) for p in pages)):
+            continue
+        label = str(bill.get("label") or "")
+        named = _ASK_BILL_RE.search(label)
+        page_label = _PAGE_LABEL_RE.search(label)
+        key = (_bill_number(named.group(1)) if named
+               else page_label.group(2).upper() if page_label else _bill_number(label))
+        if key:
+            out[key] = (min(pages), max(pages))
+    return out or None
+
+
+def bill_checks(
+    items: Sequence[SheetRow],
+    bills: Iterable[str],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> list[dict[str, Any]]:
+    """The arithmetic check of each bill in ``bills`` over its own rows.
+
+    ``items`` are the rows after :func:`join_page_continuations`. A row is in a
+    bill when its first page lies in the bill's page range (``ranges``, from
+    :func:`bill_page_ranges`; :func:`placed_bills`). A heading path is never
+    trusted for this: a heading carried down from the bill before names the
+    wrong bill. The rows are classified (:func:`row_kinds`) under the same
+    placement, so a line is a repeat only of its own bill's total. A bill
+    with no range has ``membership`` ``not_read``: nothing is summed and the
+    state is ``UNCHECKED``, never a verdict on rows that may not be its own.
+    Per bill with a range (``membership`` ``page_range``):
+
+    * ``rows_summed`` -- the bill's item rows that carry an amount, and
+      ``items_sum`` their sum; ``rows_without_amount`` -- its item rows that
+      carry none (they add nothing; they are reported, not guessed);
+    * ``rows_without_page`` -- the sheet's item rows that record no page and
+      that no path places in an unranged bill: they cannot be placed in any
+      ranged bill, so they are in no bill's sum, and this names them instead
+      of letting a bill total silently lose them;
+    * ``printed_total`` -- the bill's own total line, found by arithmetic: a
+      collection whose covered lines all print only an amount (the page
+      totals a collection page lists), the last such line of the bill by
+      page. No word of the line is read;
+    * ``state`` -- ``NOT_PRICED`` when the bill has item rows and not one of
+      them prints a rate or an amount: the document prints no item prices for
+      this bill, so there is nothing to add up and nothing lost in the read
+      (any printed total is still reported). Otherwise ``UNCHECKED`` when the
+      bill prints no such line, ``RECONCILED`` when ``items_sum`` equals it
+      within one unit of the printed total's own last place, ``FAILED``
+      otherwise.
+
+    The sum of a bill that does not reconcile is never stated as the bill's
+    total: the state goes with it.
+    """
+    kinds, summaries = _classify(items, ranges)
+    unplaced = sum(1 for row, kind in zip(items, kinds)
+                   if kind == ROW_ITEM and not row.pages and not placed_bills(row, ranges))
+    out: list[dict[str, Any]] = []
+    for bill in sorted({_bill_number(b) for b in bills}):
+        span = (ranges or {}).get(bill)
+        if span is None:
+            out.append({"bill": bill, "membership": MEMBERSHIP_NOT_READ, "rows_summed": 0,
+                        "rows_without_amount": 0, "rows_without_page": 0,
+                        "items_sum": None, "printed_total": None,
+                        "printed_page": None, "state": STATE_UNCHECKED})
+            continue
+        mine = [i for i, row in enumerate(items) if bill in placed_bills(row, ranges)]
+        item_rows = [items[i] for i in mine if kinds[i] == ROW_ITEM]
+        amounts = [g.parse_number(row.amount) for row in item_rows]
+        priced = any(g.parse_number(row.rate) is not None or a is not None
+                     for row, a in zip(item_rows, amounts))
+        summed = [a for a in amounts if a is not None]
+        total = sum(summed)
+        lines = sorted((i for i in mine if i in summaries), key=lambda i: items[i].pages[-1])
+        check: dict[str, Any] = {
+            "bill": bill,
+            "membership": MEMBERSHIP_PAGE_RANGE,
+            "rows_summed": len(summed),
+            "rows_without_amount": len(amounts) - len(summed),
+            "rows_without_page": unplaced,
+            "items_sum": total,
+            "printed_total": None,
+            "printed_page": None,
+            "state": STATE_UNCHECKED,
+        }
+        if lines:
+            line = items[lines[-1]]
+            printed = g.parse_number(line.amount)
+            check["printed_total"] = printed
+            check["printed_page"] = line.pages[-1]
+            check["state"] = (STATE_RECONCILED if _same_figure(total, printed, _last_place(line.amount))
+                              else STATE_FAILED)
+        if item_rows and not priced:
+            check["state"] = STATE_NOT_PRICED
+        out.append(check)
     return out
 
 
@@ -340,7 +592,9 @@ class AskScope:
     """The scope an ask states, read as numbers and structural cells.
 
     ``size``/``band`` are in metres; ``bills`` are the bill numbers the ask
-    names; ``dimension`` is the measurement the ask asks to total (see
+    names and ``spans`` the stored page range of each of them that has one;
+    ``placement`` is every stored range of the sheet (:func:`bill_page_ranges`),
+    the one placement every bill reader uses (:func:`placed_bills`); ``dimension`` is the measurement the ask asks to total (see
     :func:`_ask_dimension`); ``level``/``item``/``either`` are the ask's
     content words graded by where the document prints them (a heading path,
     an item description, or both). Empty dimensions do not scope.
@@ -349,6 +603,8 @@ class AskScope:
     size: tuple[float, float] | None = None
     band: tuple[float, float] | None = None
     bills: frozenset[str] = frozenset()
+    spans: tuple[tuple[str, int, int], ...] = ()
+    placement: tuple[tuple[str, int, int], ...] = ()
     dimension: str | None = None
     level: frozenset[str] = frozenset()
     item: frozenset[str] = frozenset()
@@ -365,13 +621,22 @@ class AskScope:
         set -- govern the row set."""
         return bool(self.size or self.band or self.bills or self.dimension)
 
+    def in_bills(self, row: SheetRow) -> bool:
+        """Whether the row is in one of the bills the ask names, placed by
+        :func:`placed_bills` -- the rule :func:`bill_checks` applies -- so a
+        heading carried down from the bill before never moves a row. A bill
+        with no stored range falls back to the row's own path; its check then
+        says ``not_read``."""
+        ranges = {bill: (first, last) for bill, first, last in self.placement}
+        return bool(placed_bills(row, ranges) & self.bills)
+
     def admits(self, row: SheetRow, measure: str = MEASURE_QUANTITY) -> bool:
         """Whether the row is inside every scope the ask states."""
         if self.size is not None and _row_size(row) != self.size:
             return False
         if self.band is not None and _row_band(row) != self.band:
             return False
-        if self.bills and not (row_bills(row) & self.bills):
+        if self.bills and not self.in_bills(row):
             return False
         if self.dimension is not None and not _measures(row, self.dimension, measure):
             return False
@@ -591,17 +856,43 @@ def row_bills(row: SheetRow) -> set[str]:
     (``D/13/2``: part, bill, page) printed in one of the row's own heading
     levels. A path that names no bill names none.
     """
-    found: set[str] = set()
-    for level in row.path:
-        for match in _ASK_BILL_RE.finditer(level or ""):
-            found.add(_bill_number(match.group(1)))
-        for match in _PAGE_LABEL_RE.finditer(level or ""):
-            found.add(match.group(2).upper())
+    return set().union(*(_level_bills(level) for level in row.path))
+
+
+def _level_bills(level: str) -> set[str]:
+    """The bill numbers one heading level prints (:func:`row_bills`)."""
+    found = {_bill_number(m.group(1)) for m in _ASK_BILL_RE.finditer(level or "")}
+    found |= {m.group(2).upper() for m in _PAGE_LABEL_RE.finditer(level or "")}
     return found
 
 
-def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
+def placed_bills(row: SheetRow, ranges: dict[str, tuple[int, int]] | None = None) -> set[str]:
+    """The bills the row belongs to, one rule for every reader of a bill.
+
+    A bill with a stored page range (``ranges``, :func:`bill_page_ranges`)
+    holds the rows whose FIRST page lies in it; its number printed in a
+    row's path is not read, because a heading carried down from the bill
+    before names the wrong bill. A bill with no stored range is read from the
+    row's own path (:func:`row_bills`). A row with no recorded page is in no
+    ranged bill; :func:`bill_checks` counts it as ``rows_without_page``.
+    """
+    ranges = ranges or {}
+    found = row_bills(row) - set(ranges)
+    if row.pages:
+        first = row.pages[0]
+        found |= {bill for bill, (low, high) in ranges.items() if low <= first <= high}
+    return found
+
+
+def ask_scope(
+    ask: str | None,
+    items: Sequence[SheetRow],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> AskScope | None:
     """The scope ``ask`` states over ``items``; ``None`` when it states none.
+
+    ``ranges`` are the bills' stored page ranges (:func:`bill_page_ranges`);
+    a named bill that has one selects its rows by page (:meth:`AskScope.in_bills`).
 
     The ask's words are graded by the cell the document prints them in, so a
     word that names a heading level scopes structurally and a word that names
@@ -632,16 +923,40 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
     named_unit = _ask_unit_measure(text) if not measured else None
     if named_unit is not None:
         nouns |= named_unit[0]
+    # A named bill that has a stored range selects its rows by page. The words
+    # of the heading that names that bill are its title: the page range already
+    # places the rows, so requiring the title again would drop the rows a
+    # heading carried from the bill before sits over -- the rows the range is
+    # there to place. They are not content words of the ask.
+    nouns |= _title_words(items, bills & set(ranges or {}))
     scope = AskScope(
         size=_dimensions(size) if size else None,
         band=_dimensions(band) if band else None,
         bills=bills,
+        spans=tuple(sorted((bill, *(ranges or {})[bill]) for bill in bills
+                           if bill in (ranges or {}))),
+        placement=tuple(sorted((bill, *span) for bill, span in (ranges or {}).items())),
         dimension=_ask_dimension(text),
         level=frozenset((asked & in_paths) - in_desc - nouns),
         item=frozenset((asked & in_desc) - in_paths - nouns),
         either=frozenset((asked & in_paths & in_desc) - nouns),
     )
     return scope if scope.states() else None
+
+
+def _title_words(items: Sequence[SheetRow], bills: Iterable[str]) -> set[str]:
+    """The words of every heading level that names one of ``bills`` (the
+    level :func:`row_bills` reads a bill number from), folded as the ask's
+    words are (:func:`_scope_words`)."""
+    wanted = set(bills)
+    if not wanted:
+        return set()
+    out: set[str] = set()
+    for row in items:
+        for level in row.path:
+            if _level_bills(level) & wanted:
+                out |= _scope_words(level or "")
+    return out
 
 
 def fullest_sections(scope: AskScope, admitted: Sequence[SheetRow]) -> list[SheetRow]:
@@ -681,13 +996,22 @@ def aggregate(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     ask: str | None = None,
+    ranges: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
+
+    ``ranges`` are the bills' page ranges (:func:`bill_page_ranges`); a bill
+    the ask names selects its rows by them, and the ``bill_checks`` of the
+    result place rows by them, so the rows summed and the rows checked are
+    the same rows.
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
     A matching item without the figure is counted, listed, and named in
-    ``without_figure``; it adds nothing to a sum.
+    ``without_figure``; it adds nothing to a sum. An item that records no page
+    and whose path names a ranged bill the ask names is listed in
+    ``without_page``: it cannot be placed by page, so it is in no sum, and it
+    is named rather than lost.
 
     With ``ask``, a size, a depth band, a bill or a dimension the ask totals
     governs the row set (:func:`ask_scope`): those are read as numbers and as
@@ -698,12 +1022,19 @@ def aggregate(
     never defines a scope the ask states. An ask that states none of the four
     leaves ``terms`` and ``section`` to select, exactly as before, so a
     question asked in several parts still gets one result per part.
+
+    Collection and repeat lines are never summed (:func:`row_kinds`); those
+    the same selection admits are listed in ``not_items`` (a bill ask lists
+    that bill's lines only, never the rest of the sheet's). Each bill the ask names gets its check in
+    ``bill_checks`` (:func:`bill_checks`): rows summed, rows without an amount,
+    the bill's printed total and the state, so a sum is never handed back as
+    a bill's total without saying whether it reconciles.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
     want, where = _terms(terms), _terms(section)
     items = join_page_continuations(rows)
-    scope = ask_scope(ask, items)
+    scope = ask_scope(ask, items, ranges)
     if scope is not None and not scope.states_a_dimension() and (want or where):
         # The ask names no size, band or bill: the model's terms select, and an
         # ask word only selects when the model passed none.
@@ -712,10 +1043,31 @@ def aggregate(
         raise ValueError("give description terms or a section to match")
     used, without = [], []
     sums: dict[str, float] = {}
+    joined = items
+    kinds = row_kinds(items, ranges)
+    others = [(row, kind) for row, kind in zip(items, kinds) if kind != ROW_ITEM]
+    items = [row for row, kind in zip(items, kinds) if kind == ROW_ITEM]
+
+    def admitted(row: SheetRow) -> bool:
+        return scope.admits(row, measure) if scope is not None else matches(row, want, where)
+
+    not_items = [
+        {"ref": row.ref, "pages": row.pages, "section": list(row.path),
+         "description": row.description, "kind": kind, "amount": g.parse_number(row.amount)}
+        for row, kind in others if admitted(row)
+    ]
+    # An item that records no page cannot be placed in a ranged bill the ask
+    # names; one whose own path names that bill is listed, never dropped unseen.
+    asked_ranged = {bill for bill, _first, _last in scope.spans} if scope is not None else set()
+    without_page = [
+        {"ref": row.ref, "section": list(row.path), "description": row.description,
+         "amount": g.parse_number(row.amount)}
+        for row in items if not row.pages and row_bills(row) & asked_ranged
+    ]
     if scope is not None:
-        selected = fullest_sections(scope, [row for row in items if scope.admits(row, measure)])
+        selected = fullest_sections(scope, [row for row in items if admitted(row)])
     else:
-        selected = [row for row in items if matches(row, want, where)]
+        selected = [row for row in items if admitted(row)]
     for row in selected:
         value = row.figure(measure)
         entry = {
@@ -741,17 +1093,21 @@ def aggregate(
             "size": list(scope.size) if scope.size else None,
             "band": list(scope.band) if scope.band else None,
             "bills": sorted(scope.bills),
+            "bill_pages": {bill: [first, last] for bill, first, last in scope.spans},
             "dimension": scope.dimension,
             "level": sorted(scope.level),
             "item": sorted(scope.item),
             "either": sorted(scope.either),
         } if scope is not None else None),
-        "rows_scanned": len(items),
+        "rows_scanned": len(items) + len(others),
+        "not_items": not_items,
+        "bill_checks": bill_checks(joined, scope.bills if scope is not None else (), ranges),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
         "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
         "sum_by_unit": ({u: s for u, s in sums.items()} if measure == MEASURE_QUANTITY else None),
         "without_figure": without,
+        "without_page": without_page,
         "rows": used,
     }
 
@@ -828,7 +1184,8 @@ def aggregate_project_bills(
             _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
             bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
             continue
-        result = aggregate(rows, terms=terms, section=section, measure=measure, ask=ask)
+        result = aggregate(rows, terms=terms, section=section, measure=measure, ask=ask,
+                           ranges=bill_page_ranges(meta))
         bills.append({**head, "status": "success", **result})
     out = {"status": "success", "bills": bills}
     _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))

@@ -61,7 +61,11 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
         # by a second door; with two doors the model's choice between them
         # varies. The workflow is offered once, through run_workflow.
         tools = [t for t in tools if (t.get("function") or {}).get("name") not in set(workflows)]
-    return [select_hat_schema(disciplines)] + lead_first(tools, hat) + ([workflow] if workflow else [])
+    from app.agents.driver import catalogue
+
+    # The catalogue's lookup comes last: the worn hat's tools still lead.
+    return ([select_hat_schema(disciplines)] + lead_first(tools, hat)
+            + ([workflow] if workflow else []) + [catalogue.LOOKUP_SCHEMA])
 
 
 def lead_rank(name: str, hat: Optional[str]) -> int:
@@ -100,7 +104,8 @@ BASIS_WORDS = {
 def _input_line(key: str, p: Any) -> str:
     bits = [p.unit] if p.unit and p.unit != "-" else []
     if p.lo is not None and p.hi is not None:
-        bits.append(f"{p.lo:g} to {p.hi:g}")
+        bits.append(f"more than {p.lo:g}, up to {p.hi:g}" if getattr(p, "above_lo", False)
+                    else f"{p.lo:g} to {p.hi:g}")
     if getattr(p, "basis", ""):
         bits.append(BASIS_WORDS[p.basis])
     if not p.required:

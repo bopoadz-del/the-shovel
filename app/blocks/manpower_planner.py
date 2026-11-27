@@ -90,7 +90,7 @@ class ManpowerPlannerBlock(UniversalBlock):
             return {"status": "error", "error": "No activities provided"}
 
         try:
-            from app.lib.pm_computations import compute_cpm, resource_histogram
+            from app.lib.pm_computations import run_cpm, resource_histogram
             from app.schemas.cpm import Activity, CPMInput
 
             # CPM Activity wants duration + resources=[{trade,count}] +
@@ -106,7 +106,7 @@ class ManpowerPlannerBlock(UniversalBlock):
             )
 
             if not results and act_objects:
-                cpm_output = compute_cpm(CPMInput(activities=act_objects))
+                cpm_output = run_cpm(CPMInput(activities=act_objects))
                 result_objects = list(cpm_output.results)
             else:
                 from app.schemas.cpm import CPMResult

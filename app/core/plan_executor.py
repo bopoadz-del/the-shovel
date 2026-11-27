@@ -13,7 +13,7 @@ from app.schemas.execution_plan import (
 )
 from app.schemas.project_session import ProjectSession
 from app.lib.pm_computations import (
-    compute_cpm, resource_histogram, gantt_data, compress_schedule,
+    run_cpm, resource_histogram, gantt_data, compress_schedule,
 )
 
 
@@ -109,7 +109,7 @@ class PlanExecutor:
 
     # ── library step handlers ────────────────────────────────────────────
     async def _step_compute_cpm(self, step, session):
-        out = compute_cpm(_require_cpm_input(session))
+        out = run_cpm(_require_cpm_input(session))
         value = out.model_dump(mode="json")
         session.data[step.output_key or "cpm_results"] = value
         return value
@@ -140,7 +140,7 @@ class PlanExecutor:
                 }
                 for b in bridged if b.get("id")
             ]})
-        out = compute_cpm(cpm_input)
+        out = run_cpm(cpm_input)
         hist = resource_histogram(
             out.results, cpm_input.activities,
             period_unit=step.args.get("period_unit", "week"),
@@ -150,7 +150,7 @@ class PlanExecutor:
         return value
 
     async def _step_gantt(self, step, session):
-        out = compute_cpm(_require_cpm_input(session))
+        out = run_cpm(_require_cpm_input(session))
         bars = gantt_data(out.results)
         value = [b.model_dump(mode="json") for b in bars]
         session.data[step.output_key or "gantt"] = value
