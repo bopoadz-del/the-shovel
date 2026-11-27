@@ -535,6 +535,9 @@ _BY_ENV = _classifier(
     env={"D": "${{ github.event.pull_request.draft }}"})
 
 
+_SKIPPED_BUILD = {"if": "! github.event.pull_request.draft", **_RUN}
+
+
 @pytest.mark.parametrize("cls", [_BY_IF, _BY_ENV], ids=["by-if", "by-env"])
 def test_a_classifier_reports_the_draft_state_it_reads(cls):
     on_draft = _job_outputs(cls, {"github.event_name": "pull_request",
@@ -570,12 +573,19 @@ def test_a_classifier_reports_the_draft_state_it_reads(cls):
     # a classifier that is itself skipped on a draft skips what needs it
     _wf({"changes": {"if": "! github.event.pull_request.draft", **_RUN},
          "build": {"needs": "changes", **_RUN}}),
+    # GitHub compares strings ignoring case: 'TRUE' / 'FALSE' still gate
+    _wf({"changes": _BY_IF,
+         "slow": {"needs": "changes", "if": "needs.changes.outputs.is_draft != 'TRUE'", **_RUN}}),
+    _wf({"changes": _BY_ENV,
+         "slow": {"needs": "changes", "if": "needs.changes.outputs.is_draft == 'FALSE'", **_RUN}}),
+    # a need's result is read: it was skipped on a draft, success on a ready PR
+    _wf({"build": _SKIPPED_BUILD,
+         "report": {"needs": "build", "if": "always() && needs.build.result == 'success'", **_RUN}}),
+    _wf({"build": _SKIPPED_BUILD,
+         "report": {"needs": "build", "if": "always() && needs.build.result != 'skipped'", **_RUN}}),
 ])
 def test_draft_checker_passes_gated_jobs(doc):
     assert draft_faults(doc) == []
-
-
-_SKIPPED_BUILD = {"if": "! github.event.pull_request.draft", **_RUN}
 
 
 @pytest.mark.parametrize("doc, fault", [
@@ -617,6 +627,19 @@ _SKIPPED_BUILD = {"if": "! github.event.pull_request.draft", **_RUN}
           "slow": {"needs": "changes", "if": _GATE, **_RUN}}), "job slow runs on a draft"),
     (_wf({"changes": _classifier(_BY_IF["steps"][1]["run"], out="false"),
           "slow": {"needs": "changes", "if": _GATE, **_RUN}}), "job slow runs on a draft"),
+    # an output mapped to a step id the job does not have reads empty, not a draft
+    (_wf({"changes": _classifier(_BY_IF["steps"][1]["run"], out="${{ steps.missing.outputs.is_draft }}"),
+          "slow": {"needs": "changes", "if": _GATE, **_RUN}}), "job slow runs on a draft"),
+    (_wf({"changes": _classifier(_BY_ENV["steps"][1]["run"], env=_BY_ENV["steps"][1]["env"],
+                                 out="${{ steps.other.outputs.is_draft }}"),
+          "slow": {"needs": "changes", "if": _GATE, **_RUN}}), "job slow runs on a draft"),
+    # a need's result: 'skipped' is what a draft gives the skipped build
+    (_wf({"build": _SKIPPED_BUILD,
+          "report": {"needs": "build", "if": "always() && needs.build.result == 'skipped'", **_RUN}}),
+     "job report runs on a draft"),
+    (_wf({"build": _SKIPPED_BUILD,
+          "report": {"needs": "build", "if": "always() && needs.build.result != 'success'", **_RUN}}),
+     "job report runs on a draft"),
     # a job with no steps is not gated by "all of its steps"
     (_wf({"empty": {"steps": []}}), "job empty runs on a draft"),
     # a job that never runs on a ready PR
