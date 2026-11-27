@@ -1461,9 +1461,12 @@ async def add_memory(
     key = (req.key or "").strip()
     if not key:
         raise HTTPException(400, "Fact key is required")
+    # The user stated this fact through the memory route, so it carries their
+    # mark: it is the only path that saves a fact as confirmed.
     return store.set_fact(
         project_id, key, req.value,
         source_document=req.source_document, confidence=req.confidence,
+        verified_by=auth["user_id"],
     )
 
 

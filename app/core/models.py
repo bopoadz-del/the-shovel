@@ -457,6 +457,10 @@ class ProjectFact(Base):
     source_document: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    # Who confirmed the fact and when. NULL means the app saved it by itself
+    # and nobody has confirmed it; such a row is never read into a prompt.
+    verified_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    verified_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Workflow(Base):
@@ -699,6 +703,9 @@ class AgentFact(Base):
     key: Mapped[str] = mapped_column(String, nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    # Same mark as project_facts: NULL = not verified, never prompt material.
+    verified_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    verified_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class IngestionJob(Base):

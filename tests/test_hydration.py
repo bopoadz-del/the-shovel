@@ -631,11 +631,17 @@ def test_gdrive_load_service_account_info_handles_inline_and_file(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_hydration_writes_back_to_project_facts(isolated_data_dir, monkeypatch):
-    """After a hydration pass, the project's project_facts table contains
-    hydration:topics / friction / last_run rows — which the chat router
-    surfaces via project_memory.build_memory_context."""
-    from app.core import projects as projects_store, agent_memory
+@pytest.mark.parametrize("asks,expect_friction", [
+    (("why is BOQ empty?", "rebar quantities for level 3?"), True),
+    (("concrete pour schedule for foundation?", "lift shaft size?"), False),
+])
+async def test_hydration_brief_never_enters_the_fact_tables(
+    isolated_data_dir, monkeypatch, asks, expect_friction,
+):
+    """The day's brief (topics, friction, asks) is kept in the run row for the
+    operator report. It is never written to project_facts / agent_facts,
+    which feed the chat prompt: a summary of past asks is not a fact."""
+    from app.core import agent_memory, hydration_store, projects as projects_store
     from app.core.learning import hydration as hydration_module
 
     async def fake_chat(prompt, max_tokens=600):
@@ -643,54 +649,121 @@ async def test_hydration_writes_back_to_project_facts(isolated_data_dir, monkeyp
     monkeypatch.setattr(hydration_module, "_call_chat", fake_chat)
 
     pid = _make_project("WB-P")
-    in_window = "2026-05-26T10:00:00Z"
-    # Two complaint-style asks plus a topic-rich ask. With the friction regex
-    # ("why|broken|empty|...") this should produce at least one friction signal.
-    _seed_conversation_with_project(pid, in_window, "why is BOQ empty?", "looking")
-    _seed_conversation_with_project(pid, in_window, "rebar quantities for level 3?", "120 kg/m3")
+    for ask in asks:
+        _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", ask, "ok")
 
     await hydration_module.run(target_date="2026-05-26")
 
-    facts = {f["key"]: f["value"] for f in projects_store.list_facts(pid)}
-    assert "hydration:last_run" in facts
-    assert facts["hydration:last_run"] == "2026-05-26"
-    assert "hydration:topics" in facts  # at least one user-message keyword survived stopword filtering
-    # 'why' / 'empty' should fire the friction regex on at least one msg
-    assert "hydration:friction" in facts
+    assert projects_store.list_facts(pid) == []
+    assert agent_memory.list_agent_facts("chat", pid) == []
+    brief = hydration_store.get_latest("project", pid)["facts"]["writeback"]["brief"]
+    assert brief["run_date"] == "2026-05-26"
+    assert sorted(brief["asks"]) == sorted(asks)
+    assert brief["topics"], "at least one keyword survives the stopword filter"
+    # 'why' / 'empty' fire the friction regex; plain asks do not.
+    assert bool(brief["friction"]) is expect_friction
 
 
 @pytest.mark.asyncio
-async def test_hydration_writes_back_to_agent_facts(isolated_data_dir, monkeypatch):
-    """The runtime agent path (app/agents/runtime.py:548) reads
-    agent_memory.list_agent_facts('chat', project_id). Hydration must
-    populate that store so the runtime agent benefits next session."""
-    import json
-    from app.core import agent_memory
+@pytest.mark.parametrize("value,site", [("4,200,000", "Plot 7"), ("9,750,000", "Plot 12")])
+async def test_hydration_leaves_existing_facts_untouched(isolated_data_dir, monkeypatch, value, site):
+    """A fact already in the tables is neither overwritten nor un-verified by
+    a hydration pass, and no new row joins it."""
+    from app.core import agent_memory, projects as projects_store
     from app.core.learning import hydration as hydration_module
 
     async def fake_chat(prompt, max_tokens=600):
         return ("## ok", "offline_template")
     monkeypatch.setattr(hydration_module, "_call_chat", fake_chat)
 
-    pid = _make_project("WB-A")
-    in_window = "2026-05-26T10:00:00Z"
-    _seed_conversation_with_project(pid, in_window, "concrete pour schedule for foundation?", "tomorrow at 8")
+    pid = _make_project("WB-K")
+    projects_store.set_fact(pid, "contract_value", value, verified_by="u1")
+    agent_memory.set_agent_fact("chat", "site", site, project_id=pid, verified_by="u1")
+    _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", "what is the contract value?", "x")
 
     await hydration_module.run(target_date="2026-05-26")
 
-    facts = agent_memory.list_agent_facts("chat", pid)
-    keys = {f["key"] for f in facts}
-    assert "hydration:last_brief" in keys, (
-        "Expected hydration:last_brief in agent_facts so runtime.py's "
-        "fact-loading loop picks it up next session"
+    facts = projects_store.list_facts(pid)
+    assert [(f["key"], f["value"], f["verified_by"]) for f in facts] == [
+        ("contract_value", value, "u1")
+    ]
+    agent = agent_memory.list_agent_facts("chat", pid)
+    assert [(f["key"], f["value"], f["verified_by"]) for f in agent] == [("site", site, "u1")]
+
+
+class _RecordingLearningEngine:
+    """Stands in for the learning_engine block: records every pattern it is
+    handed, so a test reads exactly what the writeback sent."""
+
+    recorded: list = []
+
+    @classmethod
+    def shared_instance(cls):
+        return cls()
+
+    def _record_pattern(self, data, _params):
+        type(self).recorded.append(data)
+        return {"status": "success"}
+
+
+@pytest.mark.parametrize("asks,run_date,expect_signals", [
+    # 'why' / 'broken' are complaint words, and the same ask twice is a repeat:
+    # two friction signals, each recorded once on the learning engine.
+    (("why is the export broken?", "why is the export broken?"), "2026-05-26", 2),
+    # Plain asks: no friction, so nothing is recorded.
+    (("lift shaft size?", "concrete pour schedule for foundation?"), "2026-06-02", 0),
+])
+def test_writeback_for_next_chat_returns_brief_and_records_each_friction_signal(
+    monkeypatch, asks, run_date, expect_signals,
+):
+    """``_writeback_for_next_chat`` returns the day's brief for the run row and
+    hands each friction signal to the learning engine; it writes no fact."""
+    from app.blocks import BLOCK_REGISTRY
+    from app.core.learning import hydration as hydration_module
+
+    _RecordingLearningEngine.recorded = []
+    monkeypatch.setitem(BLOCK_REGISTRY, "learning_engine", _RecordingLearningEngine)
+    messages = [{"role": "user", "content": a} for a in asks]
+
+    out = hydration_module._writeback_for_next_chat("proj-w", messages, run_date)
+
+    assert out["brief"]["run_date"] == run_date
+    assert out["brief"]["asks"] == list(dict.fromkeys(asks))
+    assert len(out["brief"]["friction"]) == expect_signals
+    assert out["patterns_recorded"] == expect_signals
+    assert out["skipped"] == []
+    assert [r["observation"] for r in _RecordingLearningEngine.recorded] == out["brief"]["friction"]
+    assert {(r["project_id"], r["category"], r["run_date"]) for r in _RecordingLearningEngine.recorded} == (
+        {("proj-w", "friction", run_date)} if expect_signals else set()
     )
-    blob_value = next(f["value"] for f in facts if f["key"] == "hydration:last_brief")
-    payload = json.loads(blob_value)
-    assert payload["run_date"] == "2026-05-26"
-    assert "topics" in payload
-    assert "asks" in payload
-    # the user message should appear in the asks
-    assert any("concrete" in a.lower() for a in payload["asks"])
+
+
+@pytest.mark.parametrize("registry_entry", ["absent", "raises"])
+def test_writeback_for_next_chat_keeps_the_brief_when_the_learning_engine_cannot_record(
+    monkeypatch, registry_entry,
+):
+    """No learning engine (or one that fails) records no pattern; the brief is
+    still returned, and a failure is named in ``skipped``."""
+    from app.blocks import BLOCK_REGISTRY
+    from app.core.learning import hydration as hydration_module
+
+    class _Failing(_RecordingLearningEngine):
+        def _record_pattern(self, data, _params):
+            raise RuntimeError("store down")
+
+    if registry_entry == "absent":
+        monkeypatch.delitem(BLOCK_REGISTRY, "learning_engine", raising=False)
+    else:
+        monkeypatch.setitem(BLOCK_REGISTRY, "learning_engine", _Failing)
+    messages = [{"role": "user", "content": "why is the BOQ empty?"}]
+
+    out = hydration_module._writeback_for_next_chat("proj-f", messages, "2026-05-26")
+
+    assert out["brief"]["asks"] == ["why is the BOQ empty?"]
+    assert out["patterns_recorded"] == 0
+    assert [s.split(":")[0] for s in out["skipped"]] == (
+        [] if registry_entry == "absent" else ["learning_engine"]
+    )
 
 
 @requires_construction_kit
@@ -732,20 +805,25 @@ async def test_hydration_records_friction_patterns_on_learning_engine(
 async def test_writeback_failures_are_non_fatal(isolated_data_dir, monkeypatch):
     """If any writeback target raises, the per-project row still gets written
     and the writeback errors are recorded in facts.writeback.skipped."""
-    from app.core import projects as projects_store, hydration_store
+    from app.core import hydration_store
     from app.core.learning import hydration as hydration_module
 
     async def fake_chat(prompt, max_tokens=600):
         return ("## ok", "offline_template")
     monkeypatch.setattr(hydration_module, "_call_chat", fake_chat)
 
-    # Break project_facts writeback by pointing set_fact at a raiser
-    def boom(*a, **k):
-        raise RuntimeError("simulated writeback failure")
-    monkeypatch.setattr(projects_store, "set_fact", boom)
+    # Break the learning-engine pattern writeback with a raising block class.
+    from app.blocks import BLOCK_REGISTRY
+
+    class _Boom:
+        @classmethod
+        def shared_instance(cls):
+            raise RuntimeError("simulated writeback failure")
+    monkeypatch.setitem(BLOCK_REGISTRY, "learning_engine", _Boom)
 
     pid = _make_project("WB-F")
-    _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", "ask?", "answer")
+    # 'why ... broken' fires the friction regex, so the pattern step runs.
+    _seed_conversation_with_project(pid, "2026-05-26T10:00:00Z", "why is it broken?", "answer")
     await hydration_module.run(target_date="2026-05-26")
 
     row = hydration_store.get_latest("project", pid)
