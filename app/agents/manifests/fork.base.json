@@ -33,7 +33,7 @@
   "search_project_documents",
   "construction_calc"
  ],
- "available_tools": ["bill_rows_aggregate", "construction_advisor", "construction_calc", "delegate_to_agent", "fetch_document", "list_project_documents", "remember_fact", "search_general_knowledge", "search_project_documents"],
+ "available_tools": ["bill_rows_aggregate", "construction_advisor", "construction_calc", "delegate_to_agent", "fetch_document", "list_memory", "list_project_documents", "read_memory", "remember_fact", "search_general_knowledge", "search_project_documents", "write_memory"],
  "memory": {
   "save_on_turn_end": [
    "user_intent",

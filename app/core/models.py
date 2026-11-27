@@ -708,6 +708,22 @@ class AgentFact(Base):
     verified_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class LlmMemory(Base):
+    """llm_memory table: the model's own working notes, one JSON document per
+    (project, name). Written and read only by the model's memory tools
+    (``app.core.llm_memory``); never injected into a prompt by code."""
+
+    __tablename__ = "llm_memory"
+
+    project_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, primary_key=True)
+    #: The whole document as JSON text; a write replaces it.
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    written_at: Mapped[str] = mapped_column(String, nullable=False)
+    written_by_turn: Mapped[str] = mapped_column(String, nullable=False, default="")
+
+
 class IngestionJob(Base):
     """ingestion_jobs table — tracks async document ingestion status.
 
