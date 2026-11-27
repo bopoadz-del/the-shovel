@@ -10,6 +10,8 @@ import ast
 from datetime import date
 from pathlib import Path
 
+import math
+
 import pytest
 
 from app.lib import construction_formulas as cf
@@ -464,37 +466,90 @@ def test_a_blank_predecessor_is_no_link(preds, start):
     assert row["early_start"] == start
 
 
-# A value the caller gave that the schedule refuses is asked for again in the
-# input's own words, like a value outside the declared range: never the
-# schema's own error text.
-_SCHEMA_TEXT = ("[type=", "pydantic", "CPMInput", "validation error", "input_value")
+# A value the caller gave that the schedule refuses is asked for again by the
+# registry's own question for that input (its label, and its declared range
+# where it has one). No text of the schema's refusal reaches the answer.
+_SCHEMA_TEXT = ("should", "[type=", "pydantic", "CPMInput", "WorkCalendar",
+                "predecessor_id", "validation error", "input_value")
 
 
-@pytest.mark.parametrize("given, field, label, shown", [
-    ({"project_start": "next monday"}, "project_start", "project start date", "next monday"),
-    ({"project_start": "2026-13-40"}, "project_start", "project start date", "2026-13-40"),
-    ({"calendar": {"work_weekdays": "Sun-Thu"}}, "calendar", "working calendar", "Sun-Thu"),
-    ({"calendar": {"holidays": "Eid"}}, "calendar", "working calendar", "Eid"),
-    ({"near_critical_band_days": 0}, "near_critical_band_days", "near-critical float band", "0"),
-    ({"near_critical_band_days": 0.0}, "near_critical_band_days", "near-critical float band", "0.0"),
+def _link_net(link):
+    return [{"id": "A", "duration": 2},
+            {"id": "B", "duration": 3, "predecessors": [{"id": "A", **link}]}]
+
+
+@pytest.mark.parametrize("given, field", [
+    ({"activities": _link_net({"type": "QQ"})}, "activities"),
+    ({"activities": _link_net({"type": "start-to-start"})}, "activities"),
+    ({"activities": _link_net({"lag": "x"})}, "activities"),
+    ({"activities": _link_net({"lag": 1.5})}, "activities"),
+    ({"activities": _chain_network(), "project_start": "next monday"}, "project_start"),
+    ({"activities": _chain_network(), "project_start": "2026-13-40"}, "project_start"),
+    ({"activities": _chain_network(), "calendar": "Sun-Thu"}, "calendar"),
+    ({"activities": _chain_network(), "calendar": {"holidays": "Eid"}}, "calendar"),
 ])
-def test_a_refused_setting_is_asked_for_by_its_label(given, field, label, shown):
-    env = cf.run_calculation("cpm_network", {"activities": _chain_network(), **given})
-    assert env["status"] == "error"
-    assert env["needs_input"] is True
+def test_a_refused_input_is_asked_for_by_its_label_only(given, field):
+    env = cf.run_calculation("cpm_network", given)
+    assert env["status"] == "error" and env["needs_input"] is True
     assert env["missing"] == [field]
-    assert label in env["error"] and label in env["question"]
-    assert shown in env["error"].split(" cannot be used")[0]
-    assert not any(t in env["error"] for t in _SCHEMA_TEXT), env["error"]
+    from app.lib.source_labels import parameter_label
+    label = parameter_label("cpm_network", field)
+    assert f"What {label} should I use?" in env["question"]
+    # the one "should" left is the registry's own question for the input
+    own = env["error"].replace(f"What {label} should I use?", "")
+    assert not any(t in own for t in _SCHEMA_TEXT), env["error"]
+    # nothing the caller sent is echoed: neither the rows nor the bad value
+    assert not any(t in env["error"] for t in ("{", "[", "'", "\"", "Sun-Thu", "monday"))
 
 
-@pytest.mark.parametrize("given, part", [
-    ({"calendar": {"work_weekdays": "Sun-Thu"}}, ": its work weekdays should be a valid list."),
-    ({"project_start": "next monday"}, ": it should be a valid date or datetime."),
+@pytest.mark.parametrize("link, key", [({"type": "QQ"}, "type"), ({"lag": "x"}, "lag")])
+def test_a_refused_link_names_the_activity_and_the_key_typed(link, key):
+    env = cf.run_calculation("cpm_network", {"activities": _link_net(link)})
+    assert f"activity B ({key})" in env["error"]
+
+
+@pytest.mark.parametrize("links, said", [
+    ([{"id": "A", "type": "QQ"}, {"id": "C", "type": "ZZ"}], "activity B (type)."),
+    ([{"id": "A", "lag": "x"}, {"id": "C", "type": "QQ"}],
+     "activity B (lag) and 1 more."),
 ])
-def test_the_refusal_names_the_part_of_the_input_refused(given, part):
-    env = cf.run_calculation("cpm_network", {"activities": _chain_network(), **given})
-    assert part in env["error"]
+def test_one_refused_part_is_said_once(links, said):
+    acts = [{"id": "A", "duration": 2}, {"id": "C", "duration": 1},
+            {"id": "B", "duration": 3, "predecessors": links}]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert said in env["error"], env["error"]
+
+
+@pytest.mark.parametrize("n", [1500, 40])
+def test_a_large_refused_network_is_answered_short(n):
+    acts = [{"id": f"T{i}", "duration": 1,
+             "predecessors": [{"id": f"T{i - 1}", "type": "QQ"}] if i else []}
+            for i in range(n)]
+    env = cf.run_calculation("cpm_network", {"activities": acts})
+    assert env["missing"] == ["activities"]
+    assert len(env["error"]) < 300, len(env["error"])
+    assert f"activity T1 (type) and {n - 2:,} more" in env["error"]
+
+
+@pytest.mark.parametrize("band", [0, 0.0, -1])
+def test_band_zero_is_refused_by_the_declared_range(band):
+    acts = _chain_network()
+    env = cf.run_calculation("cpm_network", {"activities": acts,
+                                             "near_critical_band_days": band})
+    assert env["status"] == "error"
+    assert "near-critical float band" in env["question"]
+    assert "outside what" in env["error"]
+    # and the schedule itself refuses the same figure
+    with pytest.raises(Exception):
+        CPMInput(activities=acts, near_critical_band_days=band)
+
+
+@pytest.mark.parametrize("band", [math.ulp(0.0), 0.5])
+def test_the_smallest_positive_band_is_accepted_by_both(band):
+    env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
+                                             "near_critical_band_days": band})
+    assert env["status"] == "success", env
+    CPMInput(activities=_chain_network(), near_critical_band_days=band)
 
 
 @pytest.mark.parametrize("given", [
@@ -510,36 +565,13 @@ def test_a_readable_setting_is_not_refused(given):
     assert "needs_input" not in env
 
 
-@pytest.mark.parametrize("start, band", [("next monday", 0), ("someday", 0.0)])
-def test_every_refused_setting_is_named(start, band):
+@pytest.mark.parametrize("start, cal", [("next monday", "Sun-Thu"),
+                                        ("someday", {"work_weekdays": "x"})])
+def test_every_refused_input_is_named(start, cal):
     env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
-                                             "project_start": start,
-                                             "near_critical_band_days": band})
-    assert env["missing"] == ["project_start", "near_critical_band_days"]
-    assert start in env["error"] and "near-critical float band" in env["error"]
-
-
-@pytest.mark.parametrize("acts", [
-    [{"id": "A", "duration": 1, "predecessors": [{"predecessor_id": "B", "lag": "x"}]},
-     {"id": "B", "duration": 1}],
-    [{"id": "C", "duration": 2, "predecessors": [{"predecessor_id": "D", "type": "QQ"}]},
-     {"id": "D", "duration": 1}],
-])
-def test_a_refusal_outside_the_settings_is_plain(acts):
-    """A refusal the settings did not cause (a link the kernel passed on as
-    given) still never shows the schema's text."""
-    from app.agents.hats.planning.formulas.construction_formulas_planning import (
-        _settings_refusal,
-    )
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError) as info:
-        CPMInput(activities=acts)
-    out = _settings_refusal(info.value, {})
-    assert out == {"error": "the network cannot be scheduled: an input it was given "
-                            "could not be read.", "error_type": "ValueError"}
-    out2 = _settings_refusal(info.value, {"project_start": "2026-01-05"})
-    assert "needs_input" not in out2
+                                             "project_start": start, "calendar": cal})
+    assert env["missing"] == ["project_start", "calendar"]
+    assert "project start date" in env["question"] and "working calendar" in env["question"]
 
 
 @pytest.mark.parametrize("calendar", [
@@ -550,4 +582,4 @@ def test_an_input_refused_twice_is_asked_for_once(calendar):
     env = cf.run_calculation("cpm_network", {"activities": _chain_network(),
                                              "calendar": calendar})
     assert env["missing"] == ["calendar"]
-    assert env["error"].count("cannot be used") == 1
+    assert env["error"].count("working calendar (working weekdays and holidays) given") == 1

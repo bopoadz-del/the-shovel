@@ -5,6 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -111,44 +112,39 @@ def _join_links_to_ids(rows: List[Dict[str, Any]]) -> None:
                 link["predecessor_id"] = same[0]
 
 
-def _settings_refusal(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
-    """A value the caller gave that the network schedule refused, said in
-    the input's own words: the input it came in, the value, and what the
-    input should be. Each refused input is named in ``needs_input`` (given,
-    so also ``required``) and the calculation envelope asks for it again by
-    its label, as it does for a value outside the declared range. The
-    schema's own error text (type codes, class name, link) never reaches
-    the answer."""
-    import json
+def _refused_inputs(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Which of the calculator's own inputs the network schedule refused.
 
+    Only the input is named (the first part of each refusal's location); the
+    envelope then asks for it again by its declared label, as it does for any
+    other input it cannot use. Nothing of the schedule's own refusal text
+    reaches the answer. A refusal inside the activities adds which activity
+    it was (its id as the caller wrote it) and the part refused. Every part
+    of an activity is read and checked here before the schedule sees it
+    except a link's ``type`` and ``lag``, which pass on under the caller's
+    own key, so the part named is always a word the caller wrote."""
     from app.lib.source_labels import parameter_label
 
     fields: List[str] = []
-    reasons: List[str] = []
+    parts: List[str] = []
     for err in exc.errors():
-        loc = err.get("loc") or ()
-        field = str(loc[0]) if loc else ""
-        if field not in settings or field in fields:
+        loc = err["loc"]
+        field = str(loc[0])
+        if field not in fields:
+            fields.append(field)
+        if field != "activities":
             continue
-        fields.append(field)
-        msg = str(err.get("msg") or "")
-        # Only the plain clause: "Input should be greater than 0" -> "be
-        # greater than 0"; anything after a comma is the parser's own detail.
-        should = (msg[len("Input should "):].split(",")[0]
-                  if msg.startswith("Input should ") else "")
-        # A refusal inside the input (the calendar's working weekdays) names
-        # the part that was refused.
-        within = ("its " + " ".join(str(part).replace("_", " ") for part in loc[1:])
-                  if len(loc) > 1 else "it")
-        given = settings[field]
-        shown = given if isinstance(given, str) else json.dumps(given, default=str)
-        reasons.append(f"The {parameter_label('cpm_network', field)} given ({shown}) "
-                       f"cannot be used" + (f": {within} should {should}." if should else "."))
-    if not fields:
-        return {"error": "the network cannot be scheduled: an input it was given "
-                         "could not be read.",
-                "error_type": "ValueError"}
-    return {"error": " ".join(reasons), "needs_input": fields, "required": fields,
+        # (activities, row, predecessors, link, part): the row's own id and
+        # the part of the link refused.
+        part = f"activity {settings['activities'][loc[1]]['id']} ({loc[-1]})"
+        if part not in parts:
+            parts.append(part)
+    labels = [parameter_label("cpm_network", f) for f in fields]
+    more = len(parts) - 1
+    error = (f"The {' and '.join(labels)} given could not be read"
+             + (f": {parts[0]}" + (f" and {more:,} more" if more else "") if parts else "")
+             + ".")
+    return {"error": error, "needs_input": fields, "required": fields,
             "error_type": "ValueError"}
 
 
@@ -162,7 +158,11 @@ def _settings_refusal(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
         'activities': Param(label='activities with durations and predecessors'),
         'project_start': Param(label='project start date'),
         'calendar': Param(label='working calendar (working weekdays and holidays)'),
-        'near_critical_band_days': Param('working days', 0, 100000,
+        # The band is a positive span (a band of none is not stated at all),
+        # so the declared range starts at the smallest positive figure: the
+        # envelope refuses 0 with the range question exactly where the
+        # schedule itself does.
+        'near_critical_band_days': Param('working days', math.ulp(0.0), 100000,
                                          label='near-critical float band'),
     },
     outputs={'project_duration': 'working days', 'critical_path': '-',
@@ -231,7 +231,7 @@ def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
     try:
         network = CPMInput(**settings)
     except ValidationError as exc:
-        return _settings_refusal(exc, settings)
+        return _refused_inputs(exc, settings)
     try:
         out = compute_cpm(network)
     except CircularDependencyError as exc:
