@@ -438,3 +438,15 @@ def test_inline_separators_on_a_non_table_line_survive_the_strip():
     assert "BOQ context" not in body
     assert "AB-2022-202" not in body
     assert body == "Activities: 204 | Working days: 721"
+
+
+@pytest.mark.parametrize("number,pool,passages,expected", [
+    (4321.0, {55.0, 2.0}, [[10.0, 20.0]], False),   # in neither: the model's own number
+    (55.0, {55.0, 2.0}, [], True),                  # the user wrote it
+    (20.0, set(), [[10.0, 20.0]], True),            # a retrieved passage carries it
+    (987.5, set(), [], False),
+])
+def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number, pool, passages, expected):
+    from app.agents.citation_provenance import _given_to_us
+
+    assert _given_to_us(number, pool, passages) is expected

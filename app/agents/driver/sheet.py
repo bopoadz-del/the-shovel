@@ -363,7 +363,7 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
                 number = _number((givens.get(ref) or {}).get("value"))
                 if number is not None:
                     found.append(number)
-            elif not isinstance(ref, bool):
+            else:  # a literal: a number written in the plan (text and flags are no number)
                 number = _number(ref)
                 if number is not None:
                     found.append(number)

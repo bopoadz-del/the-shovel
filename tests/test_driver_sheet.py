@@ -560,8 +560,12 @@ def test_a_result_lists_every_number_it_rests_on_through_earlier_steps(a, b):
         "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
                   "inputs": {"operator": "multiply", "a": "g1", "b": b, "flag": True}},
                  {"id": "s2", "entry": "formula:arithmetic_step",
-                  "inputs": {"operator": "add", "a": "s1", "b": "g1"}}]})
+                  "inputs": {"operator": "add", "a": "s1", "b": "g1"}},
+                 {"id": "s3", "entry": "formula:arithmetic_step",
+                  "inputs": {"operator": "add", "a": "s1", "b": "s2"}}]})
     assert problems == []
     assert sorted(ws.rests_on(work, "s1")) == sorted([float(a), float(b)])
     assert sorted(ws.rests_on(work, "s2")) == sorted([float(a), float(b), float(a)])
+    # s3 reads s1 directly and again through s2: s1 is followed once.
+    assert sorted(ws.rests_on(work, "s3")) == sorted([float(a), float(b), float(a)])
     assert ws.rests_on(work, "s9") == []

@@ -1740,12 +1740,9 @@ def figure_provenance(
                 given_pool |= _rescaled(nums)
             passages = [_nums(r.text) for r in retrievals]
 
-            def _given_to_us(number: float) -> bool:
-                return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
-
             for sheet_payload in sheets:
                 for row in working_sheet.code_results(sheet_payload):
-                    if all(_given_to_us(n) for n in row["rests_on"]):
+                    if all(_given_to_us(n, given_pool, passages) for n in row["rests_on"]):
                         calc_entries.append(({row["value"]}, {
                             "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
                             "step": row["step"], "unit": row["unit"]}))
@@ -1836,6 +1833,14 @@ def figure_provenance(
     except Exception:  # noqa: BLE001 -- a gate must never break an answer
         _LOG.exception("figure_provenance failed; passing answer through")
         return text, []
+
+
+def _given_to_us(number: float, given_pool: set[float], passages: list[list[float]]) -> bool:
+    """True when ``number`` was given to the platform: it is in ``given_pool``
+    (the users' messages and the calculator and workflow results, rescaled)
+    or in one of the retrieved ``passages``. A number found in neither is the
+    model's own."""
+    return _match(number, given_pool) or any(_match(number, nums) for nums in passages)
 
 
 def _clause_span(text: str, start: int, end: int) -> tuple[int, int]:
