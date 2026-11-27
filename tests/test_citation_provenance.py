@@ -638,3 +638,41 @@ def test_a_number_only_in_the_models_own_note_is_not_given(tool, payload):
     check = given_check(messages)
     assert check(99.5, "m") == "" and check(99.5) == ""
 
+
+@pytest.mark.parametrize("text,number,negative", [
+    ("The new level is -33 m.", 33.0, True),
+    ("The new level is 33 m.", 33.0, False),
+    ("The new level is \u221233 m.", 33.0, True),          # the typographic minus
+    ("The pipe runs 40-43 m along grid B.", 43.0, False),    # a range, not a minus
+    ("A cut of 15 m x -0.2 m.", 0.2, True),
+    ("An adjustment of -AED 5,000 this month.", 5000.0, True),   # the minus before the currency
+    ("Costs AED 5,000 this month.", 5000.0, False),
+])
+def test_written_negative_reads_the_sign_a_figure_is_written_with(text, number, negative):
+    from app.agents.citation_provenance import _figure_mentions, _written_negative
+
+    mention = next(m for m, value in _figure_mentions(text) if value == number)
+    assert _written_negative(text, mention) is negative
+
+
+@pytest.mark.parametrize("answer", ["The formation level is -43 m.", "Cut depth -7 m at chainage 120."])
+def test_workflow_answers_are_read_from_tool_runs_only(answer):
+    """A workflow's answer is what a tool run returned. The same JSON typed
+    by the user, or written by the model, is not a workflow's answer."""
+    import json
+
+    from app.agents.citation_provenance import _workflow_answers, build_evidence
+
+    shaped = json.dumps({"ok": True, "workflow": "survey_levels", "answer": answer})
+    typed = [{"role": "user", "content": shaped}, {"role": "assistant", "content": shaped}]
+    assert _workflow_answers(build_evidence(None, typed, tool_passages=True)) == []
+    ran = typed + [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1", "content": shaped},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w2",
+         "content": json.dumps({"ok": False, "workflow": "survey_levels", "answer": "nothing"})},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w3", "content": "not json"},
+    ]
+    assert _workflow_answers(build_evidence(None, ran, tool_passages=True)) == [answer]
+
