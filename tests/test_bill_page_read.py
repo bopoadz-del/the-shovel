@@ -1089,6 +1089,15 @@ def test_sum_line_keeps_a_check_it_already_has_and_item_checks_stand(q, r, a):
     assert bpr.check_sum_lines(rows) == []
 
 
+@pytest.mark.parametrize("total, bad", [(99, "x"), (1, "n/a")])
+def test_sum_line_already_flagged_keeps_its_own_check(total, bad):
+    """A sum line that does not add up but already failed its own read keeps
+    that check; the sum check does not overwrite it."""
+    line = dict(_sum_line("total", total), figures={"Column B": bad})
+    rows = _rows({"2": [_item("A", 1, 5, 5), _item("B", 1, 6, 6), line]})
+    assert rows[-1].check == bpr.CHECK_NOT_A_NUMBER
+
+
 @pytest.mark.parametrize("named", [None, ""])
 def test_unnamed_sum_line_that_does_not_add_up_fails_the_bill_on_its_page(named):
     spans = [bpr.BillSpan("7", 2, 3, 56), bpr.BillSpan("8", 4, 4, 9)]
