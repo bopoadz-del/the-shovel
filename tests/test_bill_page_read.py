@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 
 from app.core import bill_aggregate as agg
+from app.core import bill_classify as bc
 from app.core import bill_page_read as bpr
 from app.core import bill_table_geometry as g
 
@@ -286,3 +290,169 @@ def test_total_only_bill_with_a_page_not_read_is_not_read(missing):
     got = bpr.bill_states(_rows(pages), missing, spans=[bpr.BillSpan("b", 1, 2, 9)],
                           tolerance=0)
     assert got["bills"][0]["state"] == bpr.STATE_NOT_READ
+
+
+# --- read_page: the model reads a page image; an empty or non-JSON reply is NOT READ ---
+
+
+def _pr(index):
+    return bc.PageRead(index=index, source=bc.SOURCE_OCR, words=())
+
+
+@pytest.mark.parametrize("text, want", [
+    (json.dumps({"lines": [_item("A", 1, 2, 2)]}), [_item("A", 1, 2, 2)]),
+    ("```json\n" + json.dumps({"lines": [_carried(9), _head("X")]}) + "\n```",
+     [_carried(9), _head("X")]),
+])
+def test_reply_with_lines_gives_them(text, want):
+    assert bpr.lines_of_reply(text) == want
+
+
+@pytest.mark.parametrize("text", [
+    "", "   ", "not json", '{"lines": []}', '{"rows": [{"type": "item"}]}',
+    '[{"type": "item"}]', '{"lines": "none"}', None, 42,
+])
+def test_reply_without_lines_is_none(text):
+    assert bpr.lines_of_reply(text) is None
+
+
+class _Ask:
+    """Replies in turn; an Exception instance is raised instead of returned."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def __call__(self, messages):
+        self.calls.append(messages)
+        r = self.replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+def _good(*lines):
+    return json.dumps({"lines": list(lines)})
+
+
+@pytest.mark.parametrize("index, png", [(0, b"\x89PNG-a"), (276, b"\x89PNG-bb")])
+def test_page_image_and_prompt_go_in_one_message(index, png):
+    seen = []
+    ask = _Ask(_good(_item("A", 1, 1, 1)))
+    read = bpr.model_page_reader(ask, lambda i: seen.append(i) or png, prompt="P" + str(index))
+    read(_pr(index))
+    assert seen == [index]
+    ((msg,),) = ask.calls
+    assert msg["role"] == "user"
+    text, image = msg["content"]
+    assert text == {"type": "text", "text": "P" + str(index)}
+    url = image["image_url"]["url"]
+    assert image["type"] == "image_url" and url.startswith("data:image/png;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]) == png
+
+
+@pytest.mark.parametrize("replies, calls", [
+    ((_good(_item("A", 2, 3, 6)),), 1),
+    (("", _good(_item("A", 2, 3, 6))), 2),
+    (("not json", _good(_item("A", 2, 3, 6))), 2),
+    ((TimeoutError("t"), _good(_item("A", 2, 3, 6))), 2),
+])
+def test_one_retry_on_empty_bad_or_failed_reply(replies, calls):
+    ask = _Ask(*replies)
+    got = bpr.model_page_reader(ask, lambda i: b"x")(_pr(0))
+    assert got == [_item("A", 2, 3, 6)]
+    assert len(ask.calls) == calls
+
+
+@pytest.mark.parametrize("replies, kept", [
+    (("", "{}"), ["", "{}"]),
+    ((ValueError("v"), '{"lines": []}'), ["ValueError", '{"lines": []}']),
+])
+def test_page_still_without_lines_after_retry_is_not_read(replies, kept):
+    ask = _Ask(*replies, _good(_item("never", 1, 1, 1)))
+    got = bpr.model_page_reader(ask, lambda i: b"x")(_pr(3))
+    assert got == {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": kept}
+    assert len(ask.calls) == 2
+
+
+@pytest.mark.parametrize("first, second, want", [
+    ("x" * 1000, "y" * 201, [200, 200]),
+    ("x" * 200, "short", [200, 5]),
+])
+def test_long_reply_is_cut_in_the_not_read_entry(first, second, want):
+    got = bpr.model_page_reader(_Ask(first, second), lambda i: b"x")(_pr(0))
+    assert [len(r) for r in got["replies"]] == want
+
+
+@pytest.mark.parametrize("attempts", [1, 3])
+def test_attempts_is_the_number_of_calls(attempts):
+    ask = _Ask(*([""] * 5))
+    got = bpr.model_page_reader(ask, lambda i: b"x", attempts=attempts)(_pr(0))
+    assert len(ask.calls) == attempts == got["attempts"]
+
+
+@pytest.mark.parametrize("attempts", [0, -1])
+def test_attempts_below_one_is_refused(attempts):
+    with pytest.raises(ValueError):
+        bpr.model_page_reader(_Ask(), lambda i: b"x", attempts=attempts)
+
+
+@pytest.mark.parametrize("bad_index", [0, 1])
+def test_not_read_page_reaches_the_copy_as_not_read_and_raw(bad_index):
+    good = _good(_item("A", 2, 5, 10))
+    replies = {bad_index: ["", ""], 1 - bad_index: [good]}
+    calls = {0: 0, 1: 0}
+
+    def ask_for(index):
+        def ask(messages):
+            r = replies[index][calls[index]]
+            calls[index] += 1
+            return r
+        return ask
+
+    def read_page(page_read):
+        return bpr.model_page_reader(ask_for(page_read.index), lambda i: b"x")(page_read)
+
+    rows, not_read, raw = bpr.rows_of_model_reads(read_page, "Bill")([_pr(0), _pr(1)])
+    assert not_read == [bad_index + 1]
+    assert [r.source_page for r in rows] == [2 - bad_index]
+    assert raw[str(bad_index + 1)][bpr.NOT_READ_KEY] is True
+    json.dumps(raw)  # the raw output is stored as JSON beside the copy
+
+
+@pytest.mark.parametrize("max_tokens", [bpr.PAGE_READ_MAX_TOKENS, 12000])
+def test_provider_ask_goes_through_the_product_client(monkeypatch, max_tokens):
+    from app.core import llm_client
+
+    seen = {}
+
+    async def fake_complete(messages, **kw):
+        seen.update(kw, messages=messages)
+        return "reply-" + str(kw["max_tokens"])
+
+    monkeypatch.setattr(llm_client, "complete", fake_complete)
+    msgs = bpr.page_read_messages("p", b"img")
+    assert bpr.provider_ask(max_tokens)(msgs) == "reply-" + str(max_tokens)
+    assert seen["messages"] is msgs and seen["max_tokens"] == max_tokens
+    assert seen["temperature"] == 0.0
+
+
+def test_default_allowance_is_large():
+    # a short allowance comes back empty: the model spends reasoning tokens first
+    assert bpr.PAGE_READ_MAX_TOKENS >= 8000 and bpr.PAGE_READ_ATTEMPTS == 2
+
+
+@pytest.mark.parametrize("index, dpi", [(0, 72), (1, 144)])
+def test_render_page_png_renders_the_asked_page(tmp_path, index, dpi):
+    fitz = pytest.importorskip("fitz")
+    path = tmp_path / "two.pdf"
+    doc = fitz.open()
+    for size in ((200, 100), (100, 300)):
+        doc.new_page(width=size[0], height=size[1])
+    doc.save(str(path))
+    doc.close()
+    png = bpr.render_page_png(str(path), index, dpi=dpi)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    pix = fitz.Pixmap(png)
+    want = ((200, 100), (100, 300))[index]
+    assert (pix.width, pix.height) == (round(want[0] * dpi / 72), round(want[1] * dpi / 72))

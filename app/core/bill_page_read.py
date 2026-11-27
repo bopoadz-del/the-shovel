@@ -34,10 +34,14 @@ No word of any line is read: types come from the model, checks from cells.
 
 from __future__ import annotations
 
+import base64
+import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+import httpx
 
 from app.core import bill_table_geometry as g
 
@@ -178,6 +182,148 @@ def rows_of_model_reads(
         return got.rows, got.pages_not_read, pages
 
     return rows_of
+
+
+#: The reply allowance for one page. The model spends hidden reasoning tokens
+#: out of the same budget: a short allowance comes back empty, not short.
+PAGE_READ_MAX_TOKENS = 8000
+#: Calls per page: the first, and one retry when the reply is empty or not JSON.
+PAGE_READ_ATTEMPTS = 2
+#: The resolution a page is rendered at for the model (figures legible).
+PAGE_READ_DPI = 200
+
+#: The default instruction sent with each page image. It names the JSON shape
+#: only (line types, figures as printed, null for what is not printed); it says
+#: nothing about any one document's headings, columns or wording.
+PAGE_READ_PROMPT = (
+    "This image is one page of a priced table of quantities. Read every line of "
+    "the table and return ONLY a JSON object: {\"lines\": [{\"type\": one of "
+    "\"item\", \"carried\", \"brought_forward\", \"subtotal\", \"total\", "
+    "\"heading\", \"ref\": string or null, \"description\": string, \"unit\": "
+    "string or null, \"quantity\": number or null, \"rate\": number or null, "
+    "\"amount\": number or null, \"figures\": object or null}]}. An item is a "
+    "work line with its own quantity. A carried, brought_forward, subtotal or "
+    "total line is a sum of other lines. When the page prints money columns "
+    "other than rate and amount, give each one in figures under the label the "
+    "page prints. Copy figures exactly as printed, without thousands "
+    "separators. Use null for anything not printed; never calculate or guess "
+    "a figure."
+)
+
+
+def page_read_messages(prompt: str, png: bytes) -> list[dict[str, Any]]:
+    """One user message carrying the instruction and the page image as content blocks."""
+    url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    return [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": url}},
+    ]}]
+
+
+def lines_of_reply(text: Any) -> list[Any] | None:
+    """The page's lines from one reply, or ``None`` when the reply gives none.
+
+    The reply is a JSON object with a ``lines`` list, optionally inside a code
+    fence. An empty reply, a reply that is not JSON, a JSON value without a
+    ``lines`` list, or an empty list all give ``None``: the page was not read,
+    which is never the same as "a page with no rows"."""
+    if not isinstance(text, str):
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`").strip()
+        if t[:4].lower() == "json":
+            t = t[4:]
+    try:
+        data: Any = json.loads(t)
+    except ValueError as exc:
+        # not JSON: no lines; the caller keeps the reply text as why
+        data = {"not_json": type(exc).__name__}
+    lines = data.get("lines") if isinstance(data, dict) else None
+    if not isinstance(lines, list) or not lines:
+        return None
+    return lines
+
+
+#: The raw-output entry of a page the model gave no lines for, after every
+#: attempt: ``{NOT_READ_KEY: True, "attempts": n, "replies": [...]}``, each
+#: reply cut short or the class of the error the call raised. Not a list, so
+#: :func:`rows_from_page_reads` counts the page as NOT READ.
+NOT_READ_KEY = "not_read"
+_REPLY_KEPT = 200
+#: What a provider call raises on a failed attempt: an HTTP or network error,
+#: an unset key or a non-2xx (``RuntimeError``), a timeout (``OSError``), or a
+#: reply without the expected shape. Anything else is a bug and propagates.
+_CALL_ERRORS = (httpx.HTTPError, RuntimeError, OSError, LookupError, TypeError, ValueError)
+
+
+def model_page_reader(
+    ask: Callable[[list[dict[str, Any]]], Any],
+    render_png: Callable[[int], bytes],
+    *,
+    prompt: str = PAGE_READ_PROMPT,
+    attempts: int = PAGE_READ_ATTEMPTS,
+) -> Callable[[Any], Any]:
+    """A ``read_page`` for :func:`rows_of_model_reads`.
+
+    For one ``bill_classify.PageRead`` it renders the page (``render_png`` gets
+    the 0-based index), sends it with ``prompt`` through ``ask`` (messages ->
+    reply text) and returns the reply's lines. An empty or non-JSON reply, or a
+    call that raises, is tried again up to ``attempts`` calls in all; then the
+    page is a not-read entry (:data:`NOT_READ_KEY`), which :func:`rows_from_page_reads` counts as
+    NOT READ. A figure is never filled in here."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+
+    def read_page(page_read: Any) -> Any:
+        messages = page_read_messages(prompt, render_png(page_read.index))
+        replies: list[str] = []
+        for _ in range(attempts):
+            try:
+                text = ask(messages)
+            except _CALL_ERRORS as exc:  # an attempt that failed, never a page of no rows
+                replies.append(type(exc).__name__)
+                continue
+            lines = lines_of_reply(text)
+            if lines is not None:
+                return lines
+            replies.append(str(text)[:_REPLY_KEPT])
+        return {NOT_READ_KEY: True, "attempts": attempts, "replies": replies}
+
+    return read_page
+
+
+def render_page_png(file_path: str, index: int, dpi: int = PAGE_READ_DPI) -> bytes:
+    """One page of a stored PDF (0-based ``index``) as PNG bytes at ``dpi``."""
+    import fitz  # PyMuPDF
+
+    from app.core import file_crypto
+
+    with file_crypto.open_plaintext(file_path) as readable:
+        doc = fitz.open(readable)
+        try:
+            pix = doc[index].get_pixmap(dpi=dpi)
+            try:
+                return pix.tobytes("png")
+            finally:
+                del pix
+        finally:
+            doc.close()
+
+
+def provider_ask(max_tokens: int = PAGE_READ_MAX_TOKENS) -> Callable[[list[dict[str, Any]]], str]:
+    """``ask`` through the product's provider client (``llm_client.complete``):
+    the configured provider and model, its usage recording and fallback."""
+    import asyncio
+
+    from app.core import llm_client
+
+    def ask(messages: list[dict[str, Any]]) -> str:
+        return asyncio.run(llm_client.complete(
+            messages, temperature=0.0, max_tokens=max_tokens,
+            agent_name="bill_page_read"))
+
+    return ask
 
 
 ITEM = "item"
