@@ -53,7 +53,7 @@ import logging
 import os
 import tempfile
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from app.core import bill_classify as bc
@@ -69,12 +69,26 @@ SKIP_NO_BYTES = "no_readable_bytes"
 SKIP_NO_ROWS = "no_rows_extracted"
 SKIP_PLAN_MISMATCH = "plan_hash_mismatch"
 SKIP_PARTIAL_PLAN = "plan_not_whole_document"
+SKIP_PAGES_NOT_READ = "pages_not_read"
 #: Word boxes saved before page sources were recorded came from OCR only.
 _LEGACY_CACHE_SOURCE = bc.SOURCE_OCR
 
 #: The verdict over the pages read (``bill_classify.verdict_of_reads``).
 Classify = Callable[[Sequence[bc.PageRead]], bc.BillVerdict]
 PageSource = bc.PageSource
+#: The pages read, to the sheet's rows, the 1-based pages whose rows could
+#: not be read, and the reader's own raw output per 1-based page (``None`` when
+#: the reader has none). The default places figures by the page's word
+#: geometry (``bill_table_geometry.extract_bill_rows``) and has no raw output;
+#: another reader (for example a model's read of the page, ``bill_page_read``)
+#: is passed by the caller. Its raw output is kept beside the copy's rows.
+RowsOfReads = Callable[
+    [Sequence[bc.PageRead]],
+    tuple[Sequence[g.BillRow], Sequence[int], "Mapping[str, Any] | None"],
+]
+#: Rows and the 1-based pages not read -> the per-bill check stored with the
+#: copy (``bill_page_read.bill_states`` with the document's own bill spans).
+StatesOfRows = Callable[[Sequence[g.BillRow], Sequence[int]], dict[str, Any]]
 
 
 class WebRequestRefused(RuntimeError):
@@ -187,10 +201,22 @@ def _sections(rows: Sequence[g.BillRow]) -> list[dict[str, Any]]:
     return list(out.values())
 
 
-def _plan_hash(document_id: str, pages: tuple[int, int], rows: Sequence[g.BillRow]) -> str:
+def _raw_body(raw: Mapping[str, Any] | None) -> bytes | None:
+    """The reader's raw output as stored beside the copy: canonical JSON bytes."""
+    if raw is None:
+        return None
+    return json.dumps({str(k): v for k, v in raw.items()}, sort_keys=True,
+                      ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _plan_hash(document_id: str, pages: tuple[int, int], rows: Sequence[g.BillRow],
+               not_read: Sequence[int] = (), states: dict[str, Any] | None = None,
+               raw_sha256: str | None = None) -> str:
     body = json.dumps(
         {"document_id": document_id, "pages": list(pages),
-         "rows": [dataclasses.asdict(r) for r in rows]},
+         "rows": [dataclasses.asdict(r) for r in rows],
+         "pages_not_read": list(not_read), "bill_states": states,
+         "raw_reads_sha256": raw_sha256},
         sort_keys=True, default=list,
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -203,6 +229,8 @@ def _prepare(
     page_source: PageSource | None,
     block,
     work_dir: str | None,
+    rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """Shared by plan and execute: a skip dict, or the plan with its rows."""
     from app.core import projects
@@ -236,15 +264,32 @@ def _prepare(
     if not verdict.is_bill:
         return {"derived": False, "reason": verdict.reason, **sources}
     column_stats = g.ColumnStats()
-    rows = g.extract_bill_rows([w for r in page_reads for w in r.words], block,
-                               stats=column_stats)
+    if rows_of_reads is None:
+        rows = g.extract_bill_rows([w for r in page_reads for w in r.words], block,
+                                   stats=column_stats)
+        not_read: list[int] = []
+        raw = None
+    else:
+        got_rows, got_not_read, raw = rows_of_reads(page_reads)
+        rows, not_read = list(got_rows), sorted(got_not_read)
+    why_not_read = _why_not_read(raw, not_read)
+    if not rows and not_read:  # a reader that failed is never a page of no rows
+        return {"derived": False, "reason": SKIP_PAGES_NOT_READ,
+                "pages_not_read": not_read, "pages_not_read_why": why_not_read,
+                "pages": [first, stop],
+                "pages_in_file": total, "bill_verdict": verdict.reason, **sources}
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
                 "bill_verdict": verdict.reason, **sources}
+    states = None if states_of_rows is None else states_of_rows(rows, not_read)
+    raw_body = _raw_body(raw)
+    raw_reads = None if raw_body is None else {
+        "pages": len(raw or {}), "sha256": hashlib.sha256(raw_body).hexdigest()}
     return {
         "doc": doc,
         "verdict": verdict,
         "rows": rows,
+        "raw_body": raw_body,
         "plan": {
             "derived": False,
             "reason": verdict.reason,
@@ -254,11 +299,26 @@ def _prepare(
             **sources,
             "rows": len(rows),
             "unreconciled": sum(1 for r in rows if r.check),
+            "pages_not_read": not_read,
+            "pages_not_read_why": why_not_read,
             "sections": _sections(rows),
             "columns": column_stats.as_dict(rows),
-            "plan_hash": _plan_hash(document_id, (first, stop), rows),
+            "bill_states": states,
+            "raw_reads": raw_reads,
+            "plan_hash": _plan_hash(document_id, (first, stop), rows, not_read, states,
+                                    raw_reads and raw_reads["sha256"]),
         },
     }
+
+
+def _why_not_read(raw: Any, not_read: Sequence[int]) -> dict[str, Any]:
+    """The reader's own entry for each page not read (by 1-based page), as the
+    reader returned it: why the page gave no lines (attempts, replies, failed
+    calls). Kept with the plan and the skip, never in the plan hash."""
+    if not isinstance(raw, Mapping):
+        return {}
+    return {str(p): raw[str(p)] for p in not_read
+            if isinstance(raw.get(str(p)), Mapping)}
 
 
 def plan_bill_sheet(
@@ -270,10 +330,15 @@ def plan_bill_sheet(
     page_source: PageSource | None = None,
     block=None,
     work_dir: str | None = None,
+    rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """What the derivation would write, without writing it. ``pages`` is a
-    0-based half-open range (default: every page)."""
-    prepared = _prepare(document_id, pages, classify, page_source, block, work_dir)
+    0-based half-open range (default: every page). ``rows_of_reads`` replaces
+    the geometry row reader (see :data:`RowsOfReads`); ``states_of_rows``
+    adds the per-bill check (see :data:`StatesOfRows`)."""
+    prepared = _prepare(document_id, pages, classify, page_source, block, work_dir,
+                        rows_of_reads, states_of_rows)
     return prepared.get("plan", prepared)
 
 
@@ -286,12 +351,17 @@ def derive_bill_sheet(
     page_source: PageSource | None = None,
     block=None,
     work_dir: str | None = None,
+    rows_of_reads: RowsOfReads | None = None,
+    states_of_rows: StatesOfRows | None = None,
 ) -> dict[str, Any]:
     """Add and index the derived spreadsheet row for a whole-document plan
-    whose hash is ``plan_hash``. Returns what happened, as counts and ids."""
+    whose hash is ``plan_hash``. Returns what happened, as counts and ids.
+    A plan with any page whose rows were not read is never written: the
+    copy would stand for the whole document while missing those pages."""
     from app.core import byte_store, doc_index, projects
 
-    prepared = _prepare(document_id, None, classify, page_source, block, work_dir)
+    prepared = _prepare(document_id, None, classify, page_source, block, work_dir,
+                        rows_of_reads, states_of_rows)
     plan = prepared.get("plan")
     if plan is None:
         return prepared
@@ -299,6 +369,9 @@ def derive_bill_sheet(
         return {"derived": False, "reason": SKIP_PARTIAL_PLAN}
     if plan["plan_hash"] != plan_hash:
         return {"derived": False, "reason": SKIP_PLAN_MISMATCH, "plan_hash": plan["plan_hash"]}
+    if plan["pages_not_read"]:
+        return {"derived": False, "reason": SKIP_PAGES_NOT_READ,
+                "pages_not_read": plan["pages_not_read"]}
     rows, verdict, name = prepared["rows"], prepared["verdict"], prepared["doc"]["original_name"]
 
     data, sheets = _workbook_bytes(rows)
@@ -306,6 +379,11 @@ def derive_bill_sheet(
     derived_name = f"{stem}.bill.xlsx"
     path = byte_store.allocate_path(f"{uuid.uuid4().hex[:12]}_{derived_name}")
     byte_store.write_bytes(path, data)
+    raw_reads: dict[str, Any] = {}
+    if prepared["raw_body"] is not None:
+        raw_path = byte_store.allocate_path(f"{uuid.uuid4().hex[:12]}_{stem}.bill.raw.json")
+        byte_store.write_bytes(raw_path, prepared["raw_body"])
+        raw_reads = {"raw_reads": {**plan["raw_reads"], "file_path": raw_path}}
     previous = _previous_derived(project_id, document_id)
     row = projects.add_document(
         project_id,
@@ -322,6 +400,8 @@ def derive_bill_sheet(
             "rows": len(rows),
             "rows_flagged": plan["unreconciled"],
             "sheets": sheets,
+            **({"bill_states": plan["bill_states"]} if plan["bill_states"] is not None else {}),
+            **raw_reads,
         },
         reingest_of=previous,
     )
