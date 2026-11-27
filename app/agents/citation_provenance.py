@@ -441,6 +441,8 @@ def _told_note_records(content: Any) -> list[EvidenceRecord]:
     try:
         payload = json.loads(content or "")
     except (TypeError, ValueError):
+        # Not a tool result this module can read: it backs nothing.
+        _LOG.debug("a notes tool message that is not JSON backs no figure", exc_info=True)
         return []
     result = payload.get("result") if isinstance(payload, dict) else None
     if not isinstance(result, dict) or result.get("told_by_user") is not True or "data" not in result:
