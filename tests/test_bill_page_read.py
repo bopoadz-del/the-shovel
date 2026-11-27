@@ -77,11 +77,14 @@ def test_no_bill_label_gives_heading_path_only(label):
     assert rows[0].path == ("H",)
 
 
-def test_pages_are_taken_in_page_order_and_the_path_carries_across():
-    pages = {"10": [_item("B", 1, 2, 2)], "9": [_head("Roads"), _item("A", 1, 1, 1)],
+@pytest.mark.parametrize("first,second", [(9, 10), (99, 100)])
+def test_pages_are_taken_in_page_order_and_the_path_carries_across(first, second):
+    pages = {str(second): [_item("B", 1, 2, 2)],
+             str(first): [_head("Roads"), _item("A", 1, 1, 1)],
              "x": [_item("Z", 1, 1, 1)]}
     rows = bpr.rows_from_page_reads(pages).rows
-    assert [(r.source_page, r.path) for r in rows] == [(9, ("Roads",)), (10, ("Roads",))]
+    assert [(r.source_page, r.path) for r in rows] == [
+        (first, ("Roads",)), (second, ("Roads",))]
 
 
 @pytest.mark.parametrize("cols", [{"Fixed Charge": "1,000", "Time Charge": 250},
