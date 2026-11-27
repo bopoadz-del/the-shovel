@@ -5,9 +5,10 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
-import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+import math
 
 
 logger = logging.getLogger(__name__)
