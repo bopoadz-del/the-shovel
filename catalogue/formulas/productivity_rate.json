@@ -102,9 +102,7 @@
       "file": "app/agents/base/formulas/construction_formulas_commercial.py"
     },
     "required_groups": [],
-    "feeds": [
-      "formula:pe_unit_convert"
-    ],
+    "feeds": [],
     "fed_by": []
   },
   "hints": {

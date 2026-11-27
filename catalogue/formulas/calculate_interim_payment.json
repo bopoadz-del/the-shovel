@@ -70,9 +70,7 @@
       "file": "app/agents/hats/commercial/formulas/construction_formulas_additions.py"
     },
     "required_groups": [],
-    "feeds": [
-      "formula:interim_payment_to_date"
-    ],
+    "feeds": [],
     "fed_by": []
   },
   "hints": {

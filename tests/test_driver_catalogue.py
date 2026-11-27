@@ -196,6 +196,68 @@ def test_an_output_feeds_an_input_of_the_same_name_and_unit_only(registered, tak
     assert held["formula:zz_cat_dst"]["feeds"] == []
 
 
+_HANDS_BACK = {
+    # The returned dict hands an input back under another name.
+    "width": ("def zz_cat_copy(zz_w, zz_l):\n    return {'zz_w2': zz_w, 'zz_area': zz_w * zz_l}\n",
+              "zz_cat_takes_area"),
+    "area": ("def zz_cat_copy(zz_w, zz_l):\n    return {'zz_w2': zz_w * 2, 'zz_area': zz_l}\n",
+             "zz_cat_takes_w"),
+}
+
+
+@pytest.mark.parametrize("which", sorted(_HANDS_BACK))
+def test_an_output_handed_back_from_an_input_feeds_nothing(registered, tmp_path, which):
+    # That output is the caller's figure, not a result: only the worked-out
+    # output links.
+    body, fed = _HANDS_BACK[which]
+    path = tmp_path / "zz_cat_copy.py"
+    path.write_text(body, encoding="utf-8")
+    ns: dict = {}
+    exec(compile(body, str(path), "exec"), ns)
+    fr.formula(owner="base", description="Synthetic copy.", display_name="Synthetic copy",
+               inputs={"zz_w": "m", "zz_l": "m"}, outputs={"zz_w2": "m", "zz_area": "m2"})(ns["zz_cat_copy"])
+    registered["formula"].append("zz_cat_copy")
+    _formula(registered, "zz_cat_takes_w", {"zz_w2": "m"}, {"c": "m3"})
+    _formula(registered, "zz_cat_takes_area", {"zz_area": "m2"}, {"c": "m3"})
+    catalogue._CACHE.clear()
+    held = {e["id"]: e for e in catalogue.entries()}
+    assert held["formula:zz_cat_copy"]["feeds"] == [f"formula:{fed}"]
+    other = ({"zz_cat_takes_w", "zz_cat_takes_area"} - {fed}).pop()
+    assert held[f"formula:{other}"]["fed_by"] == []
+
+
+@pytest.mark.parametrize("out_name,fed", [("zz_a", False), ("zz_b", True)])
+def test_an_output_named_like_its_own_input_feeds_nothing(registered, out_name, fed):
+    _formula(registered, "zz_cat_src", {"zz_a": "m"}, {out_name: "m"})
+    _formula(registered, "zz_cat_dst", {out_name: "m"}, {"c": "m3"})
+    catalogue._CACHE.clear()
+    held = {e["id"]: e for e in catalogue.entries()}
+    assert held["formula:zz_cat_src"]["feeds"] == (["formula:zz_cat_dst"] if fed else [])
+    assert held["formula:zz_cat_dst"]["fed_by"] == (["formula:zz_cat_src"] if fed else [])
+
+
+@pytest.mark.parametrize("body,copied", [
+    ("def f(a, b):\n    return {'x': a, 'y': a * b}\n", {"a", "b", "x"}),
+    ("def f(a, b):\n    return {'x': b, 'y': a}\n", {"a", "b", "x", "y"}),
+    ("def f(a, b):\n    c = 2\n    return {'x': c, 'y': [a]}\n", {"a", "b"}),
+    ("def f(a, b):\n    return dict(x=a)\n", {"a", "b"}),
+])
+def test_copied_outputs_reads_returned_dict_literals(tmp_path, body, copied):
+    path = tmp_path / "zz_src.py"
+    path.write_text(body, encoding="utf-8")
+    ns: dict = {}
+    exec(compile(body, str(path), "exec"), ns)
+    assert catalogue.copied_outputs(ns["f"], {"a": None, "b": None}) == copied
+
+
+@pytest.mark.parametrize("inputs", [{"a": None}, {"a": None, "b": None}])
+def test_copied_outputs_without_source_copies_by_name_only(inputs):
+    ns: dict = {}
+    # Compiled from a string with no file: the source cannot be read.
+    exec(compile("def f(a, b=0):\n    return {'x': a}\n", "<no file>", "exec"), ns)
+    assert catalogue.copied_outputs(ns["f"], inputs) == set(inputs)
+
+
 # -- the index ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("built", ["cold", "cached"])
@@ -794,8 +856,9 @@ def test_a_formula_never_feeds_itself(unit):
     a = catalogue._entry("formula", "a", inputs=[{"name": "q", "unit": unit}], outputs=[{"name": "q", "unit": unit}])
     b = catalogue._entry("formula", "b", inputs=[{"name": "q", "unit": unit}], outputs=[])
     catalogue._link_formulas([a, b])
-    assert a["feeds"] == ["formula:b"] and a["fed_by"] == []
-    assert b["fed_by"] == ["formula:a"]
+    # a only hands q back: it feeds nobody, itself least of all.
+    assert a["feeds"] == [] and a["fed_by"] == []
+    assert b["fed_by"] == []
 
 
 @pytest.mark.parametrize("pick", [0, -1])

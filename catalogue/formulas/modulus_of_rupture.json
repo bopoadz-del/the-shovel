@@ -77,9 +77,7 @@
       "file": "app/agents/hats/qaqc/defaults.py"
     },
     "required_groups": [],
-    "feeds": [
-      "formula:modulus_of_elasticity_concrete"
-    ],
+    "feeds": [],
     "fed_by": []
   },
   "hints": {

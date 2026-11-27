@@ -89,9 +89,7 @@
     },
     "required_groups": [],
     "feeds": [],
-    "fed_by": [
-      "formula:shear_stress_check"
-    ]
+    "fed_by": []
   },
   "hints": {
     "approved": false,

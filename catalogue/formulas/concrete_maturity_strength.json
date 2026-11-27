@@ -131,9 +131,7 @@
     },
     "required_groups": [],
     "feeds": [],
-    "fed_by": [
-      "formula:grout_pressure_calc"
-    ]
+    "fed_by": []
   },
   "hints": {
     "approved": false,

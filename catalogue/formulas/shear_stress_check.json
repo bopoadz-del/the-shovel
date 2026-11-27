@@ -82,10 +82,7 @@
       "file": "app/agents/hats/design/formulas/construction_formulas.py"
     },
     "required_groups": [],
-    "feeds": [
-      "formula:rc_beam_moment_capacity",
-      "formula:rc_beam_shear_capacity"
-    ],
+    "feeds": [],
     "fed_by": []
   },
   "hints": {

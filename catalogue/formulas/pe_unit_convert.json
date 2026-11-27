@@ -123,9 +123,7 @@
     },
     "required_groups": [],
     "feeds": [],
-    "fed_by": [
-      "formula:productivity_rate"
-    ]
+    "fed_by": []
   },
   "hints": {
     "approved": false,

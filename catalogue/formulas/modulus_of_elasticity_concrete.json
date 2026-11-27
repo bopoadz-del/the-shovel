@@ -63,9 +63,7 @@
     },
     "required_groups": [],
     "feeds": [],
-    "fed_by": [
-      "formula:modulus_of_rupture"
-    ]
+    "fed_by": []
   },
   "hints": {
     "approved": false,

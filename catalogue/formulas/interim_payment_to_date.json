@@ -112,9 +112,7 @@
     },
     "required_groups": [],
     "feeds": [],
-    "fed_by": [
-      "formula:calculate_interim_payment"
-    ]
+    "fed_by": []
   },
   "hints": {
     "approved": false,

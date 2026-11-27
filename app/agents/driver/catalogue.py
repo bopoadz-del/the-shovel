@@ -117,6 +117,7 @@ def _formula_entries() -> List[Dict[str, Any]]:
     from app.lib import formula_registry as fr
 
     out = []
+    copies: Dict[str, set] = {}
     for spec in fr.all_specs():
         params = fr.parameters(spec)
         entry = _entry(
@@ -136,13 +137,43 @@ def _formula_entries() -> List[Dict[str, Any]]:
         gaps = ("standard",) if not spec.standard else ()
         entry["gaps"] = _gaps(entry, gaps)
         out.append(entry)
-    _link_formulas(out)
+        copies[entry["id"]] = copied_outputs(spec.fn, params)
+    _link_formulas(out, copies)
     return out
 
 
-def _link_formulas(entries: List[Dict[str, Any]]) -> None:
+def copied_outputs(fn: Any, inputs: Any) -> set:
+    """The outputs a formula hands back as one of its own inputs, unchanged:
+    an output named like an input, or a key of a returned dict literal whose
+    value is a bare parameter of the function. Such an output is what the
+    caller gave, not a result, so it feeds nothing. Read from the code's own
+    structure; a function whose source cannot be read copies only by name."""
+    import ast
+    import textwrap
+
+    names = set(inputs)
+    copied = set(names)
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError) as exc:
+        _LOG.debug("catalogue: no source for %r (%s); copies read by name only", fn, exc)
+        return copied
+    params = set(inspect.signature(fn).parameters) | names
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key, value in zip(node.value.keys, node.value.values):
+                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
+                        and isinstance(value, ast.Name) and value.id in params):
+                    copied.add(key.value)
+    return copied
+
+
+def _link_formulas(entries: List[Dict[str, Any]], copies: Optional[Dict[str, set]] = None) -> None:
     """``feeds`` / ``fed_by``: formula A feeds formula B when one of A's
-    outputs is one of B's inputs by the same name and the same unit."""
+    outputs is one of B's inputs by the same name and the same unit, and A
+    works that output out: an output A only hands back from its own inputs
+    (``copied_outputs``) is the caller's figure, not A's, and links nothing."""
+    copies = copies or {}
     takes: Dict[Tuple[str, str], List[str]] = {}
     for e in entries:
         for i in e["inputs"]:
@@ -150,7 +181,10 @@ def _link_formulas(entries: List[Dict[str, Any]]) -> None:
                 takes.setdefault((i["name"], i["unit"]), []).append(e["id"])
     by_id = {e["id"]: e for e in entries}
     for e in entries:
+        copied = copies.get(e["id"], set()) | {i["name"] for i in e["inputs"]}
         for o in e["outputs"]:
+            if o["name"] in copied:
+                continue
             for target in takes.get((o["name"], o["unit"]), []):
                 if target != e["id"] and target not in e["feeds"]:
                     e["feeds"].append(target)

@@ -126,9 +126,7 @@
       "file": "app/agents/hats/qaqc/defaults.py"
     },
     "required_groups": [],
-    "feeds": [
-      "formula:concrete_maturity_strength"
-    ],
+    "feeds": [],
     "fed_by": []
   },
   "hints": {
