@@ -3,15 +3,22 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+
+from decimal import ROUND_HALF_UP, Decimal, localcontext
+
 from app.lib.formula_registry import Param, formula
 
 
-def _money(x: float) -> str:
-    return f"{x:,.2f}"
+def _cents(x: float | Decimal) -> Decimal:
+    """An amount to the cent, half up, on the figure as written (the shortest
+    decimal that reads back as the same number), so no binary residue decides
+    the last cent. Never a negative zero."""
+    d = x if isinstance(x, Decimal) else Decimal(repr(float(x)))
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) + 0
 
 
-def _cents(x: float) -> float:
-    return round(x, 2)
+def _money(x: float | Decimal) -> str:
+    return f"{_cents(x):,.2f}"
 
 
 @formula(
@@ -65,7 +72,7 @@ def interim_payment_to_date(
     work = float(work_value_to_date)
     mos = float(materials_on_site or 0.0)
     prev = float(previously_certified)
-    rate = float(retention_percent)
+    rate = float(retention_percent) + 0.0   # a rate of -0.0 is 0
     if min(work, mos, prev) < 0:
         return {"error": "work_value_to_date, materials_on_site and previously_certified "
                          "must be >= 0."}
@@ -74,38 +81,40 @@ def interim_payment_to_date(
     if retention_limit is not None and float(retention_limit) < 0:
         return {"error": "retention_limit must be >= 0."}
 
-    # Amounts are money: retention, the limit, the earlier certificates and
-    # the net are taken to the cent before the next step uses them, so the
-    # working adds up as printed, and earlier certificates equal to the net
-    # to the cent -- however their total was added up -- give a due of
-    # exactly nil, not a float residue read as a deduction.
-    prev = _cents(prev)
-    gross = work + mos
-    retention_at_rate = _cents(work * rate / 100.0)
-    capped = (retention_limit is not None
-              and retention_at_rate > _cents(float(retention_limit)))
-    retention = _cents(float(retention_limit)) if capped else retention_at_rate
-    net = _cents(gross - retention)
-    due = net - prev
+    # Amounts are money. Every amount is taken to the cent as it comes in
+    # and every step is worked on those cent figures in exact decimal
+    # arithmetic, so each line of the working adds up on the figures it
+    # prints, and earlier certificates equal to the net to the cent --
+    # however their total was added up -- give a due of exactly nil.
+    with localcontext() as exact:
+        exact.prec = 60
+        work_c, mos_c, prev_c = _cents(work), _cents(mos), _cents(prev)
+        limit_c = None if retention_limit is None else _cents(float(retention_limit))
+        gross = work_c + mos_c
+        retention_at_rate = _cents(work_c * Decimal(repr(rate)) / 100)
+        capped = limit_c is not None and retention_at_rate > limit_c
+        retention = limit_c if capped else retention_at_rate
+        net = gross - retention
+        due = net - prev_c
 
     working = [
-        f"Gross to date = work done {_money(work)} + materials on site {_money(mos)} "
+        f"Gross to date = work done {_money(work_c)} + materials on site {_money(mos_c)} "
         f"= {_money(gross)}",
-        f"Retention = {rate:g}% x work done {_money(work)} = {_money(retention_at_rate)}"
-        + (f", held at the retention limit {_money(float(retention_limit))}" if capped
-           else (f" (limit {_money(float(retention_limit))} not reached)"
-                 if retention_limit is not None else " (no retention limit given)")),
+        f"Retention = {rate:g}% x work done {_money(work_c)} = {_money(retention_at_rate)}"
+        + (f", held at the retention limit {_money(limit_c)}" if capped
+           else (f" (limit {_money(limit_c)} not reached)"
+                 if limit_c is not None else " (no retention limit given)")),
         f"Net to date = {_money(gross)} - {_money(retention)} = {_money(net)}",
-        f"Due this certificate = {_money(net)} - earlier certificates {_money(prev)} "
+        f"Due this certificate = {_money(net)} - earlier certificates {_money(prev_c)} "
         f"= {_money(due)}",
     ]
     out = {
-        "gross_to_date": round(gross, 2),
-        "retention_to_date": round(retention, 2),
+        "gross_to_date": float(gross),
+        "retention_to_date": float(retention),
         "retention_limit_reached": capped,
-        "net_to_date": round(net, 2),
-        "previously_certified": round(prev, 2),
-        "amount_due": round(due, 2),
+        "net_to_date": float(net),
+        "previously_certified": float(prev_c),
+        "amount_due": float(due),
         "working": working,
         "standard": "FIDIC Clause 14.3",
     }

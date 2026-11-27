@@ -168,6 +168,16 @@ def test_rate_and_earlier_certificates_have_no_default(name):
     assert params[name].required, name
 
 
+def _retention_to_the_cent(work: float, rate: float) -> float:
+    """rate% of the work done, to the cent, half up on the decimal figures:
+    2.5% of 4,431,512.20 is 110,787.805, which is 110,787.81 (a float round
+    of the binary product gives 110,787.80)."""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    exact = Decimal(repr(float(work))) * Decimal(repr(float(rate))) / 100
+    return float(exact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 def _nil_cases(seed: int):
     # earlier certificates equal to the net to date, on 2-dp figures with
     # cents, so a float difference that is not exactly zero would show
@@ -177,7 +187,7 @@ def _nil_cases(seed: int):
         work = rng.randint(5_000_000, 900_000_000) / 100.0
         mos = rng.choice([0.0, rng.randint(100_000, 40_000_000) / 100.0])
         rate = rng.choice([2.5, 5, 7.5, 10])
-        ret = round(work * rate / 100.0, 2)
+        ret = _retention_to_the_cent(work, rate)
         prev = round(work + mos - ret, 2)
         out.append((work, mos, rate, prev))
     return out
@@ -280,7 +290,7 @@ def _summed_nil_cases(seed):
     while len(out) < 200:
         work = rng.randint(5_000_000, 900_000_000) / 100.0
         rate = rng.choice([0, 2.5, 5, 10])
-        net = round(work - round(work * rate / 100.0, 2), 2)
+        net = round(work - _retention_to_the_cent(work, rate), 2)
         cents = round(net * 100)
         a = rng.randint(1, cents - 2)
         b = rng.randint(1, cents - a - 1)
@@ -338,3 +348,106 @@ def test_the_limit_is_compared_to_the_cent(limit, reached):
     r = interim_payment_to_date(1_000_000.0, 5, 0, retention_limit=limit)
     assert r["retention_limit_reached"] is reached
     assert r["retention_to_date"] == (round(limit, 2) if reached else 50_000.0)
+
+
+# ── verdict at 92be8a5: sub-cent inputs and a rate of -0.0 ─────────────────
+
+def _printed(line: str) -> list:
+    """The money figures a working line prints, as exact decimals."""
+    import re
+    from decimal import Decimal
+
+    return [Decimal(t.replace(",", "")) for t in re.findall(r"-?\d[\d,]*\.\d{2}(?!\d)", line)]
+
+
+def _adds_up(out: dict, rate: float) -> None:
+    """Every line of the working adds up on the figures it prints."""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    gross_line, retention_line, net_line, due_line = out["working"]
+    work, mos, gross = _printed(gross_line)
+    assert work + mos == gross
+    printed_work, at_rate = _printed(retention_line)[:2]
+    assert printed_work == work
+    assert (work * Decimal(repr(float(rate))) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == at_rate
+    net_gross, retention, net = _printed(net_line)
+    assert net_gross == gross and gross - retention == net
+    due_net, earlier, due = _printed(due_line)
+    assert due_net == net and net - earlier == due
+    assert out["gross_to_date"] == float(gross) and out["net_to_date"] == float(net)
+    assert out["retention_to_date"] == float(retention) and out["amount_due"] == float(due)
+
+
+@pytest.mark.parametrize("inputs,gross,retention,net,due", [
+    # 2,559,543.195 is 2,559,543.20 to the cent; 3% of that is 76,786.30;
+    # the limit 121,360.51 is not reached; earlier certificates 2,428,887.55
+    ({"work_value_to_date": 2559543.195, "retention_percent": 3, "retention_limit": 121360.505,
+      "previously_certified": 2428887.548}, 2559543.20, 76786.30, 2482756.90, 53869.35),
+    # half a cent of work is one cent; all of it is retained; nothing is due
+    ({"work_value_to_date": 0.005, "retention_percent": 100, "previously_certified": 0},
+     0.01, 0.01, 0.0, 0.0),
+    # 1,000.004 + 500.004 are 1,000.00 + 500.00, not 1,500.01
+    ({"work_value_to_date": 1000.004, "materials_on_site": 500.004, "retention_percent": 10,
+      "previously_certified": 0}, 1500.00, 100.00, 1400.00, 1400.00),
+])
+def test_amounts_with_fractions_of_a_cent_add_up_as_printed_through_the_registry(inputs, gross, retention, net, due):
+    import app.lib.construction_formulas as cf
+
+    env = cf.run_calculation("interim_payment_to_date", dict(inputs))
+    assert env["status"] == "success", env
+    out = env["result"]
+    assert (out["gross_to_date"], out["retention_to_date"], out["net_to_date"], out["amount_due"]) == (
+        gross, retention, net, due)
+    _adds_up(out, inputs["retention_percent"])
+    assert ("note" in out) == (due < 0)
+
+
+@pytest.mark.parametrize("seed", [11, 29])
+def test_three_decimal_amounts_always_add_up_as_printed(seed):
+    """Quantity x rate upstream gives money with a third decimal: 400 such
+    certificates per seed, every line adding up on its printed figures, and a
+    deduction note only when the due is below nil."""
+    rng = random.Random(seed)
+    for _ in range(400):
+        work = round(rng.uniform(0, 5_000_000), 3)
+        mos = round(rng.uniform(0, 300_000), 3)
+        rate = rng.choice([0, 2.5, 3, 5, 7.5, 10, 12.5, 100])
+        limit = rng.choice([None, round(rng.uniform(0, 400_000), 3)])
+        prev = round(rng.uniform(0, 5_200_000), 3)
+        out = interim_payment_to_date(work, rate, prev, materials_on_site=mos, retention_limit=limit)
+        _adds_up(out, rate)
+        assert ("note" in out) == (out["amount_due"] < 0)
+        assert "-0.00" not in " ".join(out["working"]).replace("--", "")
+
+
+@pytest.mark.parametrize("work", [1000.0, 84_250.75])
+def test_a_retention_rate_of_minus_zero_is_zero_with_no_minus_sign(work):
+    out = interim_payment_to_date(work, -0.0, 0)
+    assert out["retention_to_date"] == 0.0 and str(out["retention_to_date"]) == "0.0"
+    assert out["net_to_date"] == work and out["amount_due"] == work
+    assert "Retention = 0% x" in out["working"][1] and "= 0.00" in out["working"][1]
+    assert not any("-0" in line for line in out["working"])
+
+
+@pytest.mark.parametrize("work,rate,retention", [
+    # 2.5% of 1,000.30 is 25.0075; of 2,000.50 is 50.0125: half up on the
+    # decimal figure, where a float residue would round the other way
+    (1000.30, 2.5, 25.01), (2000.50, 2.5, 50.01), (0.50, 1, 0.01),
+])
+def test_retention_rounds_half_up_on_the_decimal_figure(work, rate, retention):
+    out = interim_payment_to_date(work, rate, 0)
+    assert out["retention_to_date"] == retention
+    _adds_up(out, rate)
+
+
+@pytest.mark.parametrize("field", ["work_value_to_date", "materials_on_site", "previously_certified", "retention_limit"])
+def test_an_amount_of_minus_zero_prints_no_minus_sign(field):
+    kw = {"work_value_to_date": 1200.0, "retention_percent": 5, "previously_certified": 300.0,
+          "materials_on_site": 80.0, "retention_limit": 500.0}
+    kw[field] = -0.0
+    out = interim_payment_to_date(**kw)
+    assert "error" not in out
+    assert not any("-0.00" in line for line in out["working"])
+    assert all(str(out[k]) != "-0.0" for k in ("gross_to_date", "retention_to_date", "net_to_date",
+                                               "previously_certified", "amount_due"))
+
