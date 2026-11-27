@@ -144,6 +144,9 @@ def test_a_sheet_turn_plans_runs_in_code_and_records_the_trace(monkeypatch, tota
     assert row["record_id"] == end["trace_record"]
     assert row["rounds"][1]["calls"][0]["tool"] == "run_step" and row["rounds"][1]["calls"][0]["step"] == "s1"
     assert "step" not in row["rounds"][0]["calls"][0]  # only a run_step call names a step
+    # The end event carries the final sheet and the ending, the same as the
+    # record holds, for the answer's "how this was worked out" panel.
+    assert end["sheet"] == row["sheet"] and end["ended"] == row["ended"] == "answer"
 
 
 @pytest.mark.parametrize("reply", ["A plain answer.", "Another reply here."])
@@ -153,7 +156,8 @@ def test_without_the_setting_no_sheet_and_no_record(monkeypatch, reply):
     assert reply in _text(events)
     assert "sheet_update" not in seen[0]["tools"]
     assert not any(m["content"].startswith("Working sheet") for m in seen[0]["messages"] if m["role"] == "system")
-    assert "trace_record" not in [e for e in events if e.get("type") == "end"][0]
+    end = [e for e in events if e.get("type") == "end"][0]
+    assert "trace_record" not in end and "sheet" not in end and "ended" not in end
     assert trace_store.records(_today()) == []
 
 

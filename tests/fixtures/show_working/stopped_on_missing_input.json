@@ -1,0 +1,19 @@
+{
+  "_note": "A recorded SSE 'end' event of a catalogue-path turn that stopped on a missing input. Every value is invented.",
+  "content": "I need the pit length and the pit width before I can work out the volume.",
+  "ended": "asked_input",
+  "provenance": [],
+  "sheet": {
+    "givens": [{"id": "g1", "what": "depth", "value": 1.8, "unit": "m", "source": "user"}],
+    "plan": [
+      {"id": "s1", "entry": "formula:pit_volume", "inputs": {"depth": "g1"}},
+      {"id": "s2", "entry": "formula:arithmetic_step", "inputs": {"a": "s1", "b": 4, "op": "multiply"}}
+    ],
+    "steps": [{"id": "s1", "status": "waiting_input", "needs": ["Pit length", "Pit width"]}],
+    "missing": [
+      {"for": "s1", "input": "length", "label": "Pit length", "asked": true},
+      {"for": "s1", "input": "width", "label": "Pit width", "asked": true}
+    ],
+    "done": false
+  }
+}

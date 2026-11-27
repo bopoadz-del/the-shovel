@@ -851,4 +851,4 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
            "sources": sources.panel(_trail(), provenance, "".join(sent),
                                     calculated=any(n == "construction_calc" for n, _ in ran)),
            "steps": step + 1, "elapsed_s": round(time.monotonic() - t0, 2),
-           **({"trace_record": record_id} if sheet_mode else {})}
+           **({"trace_record": record_id, "sheet": work, "ended": ended} if sheet_mode else {})}

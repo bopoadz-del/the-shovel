@@ -1,0 +1,12 @@
+.show-working { margin-top: 0.5rem; border-top: 1px solid var(--border, #e2e2e2); padding-top: 0.4rem; font-size: 0.88rem; }
+.show-working__summary { cursor: pointer; color: var(--text-muted, #555); }
+.show-working__section { margin: 0.5rem 0 0; }
+.show-working__heading { font-weight: 600; margin: 0.4rem 0 0.2rem; }
+.show-working__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.show-working__item { border: 1px solid var(--border, #e2e2e2); border-radius: 6px; padding: 0.35rem 0.5rem; overflow-wrap: anywhere; }
+.show-working__item--waiting_input, .show-working__item--not_run { border-style: dashed; }
+.show-working__item--failed { border-color: #c0392b; }
+.show-working__chip { display: inline-block; font-size: 0.75rem; border-radius: 999px; padding: 0 0.45rem; margin-left: 0.35rem; background: var(--chip-bg, #eef2f7); }
+.show-working__chip--none { background: #fdecea; }
+.show-working__inputs { margin: 0.2rem 0 0; padding-left: 1rem; }
+.show-working__ending { margin-top: 0.4rem; color: var(--text-muted, #555); }
