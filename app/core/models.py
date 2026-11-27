@@ -715,6 +715,30 @@ class LlmMemory(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     written_at: Mapped[str] = mapped_column(String, nullable=False)
     written_by_turn: Mapped[str] = mapped_column(String, nullable=False, default="")
+    #: The owner's mark on this version of the note: "" (not reviewed),
+    #: "kept" or "discarded". A discarded note stays in the table and is no
+    #: longer handed back by the model's read / list. A write clears it.
+    review: Mapped[str] = mapped_column(String, nullable=False, default="")
+    reviewed_at: Mapped[str] = mapped_column(String, nullable=False, default="")
+    reviewed_by: Mapped[str] = mapped_column(String, nullable=False, default="")
+
+
+class LlmMemoryReview(Base):
+    """llm_memory_review table: every keep / discard the owner made on one of
+    the model's notes, with the note's content as it was when decided, so the
+    record holds what was kept or thrown away even after a later write."""
+
+    __tablename__ = "llm_memory_review"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    note_written_at: Mapped[str] = mapped_column(String, nullable=False)
+    note_written_by_turn: Mapped[str] = mapped_column(String, nullable=False, default="")
+    decided_at: Mapped[str] = mapped_column(String, nullable=False)
+    decided_by: Mapped[str] = mapped_column(String, nullable=False, default="")
 
 
 class IngestionJob(Base):

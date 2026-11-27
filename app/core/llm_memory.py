@@ -11,6 +11,12 @@ This store is separate from ``agent_memory``'s facts on purpose: a fact is a
 key/value the app may hand to a prompt once verified; a note is the model's
 own JSON on how to work, handed back only when it asks for it.
 
+The owner calibrates the notes: ``review`` keeps or discards the current
+version of a note. A discarded note stays in the table, marked, and is no
+longer returned by the model's ``read`` / ``listing``; every decision is
+recorded in ``llm_memory_review`` with the content it was made on. Code never
+edits a note's content and holds no rule about what a good note is.
+
 Limits are settings (environment): ``LLM_MEMORY_MAX_BYTES`` per document and
 ``LLM_MEMORY_MAX_DOCS`` per project.
 """
@@ -23,15 +29,19 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, inspect, select, update
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionLocal, engine, get_database_url
-from app.core.models import LlmMemory
+from app.core.models import LlmMemory, LlmMemoryReview
 
 DEFAULT_MAX_BYTES = 16384
 DEFAULT_MAX_DOCS = 50
+DISCARDED = "discarded"
+#: The owner's two decisions and the mark each leaves on the note.
+DECISIONS = {"keep": "kept", "discard": DISCARDED}
+_MARK_COLUMNS = ("review", "reviewed_at", "reviewed_by")
 #: Letters, digits, hyphen and underscore, 1-64 characters; ``.json`` optional.
 _NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -73,6 +83,14 @@ def init_db() -> None:
             if parent:
                 os.makedirs(parent, exist_ok=True)
         LlmMemory.__table__.create(bind=engine, checkfirst=True)
+        LlmMemoryReview.__table__.create(bind=engine, checkfirst=True)
+        # A table made before the owner's mark existed gets its columns.
+        with engine.begin() as conn:
+            have = {c["name"] for c in inspect(conn).get_columns("llm_memory")}
+            for col in _MARK_COLUMNS:
+                if col not in have:
+                    conn.execute(sql_text(f"ALTER TABLE llm_memory ADD COLUMN {col} "
+                                          "VARCHAR NOT NULL DEFAULT ''"))
         _initialized_for_url = url
 
 
@@ -145,7 +163,10 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
         raise MemoryRefused(f"document is {size} bytes; the limit is {max_bytes()} bytes. "
                            "Keep only what helps you work and write it again")
     init_db()
-    row = {"data": text, "size_bytes": size, "written_at": _now(), "written_by_turn": turn or ""}
+    # A write is a new version of the note: the owner's mark on the old one
+    # does not carry over (the decision record keeps what it was made on).
+    row = {"data": text, "size_bytes": size, "written_at": _now(), "written_by_turn": turn or "",
+           "review": "", "reviewed_at": "", "reviewed_by": ""}
     with SessionLocal() as s:
         with s.begin():
             done = s.execute(update(LlmMemory)
@@ -153,8 +174,11 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                              .values(**row)).rowcount
             if not done:
                 _one_new_note_at_a_time(s, project_id)
+                # Discarded notes are out of the model's sight, so they do not
+                # take a place it could only free by replacing them.
                 count = s.scalar(select(func.count()).select_from(LlmMemory)
-                                 .where(LlmMemory.project_id == project_id)) or 0
+                                 .where(LlmMemory.project_id == project_id,
+                                        LlmMemory.review != DISCARDED)) or 0
                 if count >= max_docs():
                     raise MemoryRefused(f"this project already holds {count} notes (the limit); "
                                        "replace or reuse one of them (list_memory shows them)")
@@ -190,24 +214,72 @@ def read(project_id: str, name: Any) -> Dict[str, Any]:
     init_db()
     with SessionLocal() as s:
         row = s.get(LlmMemory, (project_id, stem))
-        if row is None:
+        if row is None or row.review == DISCARDED:
             raise MemoryRefused(f"no note named {stem!r} in this project (list_memory shows them)")
         return {"name": row.name, "data": json.loads(row.data), "bytes": row.size_bytes,
                 "written_at": row.written_at, "written_by_turn": row.written_by_turn}
 
 
-def listing(project_id: str, with_data: bool = False) -> List[Dict[str, Any]]:
+def listing(project_id: str, with_data: bool = False,
+            with_review: bool = False) -> List[Dict[str, Any]]:
+    """The project's notes by name. The model's view (default) leaves out
+    discarded notes; ``with_review`` (the owner's view) lists every note with
+    its mark."""
     if not project_id:
         raise MemoryRefused("memory needs a project; this conversation has none")
     init_db()
     with SessionLocal() as s:
-        rows = s.scalars(select(LlmMemory).where(LlmMemory.project_id == project_id)
-                         .order_by(LlmMemory.name)).all()
+        query = select(LlmMemory).where(LlmMemory.project_id == project_id)
+        if not with_review:
+            query = query.where(LlmMemory.review != DISCARDED)
+        rows = s.scalars(query.order_by(LlmMemory.name)).all()
         out = []
         for row in rows:
             entry = {"name": row.name, "bytes": row.size_bytes, "written_at": row.written_at,
                      "written_by_turn": row.written_by_turn}
             if with_data:
                 entry["data"] = json.loads(row.data)
+            if with_review:
+                entry.update(review=row.review, reviewed_at=row.reviewed_at,
+                             reviewed_by=row.reviewed_by)
             out.append(entry)
         return out
+
+
+def review(project_id: str, name: Any, decision: Any, by: str = "") -> Dict[str, Any]:
+    """The owner keeps or discards the current version of note ``name``: the
+    note is marked and the decision recorded, with the content it was made
+    on, in one transaction. The note's content is never changed."""
+    if not project_id:
+        raise MemoryRefused("a review needs a project")
+    if decision not in DECISIONS:
+        raise MemoryRefused(f"decision must be one of {sorted(DECISIONS)}")
+    stem = clean_name(name)
+    init_db()
+    at = _now()
+    with SessionLocal() as s:
+        with s.begin():
+            row = s.get(LlmMemory, (project_id, stem))
+            if row is None:
+                raise LookupError(f"no note named {stem!r} in project {project_id!r}")
+            row.review, row.reviewed_at, row.reviewed_by = DECISIONS[decision], at, by or ""
+            s.add(LlmMemoryReview(project_id=project_id, name=stem, decision=decision,
+                                  data=row.data, note_written_at=row.written_at,
+                                  note_written_by_turn=row.written_by_turn,
+                                  decided_at=at, decided_by=by or ""))
+    return {"name": stem, "decision": decision, "review": DECISIONS[decision],
+            "decided_at": at, "decided_by": by or ""}
+
+
+def reviews(project_id: str) -> List[Dict[str, Any]]:
+    """Every keep / discard made in the project, oldest first, each with the
+    note's content as it was when decided."""
+    init_db()
+    with SessionLocal() as s:
+        rows = s.scalars(select(LlmMemoryReview)
+                         .where(LlmMemoryReview.project_id == project_id)
+                         .order_by(LlmMemoryReview.id)).all()
+        return [{"name": r.name, "decision": r.decision, "data": json.loads(r.data),
+                 "note_written_at": r.note_written_at,
+                 "note_written_by_turn": r.note_written_by_turn,
+                 "decided_at": r.decided_at, "decided_by": r.decided_by} for r in rows]
