@@ -54,3 +54,13 @@ def test_tolerance_check_is_a_base_formula():
     out = run_calculation("tolerance_check", {"measured": 9.3, "specified": 10.0,
                                                "tolerance_plus": 0.5, "tolerance_minus": 0.5})
     assert out.get("result", out)["within_tolerance"] is False
+
+
+@pytest.mark.parametrize("word,factor", [
+    ("thousand", 1e3), ("K", 1e3), ("k", 1e3), (" Million ", 1e6), ("mn", 1e6), ("Bn", 1e9),
+    ("m", None), ("km", None), ("", None), (None, None), ("hundred", None),
+])
+def test_magnitude_word_is_the_factor_of_a_magnitude_word(word, factor):
+    from app.lib.formula_registry import magnitude_word
+
+    assert magnitude_word(word) == factor

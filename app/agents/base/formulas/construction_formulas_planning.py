@@ -242,6 +242,84 @@ def parse_unit(token: Any) -> Optional[Unit]:
     return Unit(dimension, scale, 0.0, needs, raw)
 
 
+# What one base unit of a family is in the SI base quantities (metre,
+# kilogram, second, money, count), as exponents and a factor. Only a family
+# listed here can be a part of a compound unit; the others (calendar
+# periods, angles, labour, temperature) do not multiply out.
+_BASE_ORDER = ("m", "kg", "s", "currency", "nr")
+_FAMILY_BASE: Dict[str, Tuple[Tuple[int, ...], float]] = {
+    "length": ((1, 0, 0, 0, 0), 1.0),
+    "area": ((2, 0, 0, 0, 0), 1.0),
+    "volume": ((3, 0, 0, 0, 0), 1.0),
+    "second moment of area": ((4, 0, 0, 0, 0), 1.0),
+    "force": ((1, 1, -2, 0, 0), 1.0),
+    "pressure": ((-1, 1, -2, 0, 0), 1000.0),
+    "mass": ((0, 1, 0, 0, 0), 1.0),
+    "time": ((0, 0, 1, 0, 0), 3600.0),
+    _OPAQUE: ((0, 0, 0, 1, 0), 1.0),
+    "count": ((0, 0, 0, 0, 1), 1.0),
+    "fraction": ((0, 0, 0, 0, 0), 1.0),
+}
+_FAMILY_OF_BASE = {vec: name for name, (vec, _f) in _FAMILY_BASE.items()}
+_COMPOUND_TOKEN = re.compile(r"\s*([()*/·×.]|[^()*/·×.\s]+)")
+
+
+def parse_compound_unit(token: Any) -> Optional[Unit]:
+    """A unit written as a product or quotient of units the table knows,
+    multiplied out: "m*m" is an area, "m2/(m2/day)" a time, "kN/m2*m2" a
+    force, each with its factor onto that family's base unit. "*", "·",
+    "×" and "." multiply, "/" divides, left to right, and brackets group. A
+    result no family measures ("kN.m") is named by its powers of the base
+    quantities, so two such units compare only with each other. None when
+    a part is not a unit, belongs to a family that does not multiply out
+    (or needs context), or the brackets do not close."""
+    pieces = _COMPOUND_TOKEN.findall(str(token or ""))
+    if not pieces or "".join(pieces) != re.sub(r"\s+", "", str(token or "")):
+        return None
+    pos = 0
+
+    def term() -> Optional[Tuple[Tuple[int, ...], float]]:
+        nonlocal pos
+        if pos >= len(pieces):
+            return None
+        piece = pieces[pos]
+        pos += 1
+        if piece == "(":
+            inner = expr()
+            if inner is None or pos >= len(pieces) or pieces[pos] != ")":
+                return None
+            pos += 1
+            return inner
+        unit = _atom(piece, in_ratio=True)
+        if unit is None or unit.needs or unit.dimension not in _FAMILY_BASE:
+            return None
+        vec, factor = _FAMILY_BASE[unit.dimension]
+        return vec, factor * unit.scale
+
+    def expr() -> Optional[Tuple[Tuple[int, ...], float]]:
+        nonlocal pos
+        left = term()
+        while left is not None and pos < len(pieces) and pieces[pos] in "*/·×.":
+            sign = -1 if pieces[pos] == "/" else 1
+            pos += 1
+            right = term()
+            if right is None:
+                return None
+            left = (tuple(a + sign * b for a, b in zip(left[0], right[0])),
+                    left[1] * right[1] ** sign)
+        return left
+
+    whole = expr()
+    if whole is None or pos != len(pieces):
+        return None
+    vec, factor = whole
+    family = _FAMILY_OF_BASE.get(vec)
+    if family is not None:
+        return Unit(family, factor / _FAMILY_BASE[family][1], 0.0, (), str(token))
+    name = " ".join(f"{b}^{p}" for b, p in zip(_BASE_ORDER, vec) if p)
+    return Unit(f"[{name}]", factor, 0.0, (), str(token))
+
+
 def unit_dimension(token: Any) -> Optional[str]:
     unit = parse_unit(token)
     return unit.dimension if unit else None

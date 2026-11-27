@@ -1817,7 +1817,8 @@ def figure_provenance(
                     # the sign code wrote and in a unit that agrees with the
                     # result's own. Stated otherwise it is not the step's.
                     stated = (meta[_RESULT_SIGN] == _written_negative(text, m)
-                              and _states_result(value, _unit_written_with(text, m), max(nums),
+                              and _states_result(value * _magnitude_written(text, m)[0],
+                                                 _unit_written_with(text, m), max(nums),
                                                  meta["unit"], meta[_RESULT_PURE]))
                 else:
                     stated = _match(value, _rescaled(nums))
@@ -1914,6 +1915,27 @@ _PER_AFTER_MONEY = re.compile(r"\s?(?:/\s?|per\s+)([^\s,;:()\[\]]+)", re.IGNOREC
 _UNIT_TOKEN = re.compile(r"\s?([A-Za-z%°µμ‰][A-Za-z0-9%°µμ‰²³⁴/.*^·\-]*)")
 
 
+_WORD_AFTER_FIGURE = re.compile(r"[ \t]?([A-Za-z]+)\b")
+
+
+def _magnitude_written(text: str, mention: re.Match) -> tuple[float, int]:
+    """The magnitude word written straight after the figure ``mention``
+    found in ``text`` -- "thousand" of "AED 1,225 thousand", "k" of
+    "SAR 8.04k", by the formula registry's one table of them -- as its
+    factor and the length of text it takes; (1.0, 0) when there is none. A
+    word the unit converter reads as a unit ("mn" is a meganewton) is that
+    unit, unless a currency is written before the figure: money has no
+    such unit."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+    from app.lib.formula_registry import magnitude_word
+
+    word = _WORD_AFTER_FIGURE.match(text, mention.end("num"))
+    factor = magnitude_word(word.group(1)) if word else None
+    if factor is None or (not mention.group("pre") and parse_unit(word.group(1)) is not None):
+        return 1.0, 0
+    return factor, word.end() - mention.end("num")
+
+
 def _unit_written_with(text: str, mention: re.Match) -> str:
     """The unit the figure ``mention`` found in ``text`` is written with.
 
@@ -1924,7 +1946,8 @@ def _unit_written_with(text: str, mention: re.Match) -> str:
     "120 m3;", "m*m" of "48 m*m.", "kN/m3" of "5 kN/m3"), not only the part
     the figure pattern knows -- without the sentence's full stop or markdown
     marks after it. "" when nothing of the kind follows."""
-    tail = text[mention.end("num"):mention.end("num") + 48]
+    start = mention.end("num") + _magnitude_written(text, mention)[1]
+    tail = text[start:start + 48]
     token = _UNIT_TOKEN.match(tail)
     unit = token.group(1).rstrip(".*-/^") if token else ""
     per = _PER_AFTER_MONEY.match(tail)
@@ -1934,27 +1957,36 @@ def _unit_written_with(text: str, mention: re.Match) -> str:
 
 
 def _states_result(value: float, written: str, size: float, unit: str, pure: bool) -> bool:
-    """True when a figure of size ``value``, written with the unit
-    ``written``, states a step result of size ``size`` whose unit is ``unit``.
+    """True when a figure of size ``value`` (its magnitude word already
+    applied), written with the unit ``written``, states a step result of
+    size ``size`` whose unit is ``unit``.
 
-    * The result's unit is one the converter compares: the figure is in a
-      unit of the same kind and, at the two scales, is the same number --
-      "0.207 km" for 207 m; not "207 mm", "0.207 m" or "207 kg". Money
+    * The result's unit is one the converter compares (a compound one
+      multiplied out: "m*m" is an area): the figure is in a unit of the same
+      kind and, in the base unit, is the same quantity -- "0.207 km" for
+      207 m, "150 m2" for 150 m*m; not "207 mm", "150 m" or "207 kg". Money
       written by its currency alone also states a money rate (what it is
       per is then in the words, which this check does not read).
     * The result is a pure number (``pure``): only a figure written with no
       unit states it -- "207 m" for a result of 207 does not.
-    * Any other result -- an output the registry declares no unit for, or a
-      unit the converter cannot compare ("m*m", "kN.m") -- is held to its
-      number alone, at any thousand, as before."""
+    * The result has a unit the converter cannot compare: only a figure
+      written with that very unit states it, never its number alone.
+    * The result has no unit (an output the registry declares none for,
+      written "-" or ""):
+      there is no unit to compare, so its number is checked, at any
+      thousand, as before."""
     ours, theirs = _unit_kind(unit), _unit_kind(written)
+    from app.agents.base.formulas.construction_formulas_planning import unit_key
+
+    if ours is None and unit_key(unit):
+        return unit_key(written) == unit_key(unit) and _close(value, size)
     if ours is None:
         return (not pure or not written) and _match(value, _rescaled([size]))
     if theirs is None:
         return False
-    if theirs[0] == ours[0]:
-        return _close(value * theirs[1] / ours[1], size)
-    return theirs[0] == _MONEY and ours[0].startswith(_MONEY + "/") and _close(value, size)
+    if theirs[0] == _MONEY and ours[0].startswith(_MONEY + "/"):
+        return _close(value, size)
+    return _same_quantity(value, theirs, size, ours)
 
 
 def _written_negative(text: str, mention: re.Match) -> bool:
@@ -2038,19 +2070,40 @@ def _given_quantities(text: str) -> list[tuple[float, str | None]]:
     return out
 
 
-def _unit_kind(unit: str) -> tuple[str, float] | None:
-    """What kind of quantity a written unit measures and its scale to that
-    kind's base unit ("mm" -> length, 0.001). None for no unit, for one the
-    converter does not know, and for one a scale alone does not convert (an
-    offset, or a conversion that needs another input): such a figure is held
-    to the number check alone."""
-    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+def _unit_kind(unit: str) -> tuple[str, float, float] | None:
+    """What kind of quantity a written unit measures, its scale to that
+    kind's base unit and its offset ("mm" -> length, 0.001, 0; "°F" ->
+    temperature, 5/9, -160/9): ``_in_base`` puts a figure in the base unit
+    with them. A product or quotient of units ("m*m", "m2/(m2/day)",
+    "kN.m") is multiplied out by the converter. None for no unit, for one
+    the converter does not know, and for one a scale and an offset alone do
+    not convert (it needs another input)."""
+    from app.agents.base.formulas.construction_formulas_planning import (
+        parse_compound_unit, parse_unit)
 
     head = str(unit or "").strip()
-    parsed = parse_unit(head) if head else None
-    if parsed is None or parsed.needs or parsed.offset or not parsed.scale:
+    parsed = (parse_unit(head) or parse_compound_unit(head)) if head else None
+    if parsed is None or parsed.needs or not parsed.scale:
         return None
-    return parsed.dimension, float(parsed.scale)
+    return parsed.dimension, float(parsed.scale), float(parsed.offset)
+
+
+def _in_base(number: float, kind: tuple[str, float, float]) -> float:
+    """``number`` written in a unit of ``kind`` (``_unit_kind``), in that
+    kind's base unit."""
+    return number * kind[1] + kind[2]
+
+
+def _same_quantity(number: float, kind: tuple[str, float, float],
+                   other: float, other_kind: tuple[str, float, float]) -> bool:
+    """True when ``number`` in a unit of ``kind`` and ``other`` in a unit of
+    ``other_kind`` are one quantity: the same kind, and ``number`` put in
+    the other's unit (through the kind's base unit) is ``other`` -- 20 °C is
+    68 °F, not 20 °F; 1 mm is 0.001 m. Compared at the other's own scale,
+    so 1.5 mm is not 1 mm or 2 mm."""
+    if kind[0] != other_kind[0]:
+        return False
+    return _close((_in_base(number, kind) - other_kind[2]) / other_kind[1], other)
 
 
 def _workflow_answers(ev: Any) -> list[str]:
@@ -2105,7 +2158,7 @@ def _quantity_given(number: float, unit: str, users: list[tuple[float, str]],
     written = list(users) + list(tools) + [q for passage in passages for q in passage]
     for n, u in written:
         other = _unit_kind(u or "")
-        if other is not None and other[0] == kind[0] and _close(n * other[1] / kind[1], number):
+        if other is not None and _same_quantity(n, other, number, kind):
             return True
         if other is not None and kind[0] == _MONEY and other[0].startswith(_MONEY + "/") and _close(n, number):
             return True

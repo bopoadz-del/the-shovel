@@ -1072,6 +1072,12 @@ _MAGNITUDE_RE = re.compile(
     re.IGNORECASE)
 
 
+def magnitude_word(word: Any) -> Optional[float]:
+    """The factor a magnitude word written after a figure stands for
+    ("thousand", "k" -> 1000; "bn" -> 1e9); None for any other word."""
+    return _MAGNITUDE.get(str(word or "").strip().lower())
+
+
 def _with_magnitude(value: Any) -> Any:
     """"2 million" -> 2000000; "SAR 1.5 bn" -> "SAR 1500000000". Anything else unchanged."""
     if not isinstance(value, str):

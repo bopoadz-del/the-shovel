@@ -528,9 +528,15 @@ def test_given_quantities_reads_each_figure_with_the_unit_written_after_it(text,
 
 
 @pytest.mark.parametrize("unit,kind", [
-    ("m", ("length", 1.0)), ("mm", ("length", 0.001)), ("km", ("length", 1000.0)), ("m3", ("volume", 1.0)),
-    ("", None), (None, None), ("long", None), ("per m3", None),
+    ("m", ("length", 1.0, 0.0)), ("mm", ("length", 0.001, 0.0)), ("km", ("length", 1000.0, 0.0)),
+    ("m3", ("volume", 1.0, 0.0)),
+    ("°C", ("temperature", 1.0, 0.0)), ("°F", ("temperature", 5 / 9, -160 / 9)),   # an offset is kept
+    ("m*m", ("area", 1.0, 0.0)), ("mm*m", ("area", 0.001, 0.0)),                   # multiplied out
+    ("m2/(m2/day)", ("time", 24.0, 0.0)), ("m3/(m3/h)", ("time", 1.0, 0.0)),
+    ("kN.m", ("[m^2 kg^1 s^-2]", 1000.0, 0.0)), ("N*mm", ("[m^2 kg^1 s^-2]", 0.001, 0.0)),
+    ("", None), (None, None), ("long", None), ("per m3", None), ("m*long", None), ("m*(m", None),
     ("working days", None),     # needs a calendar to convert: the number check alone
+    ("m*working days", None),   # nor does a product with it
 ])
 def test_unit_kind_is_the_kind_and_scale_of_a_unit_a_scale_alone_converts(unit, kind):
     from app.agents.citation_provenance import _unit_kind
@@ -876,9 +882,27 @@ def test_unit_written_with_reads_the_unit_a_figure_is_written_with(text, number,
     (8.0, "days", 8.0, "-", False, True),                   # no unit declared for the output: the number alone
     (8000.0, "mm", 8.0, "-", False, True),
     (9.0, "days", 8.0, "-", False, False),
-    (48.0, "m2", 48.0, "m*m", False, True),                 # a unit the converter cannot compare: the number alone
-    (48.0, "m", 48.0, "m*m", False, True),
+    (48.0, "m2", 48.0, "m*m", False, True),                 # a product of units, multiplied out: an area
+    (48.0, "m", 48.0, "m*m", False, False),
     (49.0, "m2", 48.0, "m*m", False, False),
+    (150.0, "m", 150.0, "m*m", False, False),
+    (150.0, "sqm", 150.0, "m*m", False, True),
+    (3.0, "days", 3.0, "m2/(m2/day)", False, True),         # a quantity over its rate: a time
+    (72.0, "hours", 3.0, "m2/(m2/day)", False, True),
+    (3.0, "m", 3.0, "m2/(m2/day)", False, False),
+    (3.0, "hours", 3.0, "m2/(m2/day)", False, False),
+    (120.0, "kN", 120.0, "kN/m2*m2", False, True),          # a pressure over an area: a force
+    (120.0, "kPa", 120.0, "kN/m2*m2", False, False),
+    (90.0, "kN.m", 90.0, "kN.m", False, True),              # no family: compared with itself
+    (90000.0, "N.m", 90.0, "kN.m", False, True),
+    (90.0, "kN", 90.0, "kN.m", False, False),
+    (90.0, "kN.m.s", 90.0, "kN.m.s.foo", False, False),     # neither side compares: the unit as written
+    (90.0, "kN.m.foo", 90.0, "kN.m.foo", False, True),
+    (90.0, "", 90.0, "kN.m.foo", False, False),             # ... never the number alone
+    (68.0, "°F", 20.0, "°C", False, True),                  # an offset unit converts with its offset
+    (20.0, "°F", 20.0, "°C", False, False),
+    (20.0, "°C", 68.0, "°F", False, True),
+    (20.0, "°C", 20.0, "°F", False, False),
     (8040.0, "currency", 8040.0, "currency", False, True),
     (8040.0, "m", 8040.0, "currency", False, False),
     (450.0, "currency/m2", 450.0, "currency/m2", False, True),
@@ -956,13 +980,13 @@ def test_on_a_sheet_turn_an_output_with_no_declared_unit_is_held_to_its_number_a
 
 
 @pytest.mark.parametrize("udl,span,said,credited", [
-    (20, 6, "90 kN.m", True), (20, 6, "90 kN", True), (20, 6, "91 kN.m", False), (8, 5, "25 kN.m", True),
+    (20, 6, "90 kN.m", True), (20, 6, "90 kN", False), (20, 6, "91 kN.m", False), (8, 5, "25 kN.m", True),
+    (8, 5, "25 kN", False), (8, 5, "25 m", False),
 ])
-def test_on_a_sheet_turn_a_unit_the_converter_cannot_compare_is_held_to_its_number_alone(udl, span, said,
-                                                                                       credited):
-    """A moment in kN.m: the converter has no kind for it, so the unit the
-    reply writes cannot be compared and the number check stands alone (the
-    second case is what that leaves open)."""
+def test_on_a_sheet_turn_a_moment_is_credited_only_in_a_unit_of_a_moment(udl, span, said, credited):
+    """A moment in kN.m: no family of the converter measures it, so the
+    converter multiplies it out to its powers of the base quantities, and a
+    figure in a force or a length is not that moment."""
     from app.agents.citation_provenance import figure_provenance
 
     messages, work = _sheet_step_turn(
@@ -974,3 +998,158 @@ def test_on_a_sheet_turn_a_unit_the_converter_cannot_compare_is_held_to_its_numb
     out, entries = figure_provenance(answer, None, messages, tool_passages=True)
     assert (said in out) is credited
     assert [e.get("step") for e in entries] == (["s1"] if credited else [])
+
+
+# --- a figure's magnitude word and a compound unit -----------------------------
+
+@pytest.mark.parametrize("unit,dimension,scale", [
+    ("m*m", "area", 1.0), ("m·mm", "area", 0.001), ("m×m×m", "volume", 1.0),
+    ("m2/(m2/day)", "time", 24.0), ("m3/(m3/h)", "time", 1.0), ("kN/m2*m2", "force", 1000.0),
+    ("SAR/m3*m3", "currency", 1.0), ("m2/m2", "fraction", 1.0),
+    ("kN.m", "[m^2 kg^1 s^-2]", 1000.0), ("N*mm", "[m^2 kg^1 s^-2]", 0.001), ("m*h", "[m^1 s^1]", 3600.0),
+])
+def test_parse_compound_unit_multiplies_out_a_product_or_quotient_of_units(unit, dimension, scale):
+    from app.agents.base.formulas.construction_formulas_planning import parse_compound_unit
+
+    parsed = parse_compound_unit(unit)
+    assert (parsed.dimension, parsed.offset) == (dimension, 0.0)
+    assert parsed.scale == pytest.approx(scale)
+
+
+@pytest.mark.parametrize("unit", [
+    "", None, "m*", "*m", "m*(m", "m*m)", "(m*m", "m*long", "m*working days", "°F*m", "m//m", "m**m",
+])
+def test_parse_compound_unit_is_none_for_what_does_not_multiply_out(unit):
+    """A part that is no unit, a family that does not multiply (an offset
+    unit, working time that needs a calendar), or brackets that do not
+    close: no unit, so nothing is compared by it."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_compound_unit
+
+    assert parse_compound_unit(unit) is None
+
+
+@pytest.mark.parametrize("text,factor,taken", [
+    ("It costs AED 1,225 thousand.", 1000.0, len(" thousand")),
+    ("It costs SAR 8.04k in all.", 1000.0, len("k")),
+    ("It costs AED 1.2 million.", 1e6, len(" million")),
+    ("It costs AED 1.2 mn.", 1e6, len(" mn")),          # money has no meganewton
+    ("It costs USD 3 bn.", 1e9, len(" bn")),
+    ("It costs AED 1,225.", 1.0, 0),
+    ("It is 12 km long.", 1.0, 0),                       # a unit, not a magnitude
+    ("It carries 12 kN.", 1.0, 0),
+    ("It costs AED 12 per m3.", 1.0, 0),
+])
+def test_magnitude_written_reads_the_word_after_a_figure(text, factor, taken):
+    from app.agents.citation_provenance import _figure_mentions, _magnitude_written
+
+    (mention, _value), *_rest = _figure_mentions(text)
+    assert _magnitude_written(text, mention) == (factor, taken)
+
+
+@pytest.mark.parametrize("word,money,factor", [
+    ("mn", False, 1.0), ("mn", True, 1e6),      # a meganewton, unless money is written
+    ("k", False, 1e3), ("k", True, 1e3),        # no unit of the converter: a magnitude either way
+    ("kg", True, 1.0), ("kg", False, 1.0),
+])
+def test_magnitude_written_leaves_a_unit_word_to_the_unit_unless_money_is_written(word, money, factor):
+    import re
+
+    from app.agents.citation_provenance import _magnitude_written
+
+    text = f"{'AED ' if money else ''}12 {word} more"
+    mention = re.compile(r"(?P<pre>AED )?(?P<num>12)").match(text)
+    assert _magnitude_written(text, mention)[0] == factor
+
+
+@pytest.mark.parametrize("text,unit", [
+    ("It costs AED 1,225 thousand.", "currency"),
+    ("It costs AED 8.04k per m2.", "currency/m2"),
+    ("It costs AED 1.5 million/t.", "currency/t"),
+    ("It costs AED 1,225 thousand per m3.", "currency/m3"),
+])
+def test_unit_written_with_reads_past_a_magnitude_word(text, unit):
+    from app.agents.citation_provenance import _figure_mentions, _unit_written_with
+
+    (mention, _value), *_rest = _figure_mentions(text)
+    assert _unit_written_with(text, mention) == unit
+
+
+def _cost_turn(quantity, rate):
+    messages, work = _sheet_step_turn(
+        f"Excavate {quantity:,} m3 at {rate} per m3. What does it cost?",
+        [{"id": "g1", "value": quantity, "unit": "m3"}, {"id": "g2", "value": rate, "unit": "-"}],
+        {"quantity": "g1", "unit_rate": "g2"}, entry="formula:unit_cost_total")
+    assert work["steps"][0]["result"]["value"] == pytest.approx(quantity * rate)
+    return messages
+
+
+@pytest.mark.parametrize("quantity,rate,said,credited", [
+    (1250, 980, "AED 1,225,000", True), (1250, 980, "AED 1,225 thousand", True),
+    (1250, 980, "AED 1,225k", True), (1250, 980, "AED 1.225 million", True), (1250, 980, "AED 1.225 mn", True),
+    (1250, 980, "AED 1,225", False),                  # a thousand times too small
+    (1250, 980, "AED 1,225 million", False),          # a thousand times too large
+    (1250, 980, "AED 1,300 thousand", False),
+    (670, 12, "SAR 8,040", True), (670, 12, "SAR 8.04k", True), (670, 12, "SAR 8.04 thousand", True),
+    (670, 12, "SAR 8.04", False), (670, 12, "SAR 8.04 million", False), (670, 12, "SAR 8,040k", False),
+])
+def test_on_a_sheet_turn_money_written_with_its_magnitude_word_states_the_step_result(quantity, rate, said,
+                                                                                      credited):
+    """The magnitude word is part of how the figure is written: "AED 1,225
+    thousand" is 1,225,000 and states that result; "AED 1,225" does not."""
+    from app.agents.citation_provenance import figure_provenance
+
+    answer = f"The cost is {said}."
+    out, entries = figure_provenance(answer, None, _cost_turn(quantity, rate), tool_passages=True)
+    assert (said in out) is credited
+    assert [e.get("step") for e in entries] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("a,b,said,credited", [
+    (15, 10, "150 m2", True), (15, 10, "150 m", False),
+    (12, 4, "48 sqm", True), (12, 4, "48 m", False), (12, 4, "48 m3", False),
+])
+def test_on_a_sheet_turn_a_product_of_two_lengths_is_credited_only_as_an_area(a, b, said, credited):
+    from app.agents.citation_provenance import figure_provenance
+
+    messages, work = _sheet_step_turn(
+        f"A slab is {a} m by {b} m. What is its area?",
+        [{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+        {"operator": "multiply", "a": "g1", "b": "g2"})
+    assert work["steps"][0]["result"]["value"] == pytest.approx(a * b)
+    answer = f"The area is {said}."
+    out, entries = figure_provenance(answer, None, messages, tool_passages=True)
+    assert (said in out) is credited
+    assert [e.get("step") for e in entries] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("area,rate,said,credited", [
+    (150, 50, "3 days", True), (150, 50, "72 hours", True), (150, 50, "3 m", False), (150, 50, "3 hours", False),
+    (240, 60, "4 days", True), (240, 60, "4 m2", False),
+])
+def test_on_a_sheet_turn_a_quantity_over_its_rate_is_credited_only_as_a_time(area, rate, said, credited):
+    from app.agents.citation_provenance import figure_provenance
+
+    messages, work = _sheet_step_turn(
+        f"Lay {area} m2 at {rate} m2/day. How long does it take?",
+        [{"id": "g1", "value": area, "unit": "m2"}, {"id": "g2", "value": rate, "unit": "m2/day"}],
+        {"operator": "divide", "a": "g1", "b": "g2"})
+    assert work["steps"][0]["result"]["value"] == pytest.approx(area / rate)
+    answer = f"It takes {said}."
+    out, entries = figure_provenance(answer, None, messages, tool_passages=True)
+    assert (said in out) is credited
+    assert [e.get("step") for e in entries] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("message,number,unit,expected", [
+    ("The slab is 20 m long.", 20.0, "°F", ""),           # a temperature is not a length
+    ("The slab is 20 m long.", 20.0, "kelvin", ""),
+    ("It was cured at 20 °C.", 20.0, "°F", ""),          # 20 °C is 68 °F
+    ("It was cured at 20 °C.", 68.0, "°F", "user"),
+    ("It was cured at 30 °C.", 86.0, "°F", "user"),
+    ("It was cured at 30 °C.", 30.0, "°F", ""),
+    ("It was cured at 30 °C.", 30.0, "°C", "user"),
+])
+def test_a_temperature_is_given_only_at_its_own_offset(message, number, unit, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number, unit) == expected
