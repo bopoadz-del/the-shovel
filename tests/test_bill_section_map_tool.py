@@ -109,13 +109,14 @@ async def test_an_unknown_document_is_refused():
     assert out["ok"] is False
 
 
-def test_the_tool_is_offered_on_the_driver_path_and_listed_in_the_catalogue():
+@pytest.mark.parametrize("hat", [None, "qaqc"])
+def test_the_tool_is_offered_on_the_driver_path_and_listed_in_the_catalogue(hat):
     from app.agents.driver import catalogue, tools
     from tests.test_driver_mode import _agent
 
     tool_registry.load()
     assert NAME in tool_registry.tools_of("base")
-    offered = tools.offered(_agent(), "synthetic-proj", None, ["design"])
+    offered = tools.offered(_agent(), "synthetic-proj", hat, ["design", "qaqc"])
     names = [(t.get("function") or {}).get("name") for t in offered]
     assert NAME in names
     entry = {e["id"]: e for e in catalogue.entries()}[f"tool:{NAME}"]
