@@ -661,3 +661,190 @@ def test_ask_scope_keeps_the_range_of_each_named_bill_only(ranges, spans):
     rows = agg.join_page_continuations(_carried("3", "2", "120", "80", first=20))
     scope = agg.ask_scope("Total amount of Bill No. 3?", rows, ranges)
     assert scope.spans == spans
+
+
+# --- one placement for every bill reader: the page range, not the path ------
+
+def _money(value):
+    return f"{value:,.0f}"
+
+
+def _two_ranged(lump, title_b5="Bill No. 5 - External Works", carried="Bill No. 4 - Earthworks"):
+    """Bill 4 on pages 1-3 and Bill 5 on pages 4-6, each with page totals and
+    a collection page. The first page of Bill 5 still carries the Bill 4
+    heading; its first line is an amount-only lump of ``lump``."""
+    b4, b5 = (carried,), (title_b5,)
+    first = agg.g.parse_number(lump) + 10_000
+    return [
+        _r(1, "dig", "30,000", "10", "3,000", path=b4), _r(1, "fill", "20,000", "10", "2,000", path=b4),
+        _r(1, "page", "50,000", path=b4),
+        _r(2, "cart", "40,000", "10", "4,000", path=b4), _r(2, "tamp", "10,000", "10", "1,000", path=b4),
+        _r(2, "page", "50,000", path=b4),
+        _r(3, "p1", "50,000", path=b4), _r(3, "p2", "50,000", path=b4), _r(3, "bill", "100,000", path=b4),
+        _r(4, "allow lump", lump, path=b4), _r(4, "kerb", "7,000", "7", "1,000", path=b4),
+        _r(4, "paving", "3,000", "3", "1,000", path=b5),
+        _r(4, "page", _money(first), path=b5),
+        _r(5, "lights", "12,000", "12", "1,000", path=b5), _r(5, "bollards", "8,000", "8", "1,000", path=b5),
+        _r(5, "page", "20,000", path=b5),
+        _r(6, "p4", _money(first), path=b5), _r(6, "p5", "20,000", path=b5),
+        _r(6, "bill", _money(first + 20_000), path=b5),
+    ]
+
+
+_RANGES_4_5 = {"4": (1, 3), "5": (4, 6)}
+
+
+@pytest.mark.parametrize("lump", ["50,000", "100,000"])
+def test_a_lump_under_a_carried_heading_is_not_a_repeat_of_the_bill_before(lump):
+    # the lump equals a page total (50,000) or the bill total (100,000) of the
+    # bill before; placed by page it is an item of Bill 5, never a repeat
+    rows = _two_ranged(lump)
+    want = agg.g.parse_number(lump) + 30_000
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="What is the total amount of Bill No. 5?", ranges=_RANGES_4_5)
+    assert res["sum"] == want
+    check = res["bill_checks"][0]
+    assert (check["items_sum"], check["printed_total"], check["state"]) == (want, want, "RECONCILED")
+    assert agg.row_kinds(rows, _RANGES_4_5)[9] == agg.ROW_ITEM
+    # without ranges the path decides, and the carried heading makes it a repeat
+    assert agg.row_kinds(rows)[9] == agg.ROW_REPEAT
+
+
+@pytest.mark.parametrize("lump", ["50,000", "100,000"])
+def test_a_repeat_of_the_same_ranged_bill_is_still_a_repeat(lump):
+    # Bill 4's collection page lists its own page totals: still repeats
+    kinds = agg.row_kinds(_two_ranged(lump), _RANGES_4_5)
+    assert kinds[6] == agg.ROW_REPEAT and kinds[7] == agg.ROW_REPEAT
+
+
+@pytest.mark.parametrize("ask, title", [
+    ("What is the total amount of Bill No. 5 External Works?", "Bill No. 5 - External Works"),
+    ("Total amount of Bill No. 5 site landscaping?", "Bill No. 5 - Site Landscaping"),
+])
+def test_the_bills_title_words_do_not_drop_its_carried_heading_rows(ask, title):
+    rows = _two_ranged("1,000", title_b5=title)
+    res = agg.aggregate(rows, terms="", measure="amount", ask=ask, ranges=_RANGES_4_5)
+    assert res["sum"] == 31_000
+    assert res["sum"] == res["bill_checks"][0]["items_sum"]
+    assert "allow lump" in {e["description"] for e in res["rows"]}
+
+
+@pytest.mark.parametrize("ask, want", [
+    # a word of a sub-heading inside the bill still scopes (not a title word)
+    ("Total amount of Bill No. 5 lighting?", ["lights"]),
+    ("Total amount of Bill No. 5 bollard?", ["bollards"]),
+])
+def test_a_word_that_is_not_the_bills_title_still_scopes(ask, want):
+    rows = _two_ranged("1,000")
+    rows[13] = _r(5, "lights", "12,000", "12", "1,000",
+                  path=("Bill No. 5 - External Works", "Lighting"))
+    res = agg.aggregate(rows, terms="", measure="amount", ask=ask, ranges=_RANGES_4_5)
+    assert [e["description"] for e in res["rows"]] == want
+
+
+@pytest.mark.parametrize("ranges", [_RANGES_4_5, {"4": (1, 3)}])
+def test_title_words_are_dropped_only_for_a_ranged_named_bill(ranges):
+    rows = agg.join_page_continuations(_two_ranged("1,000"))
+    scope = agg.ask_scope("Total amount of Bill No. 5 External Works?", rows, ranges)
+    assert ("external" in scope.level) is ("5" not in ranges)
+
+
+@pytest.mark.parametrize("asked, want", [("4", 100_000), ("5", 31_000)])
+def test_two_named_bills_each_select_by_their_own_range(asked, want):
+    rows = _two_ranged("1,000")
+    both = agg.aggregate(rows, terms="", measure="amount",
+                         ask="What is the total amount of Bill No. 4 and Bill No. 5?",
+                         ranges=_RANGES_4_5)
+    assert both["sum"] == 131_000
+    one = agg.aggregate(rows, terms="", measure="amount",
+                        ask=f"What is the total amount of Bill No. {asked}?", ranges=_RANGES_4_5)
+    assert one["sum"] == want
+
+
+@pytest.mark.parametrize("a, b", [("300", "50"), ("1,200", "75")])
+def test_a_row_joined_across_a_bill_boundary_is_in_its_first_pages_bill(a, b):
+    rows = [_r(3, "dig", "100", "1", "100", path=("Bill No. 4",)),
+            agg.SheetRow(path=("Bill No. 4",), ref="", description="fill, continued", unit="",
+                         quantity="1", rate=a, amount=a, pages=[3, 4]),
+            _r(4, "kerb", b, "1", b, path=("Bill No. 5",))]
+    for bill, want in (("4", 100 + agg.g.parse_number(a)), ("5", agg.g.parse_number(b))):
+        res = agg.aggregate(rows, terms="", measure="amount",
+                            ask=f"Total amount of Bill No. {bill}?", ranges=_RANGES_4_5)
+        assert res["sum"] == want
+        assert res["bill_checks"][0]["items_sum"] == want
+
+
+@pytest.mark.parametrize("amounts", [("100", "200"), ("7", "9", "11")])
+def test_rows_with_no_page_under_a_ranged_bill_are_named_not_lost(amounts):
+    rows = [_r(None, f"item {k}", a, "1", a, path=("Bill No. 5",)) for k, a in enumerate(amounts)]
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="What is the total amount of Bill No. 5?", ranges={"5": (1, 3)})
+    assert res["sum"] == 0.0
+    assert [e["amount"] for e in res["without_page"]] == [agg.g.parse_number(a) for a in amounts]
+    check = res["bill_checks"][0]
+    assert (check["rows_without_page"], check["state"]) == (len(amounts), "UNCHECKED")
+
+
+@pytest.mark.parametrize("path, listed", [(("Bill No. 5",), 1), (("Bill No. 6",), 0)])
+def test_one_blank_page_cell_is_listed_only_under_the_bill_its_path_names(path, listed):
+    rows = [_r(2, "paged", "40", "1", "40", path=("Bill No. 5",)),
+            _r(None, "no page", "60", "1", "60", path=path)]
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="What is the total amount of Bill No. 5?", ranges={"5": (1, 3)})
+    assert res["sum"] == 40.0
+    assert len(res["without_page"]) == listed
+    # a path naming an unranged bill places the row there; it is not unplaced
+    assert res["bill_checks"][0]["rows_without_page"] == listed
+
+
+@pytest.mark.parametrize("ranges", [None, {"9": (1, 2)}])
+def test_without_a_range_for_the_named_bill_no_row_is_listed_without_page(ranges):
+    rows = [_r(None, "no page", "60", "1", "60", path=("Bill No. 5",)),
+            _r(3, "paged", "40", "1", "40", path=("Bill No. 5",))]
+    res = agg.aggregate(rows, terms="", measure="amount",
+                        ask="What is the total amount of Bill No. 5?", ranges=ranges)
+    assert res["without_page"] == []
+    assert res["sum"] == 100.0
+
+
+@pytest.mark.parametrize("bills", [
+    [{"label": "Bill No. 5", "pages": [4, 6, 8]}],
+    [None, 3, "Bill No. 5", {"label": "Bill No. 5", "pages": [4]}],
+])
+def test_bill_page_ranges_skips_malformed_entries(bills):
+    assert agg.bill_page_ranges({"bill_states": {"bills": bills}}) is None
+
+
+@pytest.mark.parametrize("bills", [
+    [None, {"label": "Bill No. 5", "pages": [4, 6]}],
+    [7, {"label": "Bill No. 5", "pages": [6, 4]}],
+])
+def test_bill_page_ranges_reads_past_a_malformed_entry(bills):
+    assert agg.bill_page_ranges({"bill_states": {"bills": bills}}) == {"5": (4, 6)}
+
+
+@pytest.mark.parametrize("stored, want", [
+    ([{"label": "Bill No. 4", "pages": [1, 3]}, {"label": "Bill No. 5", "pages": [4, 6]}],
+     ({"5": [4, 6]}, "page_range", 31_000)),
+    # no stored range: the path decides (carried rows go to Bill 4) and the
+    # check says not_read, never a verdict
+    (None, ({}, "not_read", 23_000)),
+])
+def test_project_bills_read_the_stored_ranges_from_the_copys_metadata(monkeypatch, stored, want):
+    from app.core import projects
+    meta = {"derivation": "x"}
+    if stored is not None:
+        meta["bill_states"] = {"bills": stored}
+    rows = _two_ranged("1,000")
+    monkeypatch.setattr(agg, "derived_bill_documents",
+                        lambda pid, did=None: [{"id": "d", "original_name": "b.xlsx", "metadata": meta}])
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: "sheet.xlsx")
+    monkeypatch.setattr(projects, "coerce_document_metadata", lambda m: m or {})
+    monkeypatch.setattr(agg, "read_sheet_rows", lambda path: rows)
+    out = agg.aggregate_project_bills("p", terms="", measure="amount",
+                                      ask="What is the total amount of Bill No. 5?")
+    bill = out["bills"][0]
+    pages, membership, total = want
+    assert bill["scope"]["bill_pages"] == pages
+    assert bill["bill_checks"][0]["membership"] == membership
+    assert bill["sum"] == total
