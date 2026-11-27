@@ -28,7 +28,7 @@ from tests.browser.test_ui_phys_nightly import _create_project, _login
 pytestmark = pytest.mark.browser
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "show_working"
-SHEETS = ("three_step_chain.json", "stopped_on_missing_input.json")
+SHEETS = ("three_step_chain.json", "stopped_on_missing_input.json", "plan_literals.json")
 WIDTHS = (390, 1440)
 
 
@@ -77,6 +77,10 @@ def _expected(turn: dict) -> dict:
         "givens": len(sheet["givens"]),
         "unchecked": len(sheet["givens"]) - len(checked),
         "user": [g["what"] for g in checked if g["checked"] == "user"],
+        # Each literal the plan wrote as a {value, unit} object, as its text.
+        "literals": [" ".join(x for x in (_shown(v["value"]), str(v.get("unit") or "").strip()) if x and x != "-")
+                     for p in sheet["plan"] for v in (p.get("inputs") or {}).values()
+                     if isinstance(v, dict) and "value" in v],
     }
 
 
@@ -137,6 +141,10 @@ def test_the_working_sheet_folds_under_the_answer(page: Page, live_app, width):
         # No internal id (g1, s2) and no underscore name reaches the screen.
         shown = panel.inner_text()
         assert not re.search(r"\b[gs]\d+\b", shown) and "_" not in shown, shown
+        # A literal the model wrote is shown as its value and unit, never raw.
+        assert "[object" not in shown, shown
+        for text in want["literals"]:
+            expect(steps.filter(has_text=f": {text}")).to_have_count(1)
 
         # Fits the screen: nothing in the open panel runs past the viewport.
         overflow = panel.evaluate(
@@ -145,7 +153,7 @@ def test_the_working_sheet_folds_under_the_answer(page: Page, live_app, width):
 
     # A turn off the catalogue path carries no sheet: no panel under it.
     _replay(page, {"content": "A plain answer with no working sheet."})
-    _send(page, "recorded turn 3")
+    _send(page, f"recorded turn {len(SHEETS) + 1}")
     last = page.locator(".chat-bubble--assistant").last
     expect(last.locator(".chat-bubble__markdown")).to_have_text("A plain answer with no working sheet.")
     expect(last.locator("[data-testid=show-working]")).to_have_count(0)

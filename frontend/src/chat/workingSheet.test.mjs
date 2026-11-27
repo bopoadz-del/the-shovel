@@ -235,6 +235,8 @@ for (const [shape, literal, want] of SHAPES) {
     const b = workingView(sheet).steps[0].inputs[1]
     assert.equal(b.from, '')
     assert.equal(inputText(b), want)
+    // the view itself holds a number or text, never the object the model wrote
+    assert.ok(['number', 'string'].includes(typeof b.value), typeof b.value)
   })
 }
 
