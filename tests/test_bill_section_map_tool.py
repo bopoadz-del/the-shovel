@@ -64,17 +64,29 @@ async def test_sections_come_from_the_documents_own_headings(chunks, expected):
     assert all(s["document_id"] == doc_id for s in out["result"]["results"])
 
 
+def _no_name(ids):
+    return {}
+
+
+def _name_lookup_fails(ids):
+    raise RuntimeError("documents table down")
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("chunks", [TWO_SECTIONS, THREE_SECTIONS])
-async def test_no_store_position_and_no_status_leaves_the_tool(chunks):
+@pytest.mark.parametrize("chunks, names", [(TWO_SECTIONS, _no_name), (THREE_SECTIONS, _name_lookup_fails)])
+async def test_no_store_position_and_no_status_leaves_the_tool(monkeypatch, chunks, names):
     # Store chunk positions are internal: they are never returned, so they
     # can never be shown. With no "status" the loop renders no record table.
+    # No name (none stored, or the lookup failed): the sections stand without one.
+    from app.core import projects
+
     project_id, doc_id = _ids()
     _index(project_id, doc_id, chunks)
+    monkeypatch.setattr(projects, "document_names", names)
     out = await _call(project_id, {"document_id": doc_id})
     assert set(out["result"]) == {"document_id", "results"}
     for hit in out["result"]["results"]:
-        assert set(hit) == {"document_id", "section", "text"}  # no documents row: no filename
+        assert set(hit) == {"document_id", "section", "text"}
 
 
 @pytest.mark.asyncio
