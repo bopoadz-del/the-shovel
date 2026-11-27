@@ -25,8 +25,8 @@ def project(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     from app.core import projects as store
     pid = store.create_project("facts-gate-test", user_id="system")["id"]
-    store.set_fact(pid, "floor_to_ceiling_height_m", "3.10 (all floors)")
-    store.set_fact(pid, "door_schedule", "one door per room, 0.90 x 2.10 m")
+    store.set_fact(pid, "floor_to_ceiling_height_m", "3.10 (all floors)", verified_by="u1")
+    store.set_fact(pid, "door_schedule", "one door per room, 0.90 x 2.10 m", verified_by="u1")
     return pid
 
 
@@ -56,6 +56,6 @@ def test_no_query_still_lists_everything(project):
 def test_the_limit_still_caps_the_block(project):
     from app.core import projects as store
     for i in range(20):
-        store.set_fact(project, f"minor_fact_{i}", f"value {i}")
+        store.set_fact(project, f"minor_fact_{i}", f"value {i}", verified_by="u1")
     ctx = project_memory.build_memory_context(project, "anything", limit=8)
     assert len([ln for ln in ctx.splitlines() if ln.startswith("- ")]) == 8

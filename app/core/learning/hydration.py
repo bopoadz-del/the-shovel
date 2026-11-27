@@ -15,13 +15,11 @@ What one pass does, per project that had activity yesterday (UTC by default):
    patterns) is the DEFAULT — the nightly pass spends no model call unless
    ``HYDRATION_LLM_SUMMARY`` is opted in. When opted in, ChatBlock produces
    the summary and the heuristic is the fallback if no LLM is reachable.
-3. **Close the loop**: write recurring topics + friction signals back to
-   ``projects.set_fact`` (read by the chat router via
-   ``project_memory.build_memory_context``) AND ``agent_memory.set_agent_fact``
-   (read by the runtime agent path at ``app/agents/runtime.py:548``), and
-   record each friction signal as a pattern on the learning engine so it
-   accumulates a corpus over time. This is what makes hydration "learning"
-   instead of just an operator daily report.
+3. Keep the day's brief (recurring topics, friction signals, top asks) in
+   the run row for the operator report, and record each friction signal as
+   a pattern on the learning engine so it accumulates a corpus over time.
+   The brief is never written to ``project_facts`` / ``agent_facts``: those
+   feed the chat prompt, and nothing hydration saves by itself is a fact.
 4. Persist the row to ``hydration.db`` for the operator-facing endpoints.
 
 Hydration reads conversations only. It never discovers, attaches, downloads
@@ -263,7 +261,7 @@ async def _hydrate_project(
     if provider in ("offline_template", "unavailable", "error", "disabled"):
         summary_md = await off_loop_in("background", _heuristic_project_summary, project_id, run_date, messages)
 
-    # ── Close the loop: write back to surfaces the next chat will read.
+    # ── The brief for the operator report (never prompt material).
     # Failures here are non-fatal — the operator-facing row is still useful
     # even if e.g. the learning_engine's storage is read-only.
     writeback_summary: Dict[str, Any] = {}
@@ -308,70 +306,26 @@ def _writeback_for_next_chat(
     messages: List[Dict[str, Any]],
     run_date: str,
 ) -> Dict[str, Any]:
-    """Persist what we learned into stores tomorrow's chat will pull as
-    priors. Two parallel surfaces, kept in lockstep so both code paths benefit:
+    """Record what the day's chats were about, for the operator report only.
 
-    * ``projects.set_fact`` — keyed facts on the project itself, picked up by
-      ``project_memory.build_memory_context`` which the chat router injects
-      as a system message at conversation start.
-    * ``agent_memory.set_agent_fact`` — agent-scoped facts, picked up by
-      ``app/agents/runtime.py``'s message-building loop for any agent
-      answering on this project.
+    The brief (topics, friction, asks) goes into the hydration run row that
+    the operator endpoints read. It is never written to ``project_facts`` or
+    ``agent_facts``: those feed the chat prompt, and a summary of the testers'
+    own questions is not a fact about the project. Nothing here is read back
+    into an answer.
 
-    Also records each friction signal as a pattern via the learning engine
-    so observations accumulate across runs — future work (tier promotion of
-    chat-routing decisions, etc.) can mine this corpus.
+    Each friction signal is still recorded as a pattern on the learning
+    engine so observations accumulate across runs.
     """
-    import json as _json
-
     topics = [w for w, _c in _top_keywords(messages, n=8)]
     friction = _user_friction_signals(messages)
     asks = _top_user_asks(messages, n=5)
 
     written: Dict[str, Any] = {
-        "project_facts": 0,
-        "agent_facts": 0,
+        "brief": {"topics": topics, "friction": friction, "asks": asks, "run_date": run_date},
         "patterns_recorded": 0,
         "skipped": [],
     }
-
-    payload = {"topics": topics, "friction": friction, "asks": asks, "run_date": run_date}
-
-    try:
-        from app.core import projects as projects_store
-
-        if topics:
-            projects_store.set_fact(
-                project_id, "hydration:topics", ", ".join(topics),
-                source_document="hydration", confidence=0.5,
-            )
-            written["project_facts"] += 1
-        if friction:
-            projects_store.set_fact(
-                project_id, "hydration:friction", "; ".join(friction),
-                source_document="hydration", confidence=0.5,
-            )
-            written["project_facts"] += 1
-        projects_store.set_fact(
-            project_id, "hydration:last_run", run_date,
-            source_document="hydration", confidence=1.0,
-        )
-        written["project_facts"] += 1
-    except Exception as exc:  # noqa: BLE001
-        written["skipped"].append(f"project_facts: {type(exc).__name__}: {exc}")
-
-    try:
-        from app.core import agent_memory
-
-        agent_memory.set_agent_fact(
-            agent_name="chat",
-            project_id=project_id,
-            key="hydration:last_brief",
-            value=_json.dumps(payload, ensure_ascii=False),
-        )
-        written["agent_facts"] += 1
-    except Exception as exc:  # noqa: BLE001
-        written["skipped"].append(f"agent_facts: {type(exc).__name__}: {exc}")
 
     try:
         from app.blocks import BLOCK_REGISTRY

@@ -1,0 +1,14 @@
+[
+  {
+    "formula": "monte_carlo_percentiles",
+    "inputs": {"low": [3, 4.5], "most_likely": [3, 4.5], "high": [3, 4.5], "iterations": 200, "seed": 5},
+    "expect": {"p50": 7.5, "p80": 7.5, "p90": 7.5, "most_likely_total": 7.5, "probability_within_most_likely_percent": 100},
+    "working": "No item has any spread, so every trial total is 3 + 4.5 = 7.5; every percentile is 7.5 and every trial finishes within the most likely total."
+  },
+  {
+    "formula": "monte_carlo_percentiles",
+    "inputs": {"low": [10, 20], "most_likely": [10, 20], "high": [10, 20], "iterations": 100, "seed": 9},
+    "expect": {"p50": 30, "p90": 30, "mean": 30, "min_trial": 30, "max_trial": 30},
+    "working": "Two fixed items 10 + 20 = 30 on every trial: P50 = P90 = mean = 30."
+  }
+]

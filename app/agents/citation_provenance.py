@@ -435,6 +435,12 @@ def _working_document_records(text: str) -> list[EvidenceRecord]:
     return records
 
 
+def _is_notes(name: Any) -> bool:
+    from app.agents.core.tool_registry import is_notes
+
+    return is_notes(name)
+
+
 def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[EvidenceRecord]:
     """Tool-run records (name + the arguments actually passed + the result)
     and the operator's own words."""
@@ -455,6 +461,9 @@ def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[Evidence
                     pending_args[str(tid)] = args if isinstance(args, str) else json.dumps(args or {})
         elif role == "tool":
             name = m.get("name") or None
+            if _is_notes(name):
+                # The model's own notes are never evidence for a figure.
+                continue
             tid = str(m.get("tool_call_id") or "")
             text = str(m.get("content") or "")
             records.append(EvidenceRecord(
@@ -847,7 +856,16 @@ def _has_number(text: str, targets: list[float]) -> bool:
 
 
 def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
-    return _has_number(answer, credit.result_numbers)
+    """True when the answer states a figure the calculator returned.
+
+    A figure is read from prose without its sign, and prose states a negative
+    amount in more ways than this check could list ("-3", "(3)", "a loss of
+    3", "each unit loses 3", "short by 3"). Which of those a sentence means
+    is language, and no rule here is keyed on wording: a negative result is
+    matched on its size, exactly as a positive one is. The check answers
+    where a figure came from, not how the sentence around it reads.
+    """
+    return _has_number(answer, [abs(target) for target in credit.result_numbers])
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:

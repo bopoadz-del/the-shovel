@@ -788,3 +788,17 @@ def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[LagMonit
     _started = LagMonitor(loop, threshold, _env_float("LOOP_WATCHDOG_TICK_MS", _DEFAULT_TICK_MS)).start()
     _LOG.info("loop watchdog on: logs LOOP_STALL when the event loop is %dms late", threshold)
     return _started
+
+
+def stop() -> None:
+    """Stop the process-wide watchdog and forget it (from the lifespan's shutdown).
+
+    The monitor watches the loop of the lifespan that started it, so it ends
+    with that lifespan. Left running, its threads keep reading CPU until they
+    find the loop closed, and ``_started`` stays pinned to a dead loop, so a
+    later lifespan in the same process would get no watchdog at all. A no-op
+    when none is running (switched off, or never started)."""
+    global _started
+    mon, _started = _started, None
+    if mon is not None:
+        mon.stop()

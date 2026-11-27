@@ -15,7 +15,7 @@ def test_build_project_context_includes_fact_and_document():
     pid = proj["id"]
 
     # Add a durable fact
-    store.set_fact(pid, "contract_value", "9500000")
+    store.set_fact(pid, "contract_value", "9500000", verified_by="u1")
 
     # Add a document
     store.add_document(
@@ -47,7 +47,7 @@ def test_build_project_context_facts_only():
     """A project with facts but no documents should still return a non-empty context."""
     proj = store.create_project("Facts Only Project")
     pid = proj["id"]
-    store.set_fact(pid, "employer", "the client project Authority")
+    store.set_fact(pid, "employer", "the client project Authority", verified_by="u1")
 
     ctx = build_project_context(pid)
     assert "the client project Authority" in ctx
