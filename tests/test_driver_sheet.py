@@ -98,14 +98,23 @@ def test_a_finite_or_text_plan_literal_is_kept_as_written(literal):
     assert out["plan"][0]["inputs"]["b"] == literal
 
 
-def test_a_non_finite_literal_refuses_the_whole_update_beside_a_good_step():
+@pytest.mark.parametrize("name,bad", [("factor", float("nan")), ("rate", {"value": float("inf"), "unit": "m"})])
+def test_a_non_finite_literal_refuses_the_whole_update_beside_a_good_step(name, bad):
     s = _sheet_with([{"id": "g1", "value": 2, "unit": "m"}])
     out, problems = ws.apply_update(s, {"plan": [
         {"id": "s1", "entry": "e", "inputs": {"a": "g1", "b": 3}},
-        {"id": "s2", "entry": "e", "inputs": {"a": "s1", "factor": float("nan")}}]})
-    assert problems == ["plan step s2 input factor holds a number that is not finite "
+        {"id": "s2", "entry": "e", "inputs": {"a": "s1", name: bad}}]})
+    assert problems == [f"plan step s2 input {name} holds a number that is not finite "
                         "(NaN or infinity); write the figure itself"]
     assert out is s
+
+
+@pytest.mark.parametrize("step", ["s1", 3, ["s1", "e"], None])
+def test_a_plan_step_that_is_not_an_object_is_refused_and_the_sheet_unchanged(step):
+    s = _sheet_with([{"id": "g1", "value": 2, "unit": "m"}])
+    out, problems = ws.apply_update(s, {"plan": [step]})
+    assert problems == ["a plan step must be an object"]
+    assert out is s and out["plan"] == []
 
 
 def test_plan_step_may_not_refer_to_itself():
