@@ -5,7 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 
 import math
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.lib.formula_registry import Param, formula
 
@@ -66,8 +66,16 @@ def calculate_interim_payment(
     }
 
 
-def _amount(x: float) -> str:
-    return f"{x:,.2f}"
+def _to_cent(x: float | Decimal) -> Decimal:
+    """An amount to the cent, half up, on the decimal figure (no binary
+    residue decides the last cent)."""
+    d = x if isinstance(x, Decimal) else _as_written(x)
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) + 0
+
+
+def _amount(x: float | Decimal) -> str:
+    text = format(_to_cent(x), ",f")
+    return "0.00" if text == "-0.00" else text
 
 
 def _as_written(x: float) -> Decimal:
@@ -77,12 +85,12 @@ def _as_written(x: float) -> Decimal:
     return Decimal(repr(float(x)))
 
 
-def _figure(x: float) -> str:
+def _figure(x: float | Decimal) -> str:
     """A working figure written out in full: thousands separators, no
-    exponent, every digit up to ten significant figures, so the figures a
-    step prints multiply to the result printed after it. ``:.10g`` already
-    drops trailing zeros and a bare point, so nothing is stripped."""
-    text = format(Decimal(f"{x:.10g}"), ",f")
+    exponent and every digit the figure has, so an input prints as written
+    and the figures a step prints give the result printed after it."""
+    d = x if isinstance(x, Decimal) else _as_written(x)
+    text = format(d.normalize(), ",f")
     return "0" if text in ("", "-0") else text
 
 
@@ -139,7 +147,7 @@ def break_even_point(
     contribution_d = _as_written(price) - _as_written(var)
     contribution = float(contribution_d)
     working = [(f"Contribution per unit = price {_figure(price)} - variable cost "
-                f"{_figure(var)} = {_figure(contribution)}")]
+                f"{_figure(var)} = {_figure(contribution_d)}")]
     q = None if expected_units is None else float(expected_units)
     q_d = None if q is None else _as_written(q)
 
@@ -148,16 +156,16 @@ def break_even_point(
         # expected volume makes a loss, and that loss is the answer.
         if q is None:
             return
-        profit = float(q_d * contribution_d - _as_written(fixed))
+        profit_d = q_d * contribution_d - _as_written(fixed)
         working.append(f"Profit at {_figure(q)} units = {_figure(q)} x "
-                       f"{_figure(contribution)} - {_figure(fixed)} = {_amount(profit)}")
-        out["profit_at_expected"] = round(profit, 2)
+                       f"{_figure(contribution_d)} - {_figure(fixed)} = {_amount(profit_d)}")
+        out["profit_at_expected"] = float(_to_cent(profit_d)) + 0.0
 
     if contribution <= 0:
         working.append("The price does not exceed the variable cost per unit, so no "
                        "quantity covers the fixed costs: there is no break-even point.")
         out = {"break_even_units": None, "break_even_revenue": None,
-               "contribution_per_unit": round(contribution, 2),
+               "contribution_per_unit": contribution,
                "domain": "no break-even: price <= variable cost per unit"}
         _profit_at_expected(out)
         out["working"] = working
@@ -165,20 +173,24 @@ def break_even_point(
 
     units_d = _as_written(fixed) / contribution_d
     units = float(units_d)
+    # The quantity as the working prints it; the revenue is that printed
+    # figure times the price, so the step adds up as read.
+    units_shown = _as_written(units)
     whole = math.ceil(units_d)
-    revenue = units * price
-    ratio = contribution / price
+    revenue_d = units_shown * _as_written(price)
+    ratio = float(contribution_d / _as_written(price))
     working += [
-        (f"Break-even quantity = fixed costs {_figure(fixed)} / {_figure(contribution)} "
-         f"= {_figure(units)} units (sell {whole:,} whole units)"),
-        (f"Break-even revenue = {_figure(units)} x {_figure(price)} = {_amount(revenue)} "
-         f"(contribution ratio {ratio:.2%})"),
+        (f"Break-even quantity = fixed costs {_figure(fixed)} / {_figure(contribution_d)} "
+         f"= {_figure(units_shown)} units (sell {whole:,} whole "
+         f"unit{'' if whole == 1 else 's'})"),
+        (f"Break-even revenue = {_figure(units_shown)} x {_figure(price)} = "
+         f"{_amount(revenue_d)} (contribution ratio {ratio:.2%})"),
     ]
     out = {
         "break_even_units": round(units, 4),
         "units_to_cover_fixed_costs": whole,
-        "break_even_revenue": round(revenue, 2),
-        "contribution_per_unit": round(contribution, 2),
+        "break_even_revenue": float(_to_cent(revenue_d)),
+        "contribution_per_unit": contribution,
         "contribution_ratio": round(ratio, 6),
     }
     _profit_at_expected(out)
@@ -188,7 +200,7 @@ def break_even_point(
             out["margin_of_safety_units"] = round(float(q_d - units_d), 4)
             out["margin_of_safety_percent"] = round(margin * 100.0, 2)
             working.append(
-                f"Margin of safety = ({_figure(q)} - {_figure(units)}) / {_figure(q)} "
+                f"Margin of safety = ({_figure(q)} - {_figure(units_shown)}) / {_figure(q)} "
                 f"= {margin:.2%}"
                 + (" (below break-even: a shortfall)" if q_d < units_d else ""))
     out["working"] = working

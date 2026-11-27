@@ -45,7 +45,8 @@ def test_break_even_follows_the_method(seed):
         units = fixed / (price - var)
         assert r["break_even_units"] == pytest.approx(units, rel=1e-6, abs=1e-4)
         assert r["break_even_revenue"] == pytest.approx(units * price, abs=0.01)
-        assert r["contribution_per_unit"] == pytest.approx(price - var, abs=0.005)
+        assert r["contribution_per_unit"] == pytest.approx(price - var, rel=1e-12)
+        assert r["contribution_ratio"] == pytest.approx((price - var) / price, abs=1e-6)
         assert r["units_to_cover_fixed_costs"] == math.ceil(units - 1e-9)
 
 
@@ -342,3 +343,133 @@ def test_whole_units_come_from_the_exact_quotient_beyond_float_precision(divisor
         assert out["units_to_cover_fixed_costs"] == exact, fixed
         found += 1
     assert found > 0
+
+
+# ── a positive result keeps its Source line whatever prose leads it ────────
+
+def _gated_calc(calc: str, inputs: dict, name: str, answer: str) -> str:
+    import json
+
+    from app.agents.citation_provenance import gate
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation(calc, dict(inputs))
+    args = {"calculation": calc, "params": inputs}
+    msgs = [
+        {"role": "user", "content": "Calculate it."},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "c1", "function": {"name": "construction_calc",
+                                     "arguments": json.dumps(args)}}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "construction_calc",
+         "content": json.dumps(env, default=str)},
+    ]
+    return gate(f"{answer}\nSource: {name} (platform calculator)", None, msgs)
+
+
+@pytest.mark.parametrize("calc,inputs,name,answer", [
+    # q = 0.613 x V^2: 980.8 Pa at 40 m/s, 551.7 Pa at 30 m/s
+    ("wind_pressure", {"wind_speed": 40}, "Wind pressure",
+     "Velocity pressure - 980.8 Pa at 40 m/s."),
+    ("wind_pressure", {"wind_speed": 30}, "Wind pressure",
+     "Result:\n- 551.7 Pa velocity pressure at 30 m/s"),
+    # Q* = 120,000 / (85 - 61) = 5,000; 1,000 / (90 - 70) = 50
+    ("break_even_point", {"fixed_costs": 120000, "price_per_unit": 85,
+                          "variable_cost_per_unit": 61}, "Break-even point",
+     "The plant runs at a loss until 5,000 m3 a month."),
+    ("break_even_point", {"fixed_costs": 1000, "price_per_unit": 90,
+                          "variable_cost_per_unit": 70}, "Break-even point",
+     "The break-even volume (50 units) is the floor."),
+    ("break_even_point", {"fixed_costs": 120000, "price_per_unit": 85,
+                          "variable_cost_per_unit": 61}, "Break-even point",
+     "85 minus 61 leaves 24."),
+    ("break_even_point", {"fixed_costs": 1000, "price_per_unit": 90,
+                          "variable_cost_per_unit": 70}, "Break-even point",
+     "Break-even volume - 50 units."),
+])
+def test_a_positive_result_after_a_dash_bracket_or_loss_word_keeps_the_source_line(
+        calc, inputs, name, answer):
+    out = _gated_calc(calc, inputs, name, answer)
+    assert f"Source: {name}" in out, out
+
+
+@pytest.mark.parametrize("stated", ["6 minus 3", "6 – 3", "9 - 3"])
+def test_a_figure_after_a_figure_and_minus_is_a_subtraction(stated):
+    # contribution = 15 - 18 = -3; "6 minus 3" subtracts 3, it does not state -3
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" not in out, out
+
+
+@pytest.mark.parametrize("price,variable,stated", [
+    (15.0, 18.0, "–3"),                    # contribution -3, en dash
+    (20.0, 25.0, "minus 5"),                    # contribution -5, in words
+    (15.0, 18.0, "a deficit of 3"),
+    (20.0, 25.0, "a shortfall of about 5"),     # two words between
+])
+def test_a_negative_stated_in_other_words_keeps_the_source_line(price, variable, stated):
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": price,
+                  "variable_cost_per_unit": variable},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" in out, out
+
+
+# ── the reported figures are the exact ones ────────────────────────────────
+
+@pytest.mark.parametrize("price,variable", [
+    (0.125, 0.0375),        # 0.0875: four places
+    (0.125, 0.121),         # 0.004: below a cent
+    (0.00008, 0.00003),     # 0.00005: below a ten-thousandth
+])
+def test_contribution_per_unit_is_not_cut_to_the_cent(price, variable):
+    from fractions import Fraction
+    exact = float(Fraction(repr(price)) - Fraction(repr(variable)))
+    out = break_even_point(1000.0, price, variable)
+    assert out["contribution_per_unit"] == exact
+    assert out["contribution_ratio"] == pytest.approx(
+        exact / price, abs=1e-6)
+
+
+@pytest.mark.parametrize("fixed,price,variable", [
+    (1_234_567_890.12, 85.0, 61.0),
+    (120_000.0, 123_456_789.12, 61.0),
+    # the float product of quantity and price lands a cent off the printed one
+    (4_024_525_814.09, 9_960.54, 9_883.97),
+])
+def test_inputs_print_as_written_and_each_step_adds_up(fixed, price, variable):
+    from decimal import ROUND_HALF_UP, Decimal
+    w = break_even_point(fixed, price, variable)["working"]
+    assert f"price {price:,.2f}".rstrip("0").rstrip(".") in w[0]
+    assert f"fixed costs {fixed:,.2f}".rstrip("0").rstrip(".") in w[1]
+    import re
+    m = re.fullmatch(r"Break-even revenue = ([\d,.]+) x ([\d,.]+) = ([\d,.]+) \(.*",
+                     w[2])
+    u, p, revenue = (Decimal(g.replace(",", "")) for g in m.groups())
+    assert p == Decimal(repr(price))
+    assert (u * p).quantize(Decimal("0.01"), ROUND_HALF_UP) == revenue
+
+
+@pytest.mark.parametrize("q", [0.5, 0.25])
+def test_an_expected_quantity_below_one_still_has_a_margin(q):
+    # Q* = 1,000 / (10 - 6) = 250
+    out = break_even_point(1000.0, 10.0, 6.0, expected_units=q)
+    assert out["margin_of_safety_units"] == pytest.approx(q - 250, abs=1e-4)
+    assert out["margin_of_safety_percent"] == pytest.approx((q - 250) / q * 100, abs=0.01)
+
+
+@pytest.mark.parametrize("q,profit", [(101.0, -267.75), (150.0, 87.5)])
+def test_profit_keeps_its_cents(q, profit):
+    # contribution = 10.75 - 3.50 = 7.25; profit = q x 7.25 - 1,000
+    out = break_even_point(1000.0, 10.75, 3.5, expected_units=q)
+    assert out["profit_at_expected"] == profit
+
+
+@pytest.mark.parametrize("fixed,price,var,whole", [(1.1, 0.2, 0.1, 11), (2.2, 0.3, 0.1, 11)])
+def test_whole_units_on_a_quotient_that_floats_just_above_a_whole(fixed, price, var, whole):
+    # 2.2 / (0.3 - 0.1) is 11.000000000000002 in floats; 11 units cover it
+    assert break_even_point(fixed, price, var)["units_to_cover_fixed_costs"] == whole
+
+
+@pytest.mark.parametrize("fixed,word", [(20.0, "1 whole unit)"), (40.0, "2 whole units)")])
+def test_whole_units_are_singular_for_one(fixed, word):
+    # contribution = 30 - 10 = 20
+    assert break_even_point(fixed, 30.0, 10.0)["working"][1].endswith(word)

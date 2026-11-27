@@ -851,7 +851,7 @@ def _has_number(text: str, targets: list[float]) -> bool:
 # an accounting parenthesis "(3)", or a word that states a negative amount
 # up to two words before the figure ("a loss of 3", "a shortfall of 1,100").
 _NEGATIVE_LEAD_RE = re.compile(
-    r"(?:(?<![\w.])[-\u2212]\s*|\(\s*"
+    r"(?:(?<![\w.])[-\u2212\u2013]\s*|\(\s*"
     r"|\b(?:loss|losses|deficit|shortfall|negative|minus)\b(?:\s+\w+){0,2}\s+)$",
     re.IGNORECASE,
 )
@@ -868,8 +868,10 @@ def _signed_numbers_in(text: str) -> list[float]:
             continue
         lead = text[max(0, match.start() - 40):match.start()]
         sign = _NEGATIVE_LEAD_RE.search(lead)
-        if sign and sign.group(0).lstrip()[:1] in "-\u2212":
-            # "500 - 120": a minus with a figure before it subtracts.
+        if sign and (sign.group(0).lstrip()[:1] in "-\u2212\u2013"
+                     or sign.group(0).lstrip()[:5].lower() == "minus"):
+            # "500 - 120", "85 minus 61": a minus with a figure before it
+            # subtracts.
             before = lead[:sign.start()].rstrip()
             if before[-1:].isdigit():
                 sign = None
@@ -886,10 +888,19 @@ def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
     so the sign is read from what leads the figure. A negative result is
     committed to only by a figure the answer states as negative; a bare "3",
     a "+3" or "a gain of 3" does not commit to -3.
+
+    A result of zero or above is matched on the figure alone, as before: a
+    dash used as punctuation ("pressure - 980.8 Pa"), a list bullet, a
+    bracket or a word such as "loss" in front of a positive figure is how
+    prose is written, not a misstated sign.
     """
+    targets = credit.result_numbers
+    if _has_number(answer, [t for t in targets if t >= 0]):
+        return True
+    negatives = [t for t in targets if t < 0]
     return any(_close(found, target)
-               for found in _signed_numbers_in(answer)
-               for target in credit.result_numbers)
+               for found in _signed_numbers_in(answer) if found < 0
+               for target in negatives)
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:
