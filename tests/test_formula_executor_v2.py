@@ -22,7 +22,7 @@ def test_prompt_advertises_the_pm_library():
     p = build_codegen_prompt("critical path", {})
     # Generated code may import the tested CPM library instead of re-deriving it.
     assert "app.lib.pm_computations" in p
-    assert "compute_cpm" in p
+    assert "run_cpm" in p
 
 
 def test_prompt_allows_numpy_sympy_pint():

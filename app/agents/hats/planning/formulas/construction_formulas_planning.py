@@ -69,7 +69,12 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     (FS/SS/FF/SF) and ``lag`` in working days, or a list or tuple of any of
     those (a sequence is read item by item, never as its printed text).
     Nothing is assumed beyond what the CPM convention itself defines: a link
-    with no type is FS and a link with no lag has none."""
+    with no type is FS and a link with no lag has none. A mapping's id is
+    kept exactly as written, and so is an id given on its own as text (alone
+    or as one item of a list); only an id read out of a comma-separated
+    string loses the spaces around it, because there they belong to the
+    separator. Which activity each link joins is settled afterwards against
+    the network's own ids (``_join_links_to_ids``)."""
     if raw is None or raw == "":
         return []
     items = list(raw) if isinstance(raw, (list, tuple)) else [raw]
@@ -77,13 +82,71 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
     for item in items:
         if isinstance(item, dict):
             pid = item.get("id", item.get("predecessor_id"))
-            links.append({"predecessor_id": str(pid).strip(),
+            links.append({"predecessor_id": str(pid),
                           "type": str(item.get("type") or "FS").strip().upper(),
                           "lag": item.get("lag") or 0})
         else:
-            links += [{"predecessor_id": p.strip(), "type": "FS", "lag": 0}
-                      for p in str(item).split(",") if p.strip()]
+            pieces = str(item).split(",")
+            if len(pieces) > 1:
+                pieces = [p.strip() for p in pieces]
+            links += [{"predecessor_id": p, "type": "FS", "lag": 0}
+                      for p in pieces if p.strip()]
     return links
+
+
+def _join_links_to_ids(rows: List[Dict[str, Any]]) -> None:
+    """Point every link at the activity it names in this same network.
+
+    A link joins the one activity whose id is the same text once the spaces
+    around both are dropped (an id pasted with a stray space and a
+    predecessor typed without it, or the other way round). When no activity,
+    or more than one, matches that way (ids such as "A" and "A " are two
+    activities) the link keeps its text exactly: it joins the activity of
+    that exact id, or the kernel refuses it as an unknown predecessor."""
+    by_trimmed: Dict[str, List[str]] = {}
+    for aid in {row["id"] for row in rows}:
+        by_trimmed.setdefault(aid.strip(), []).append(aid)
+    for row in rows:
+        for link in row["predecessors"]:
+            same = by_trimmed.get(link["predecessor_id"].strip(), [])
+            if len(same) == 1:
+                link["predecessor_id"] = same[0]
+
+
+def _refused_inputs(exc: Any, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Which of the calculator's own inputs the network schedule refused.
+
+    Only the input is named (the first part of each refusal's location); the
+    envelope then asks for it again by its declared label, as it does for any
+    other input it cannot use. Nothing of the schedule's own refusal text
+    reaches the answer. A refusal inside the activities adds which activity
+    it was (its id as the caller wrote it) and the part refused. Every part
+    of an activity is read and checked here before the schedule sees it
+    except a link's ``type`` and ``lag``, which pass on under the caller's
+    own key, so the part named is always a word the caller wrote."""
+    from app.lib.source_labels import parameter_label
+
+    fields: List[str] = []
+    parts: List[str] = []
+    for err in exc.errors():
+        loc = err["loc"]
+        field = str(loc[0])
+        if field not in fields:
+            fields.append(field)
+        if field != "activities":
+            continue
+        # (activities, row, predecessors, link, part): the row's own id and
+        # the part of the link refused.
+        part = f"activity {settings['activities'][loc[1]]['id']} ({loc[-1]})"
+        if part not in parts:
+            parts.append(part)
+    labels = [parameter_label("cpm_network", f) for f in fields]
+    more = len(parts) - 1
+    error = (f"The {' and '.join(labels)} given could not be read"
+             + (f": {parts[0]}" + (f" and {more:,} more" if more else "") if parts else "")
+             + ".")
+    return {"error": error, "needs_input": fields, "required": fields,
+            "error_type": "ValueError"}
 
 
 @formula(
@@ -94,20 +157,38 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
                  'project duration and the critical path.'),
     inputs={
         'activities': Param(label='activities with durations and predecessors'),
+        'project_start': Param(label='project start date'),
+        'calendar': Param(label='working calendar (working weekdays and holidays)'),
+        # The band is a positive span (a band of none is not stated at all),
+        # so the declared range is more than 0: the envelope refuses 0 with
+        # the range question exactly where the schedule itself does.
+        'near_critical_band_days': Param('working days', 0, 100000, above_lo=True,
+                                         label='near-critical float band'),
     },
     outputs={'project_duration': 'working days', 'critical_path': '-',
              'activities': '-', 'working': '-'},
     main_output='project_duration',
 )
-def cpm_network(activities: List[Dict]) -> dict:
+def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
+                calendar: Optional[Dict] = None,
+                near_critical_band_days: Optional[float] = None) -> dict:
     """CPM over the network the user supplied. Each activity is a mapping
     with ``id``, ``duration`` (whole working days) and ``predecessors``.
+    An id is kept exactly as given, so every row of the result joins back to
+    the caller's activity by the id it sent; an id that is blank is refused.
 
     Total float TF = LS - ES; free float FF = the slack to the earliest
     successor date (an activity with no successor has FF = TF, because its
     late finish is the project finish). Durations are taken as given: no
-    crashing, no calendar, no near-critical band is applied."""
+    crashing is applied. Calendar dates are given only when the caller
+    states a ``project_start`` (an ISO date), on the caller's ``calendar``
+    (``work_weekdays`` Monday=0, ``holidays``; Monday to Friday when none is
+    given); near-critical activities are named only inside a band the caller
+    chose. A refusal names its kind in ``error_type`` (a loop in the network
+    is ``CircularDependencyError``) so a caller never reads the prose."""
     import json
+
+    from pydantic import ValidationError
 
     from app.lib.pm_computations import CircularDependencyError, compute_cpm
     from app.schemas.cpm import CPMInput
@@ -124,8 +205,8 @@ def cpm_network(activities: List[Dict]) -> dict:
     for i, act in enumerate(activities, start=1):
         if not isinstance(act, dict):
             return {"error": f"activity {i} is not a mapping of id, duration and predecessors."}
-        aid = str(act.get("id") or "").strip()
-        if not aid:
+        aid = str(act.get("id") or "")
+        if not aid.strip():
             return {"error": f"activity {i} has no id."}
         dur = act.get("duration")
         try:
@@ -138,32 +219,58 @@ def cpm_network(activities: List[Dict]) -> dict:
         rows.append({"id": aid, "name": str(act.get("name") or ""),
                      "duration": int(dur_f),
                      "predecessors": _network_links(act.get("predecessors"))})
+    _join_links_to_ids(rows)
 
+    settings: Dict[str, Any] = {"activities": rows}
+    if project_start not in (None, ""):
+        settings["project_start"] = project_start
+    if calendar not in (None, "", {}):
+        settings["calendar"] = calendar
+    if near_critical_band_days not in (None, ""):
+        settings["near_critical_band_days"] = near_critical_band_days
     try:
-        out = compute_cpm(CPMInput(activities=rows))
+        network = CPMInput(**settings)
+    except ValidationError as exc:
+        return _refused_inputs(exc, settings)
+    try:
+        out = compute_cpm(network)
     except CircularDependencyError as exc:
-        return {"error": f"the network has a loop: {exc}."}
+        return {"error": f"the network has a loop: {exc}.",
+                "error_type": "CircularDependencyError"}
     except ValueError as exc:
-        return {"error": f"the network cannot be scheduled: {exc}."}
+        return {"error": f"the network cannot be scheduled: {exc}.",
+                "error_type": "ValueError"}
 
     table, working = [], []
     for r in out.results:
-        table.append({
-            "id": r.id, "duration": r.duration,
+        row = {
+            "id": r.id, "name": r.name, "duration": r.duration,
             "early_start": r.early_start_day, "early_finish": r.early_finish_day,
             "late_start": r.late_start_day, "late_finish": r.late_finish_day,
             "total_float": r.total_float, "free_float": r.free_float,
             "is_critical": r.is_critical,
-        })
+        }
+        row.update({f"{key}_date": getattr(r, key).isoformat()
+                    for key in ("early_start", "early_finish", "late_start", "late_finish")
+                    if getattr(r, key) is not None})
+        table.append(row)
         working.append(
             f"{r.id}: EF = ES + d = {r.early_start_day} + {r.duration} = "
             f"{r.early_finish_day}; LS = LF - d = {r.late_finish_day} - {r.duration} = "
             f"{r.late_start_day}; TF = LS - ES = {r.late_start_day} - "
             f"{r.early_start_day} = {r.total_float}; FF = {r.free_float}"
             + (" (critical)" if r.is_critical else ""))
+    dated = ({"project_finish": out.project_finish.isoformat()}
+             if out.project_finish is not None else {})
+    banded = ({"near_critical": out.near_critical,
+               "near_critical_band_days": out.near_critical_band_days}
+              if out.near_critical is not None else {})
     return {
         "project_duration": out.project_duration,
         "critical_path": out.critical_path,
+        "critical_percentage": out.critical_percentage,
+        **dated,
+        **banded,
         "activities": table,
         "working": working,
         "standard": "CPM forward and backward pass",

@@ -31,10 +31,13 @@ PROJECT-MANAGEMENT LIBRARY — `app.lib.pm_computations`:
 Its functions take and return Pydantic models from `app.schemas.cpm`. Read
 result fields with ATTRIBUTE access (`out.project_duration`), never `out[...]`.
 
-- compute_cpm(data: CPMInput) -> CPMOutput
+- run_cpm(data: CPMInput) -> CPMOutput  (the CPM pass; it runs inside the
+  platform's calculation envelope, so call it for every critical-path,
+  duration or float question)
 - resource_histogram(results, activities, period_unit="week") -> ResourceHistogram
 - gantt_data(results: list[CPMResult]) -> list[GanttBar]
-- compress_schedule(data: CPMInput, reductions: dict[str, int]) -> CPMOutput
+- compress_schedule(data: CPMInput, reductions: dict[str, int])
+  -> tuple[CPMOutput, int]  (the revised schedule and the days saved)
 
 Models in `app.schemas.cpm`:
 - Activity(id: str, duration: int, name="", predecessors: list[Dependency]=[])
@@ -45,14 +48,14 @@ Models in `app.schemas.cpm`:
 
 Example — duration of activities A(3d) -> B(5d) -> C(2d) in series:
 ```python
-from app.lib.pm_computations import compute_cpm
+from app.lib.pm_computations import run_cpm
 from app.schemas.cpm import CPMInput, Activity, Dependency
 data = CPMInput(activities=[
     Activity(id="A", duration=3),
     Activity(id="B", duration=5, predecessors=[Dependency(predecessor_id="A")]),
     Activity(id="C", duration=2, predecessors=[Dependency(predecessor_id="B")]),
 ])
-result = compute_cpm(data).project_duration
+result = run_cpm(data).project_duration
 ```
 """
 

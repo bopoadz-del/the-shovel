@@ -74,6 +74,10 @@ class Param:
     hi: Optional[float] = None
     label: str = ""
     grade: str = ""
+    #: The range begins above ``lo``: ``lo`` itself is not accepted ("more
+    #: than 0"). For a quantity that must be positive but has no smallest
+    #: value worth naming.
+    above_lo: bool = False
     #: A tool parameter's type (``number``, ``integer``, ``series``, ``text``,
     #: ``boolean``, ``list``, ``object``); a formula's comes from its signature.
     kind: str = ""
@@ -115,6 +119,7 @@ class ParamSpec:
     required: bool
     default: Any = None
     basis: str = ""
+    above_lo: bool = False
 
     @property
     def display_label(self) -> str:
@@ -318,12 +323,13 @@ class Constant:
         return self
 
 
-def _range_words(lo: Optional[float], hi: Optional[float], unit: str) -> str:
-    """The declared range as a reader sees it (``1 to 5 ratio``)."""
+def _range_words(lo: Optional[float], hi: Optional[float], unit: str, above_lo: bool = False) -> str:
+    """The declared range as a reader sees it (``1 to 5 ratio``; with a
+    lower bound that is not itself accepted, ``more than 0, up to 5 ratio``)."""
     if lo is not None and hi is not None:
-        span = f"{lo:g} to {hi:g}"
+        span = f"more than {lo:g}, up to {hi:g}" if above_lo else f"{lo:g} to {hi:g}"
     elif lo is not None:
-        span = f"at least {lo:g}"
+        span = f"more than {lo:g}" if above_lo else f"at least {lo:g}"
     else:
         span = f"at most {hi:g}"
     return f"{span} {unit}" if unit and unit != "-" else span
@@ -376,12 +382,12 @@ class KnowledgeConstant:
             value = math.inf
         if not math.isfinite(value):
             raise self._fault(f"field {self.field_path!r} is not a finite number")
-        lo, hi = self.within.lo, self.within.hi
-        if (lo is not None and value < lo) or (hi is not None and value > hi):
+        lo, hi, above = self.within.lo, self.within.hi, self.within.above_lo
+        if (lo is not None and (value <= lo if above else value < lo)) or (hi is not None and value > hi):
             raise self._fault(
                 f"field {self.field_path!r} states {value:g}, outside what the calculator "
                 f"accepts for {self.within.label or 'this input'} "
-                f"({_range_words(lo, hi, self.unit)})"
+                f"({_range_words(lo, hi, self.unit, above)})"
             )
         prov = entry.get("provenance") or {}
         written = prov.get("course_reference") or prov.get("source")
@@ -570,7 +576,7 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
             unit=declared.unit, lo=declared.lo, hi=declared.hi,
             label=declared.label, grade=declared.grade, required=required,
             default=None if no_default else param.default,
-            basis=declared.basis,
+            basis=declared.basis, above_lo=declared.above_lo,
         )
     return out
 
@@ -659,7 +665,8 @@ _NO = ("false", "no", "n", "0", "off")
 
 def _rejection(spec: ParamSpec, value: Any, reason: str) -> Dict[str, Any]:
     return {"parameter": spec.name, "label": spec.label, "unit": spec.unit, "value": value,
-            "reason": reason, "lo": spec.lo, "hi": spec.hi, "kind": spec.kind}
+            "reason": reason, "lo": spec.lo, "hi": spec.hi, "kind": spec.kind,
+            "above_lo": spec.above_lo}
 
 
 def _number(value: Any) -> Optional[float]:
@@ -669,7 +676,11 @@ def _number(value: Any) -> Optional[float]:
 
 
 def _in_range(spec: ParamSpec, number: float) -> bool:
-    return (spec.lo is None or number >= spec.lo) and (spec.hi is None or number <= spec.hi)
+    # Written as "is it inside", never "is it outside": NaN compares False to
+    # every bound, so it is inside no range that has one.
+    if spec.lo is not None and not (number > spec.lo if spec.above_lo else number >= spec.lo):
+        return False
+    return spec.hi is None or number <= spec.hi
 
 
 _SI_PREFIX = {"G": 1e9, "M": 1e6, "k": 1e3, "": 1.0, "c": 1e-2, "m": 1e-3}
