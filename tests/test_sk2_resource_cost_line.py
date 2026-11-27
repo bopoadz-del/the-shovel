@@ -660,3 +660,21 @@ def test_noun_fills_count_reads_each_part(unit, chained, fills):
 
     assert _noun_fills_count(parse_unit("count/count"), unit, chained) is fills
     assert _noun_fills_count(None, unit, chained) is False
+
+
+@pytest.mark.parametrize("quantity,consumption,refused", [
+    # a quantity counted in a noun, against a consumption per area: refused
+    ("1590 bricks", "12.5 blocks per m2", True),
+    ("40 panels", "3 sheets/m2", True),
+    # a noun against a noun: nothing to convert, computed
+    ("1590 bricks", "12.5 blocks per brick", False),
+    # a token that is not a plain word is no noun: nothing stated to check
+    ("1590 m33", "12.5 blocks per m2", False),
+    ("40 x9", "3 sheets/m2", False),
+])
+def test_a_counted_noun_on_the_quantity_is_checked_as_a_count(quantity, consumption, refused):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("resource_cost_line", {"quantity": quantity, "consumption_per_unit": consumption,
+                                                 "price_per_resource_unit": "3.20 per block"})
+    assert (env["status"] != "success") is refused, env
