@@ -65,7 +65,9 @@ def _registered_ids(kind):
     if kind == "formula":
         return {s.name for s in fr.all_specs()}
     if kind == "tool":
-        return set(tool_registry._TOOLS)
+        # The catalogue is the driver path's door: the tools it offers (each
+        # declares ``driver`` where it is defined).
+        return set(tool_registry.driver_tools())
     if kind == "workflow":
         return set(routes.catalogue())
     if kind == "skill":
@@ -85,6 +87,11 @@ def test_every_registered_thing_has_one_entry(kind):
     want = _registered_ids(kind)
     assert want, kind  # the registry is populated, so the check is not empty
     assert {i.split(":", 1)[1] for i in ids if i.startswith(kind + ":")} == want
+    if kind == "tool":
+        # Nothing registered falls out unnoticed: a tool with no entry is one
+        # that declares it is not for the driver path.
+        left_out = set(tool_registry._TOOLS) - want
+        assert all(not tool_registry._TOOLS[n].driver for n in left_out)
 
 
 @pytest.mark.parametrize("kind", ["formula", "tool", "workflow", "skill", "knowledge"])
