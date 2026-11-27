@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -101,12 +102,29 @@ def _plan_problems(step: Any, known: set) -> List[str]:
         problems.append(f"plan step {sid or '?'} inputs must be an object")
         return problems
     for name, ref in inputs.items():
+        if _holds_non_finite(ref):
+            # NaN and the infinities are no figure, and JSON cannot carry
+            # them: the sheet goes to the model and to the browser as JSON.
+            problems.append(f"plan step {sid} input {name} holds a number that is not finite "
+                            "(NaN or infinity); write the figure itself")
         if isinstance(ref, str) and (_GIVEN_ID.match(ref) or _STEP_ID.match(ref)):
             if ref not in known:
                 problems.append(f"plan step {sid} input {name} refers to {ref}, which is not on the sheet")
             elif ref == sid:
                 problems.append(f"plan step {sid} input {name} refers to itself")
     return problems
+
+
+def _holds_non_finite(value: Any) -> bool:
+    """True when ``value`` is, or holds at any depth (an object's values, a
+    list's items), a float that is NaN or an infinity."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_holds_non_finite(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_non_finite(v) for v in value)
+    return False
 
 
 def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], List[str]]:

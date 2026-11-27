@@ -20,6 +20,7 @@ import { AlertTriangle, Download } from 'lucide-react'
 import './ChatBubble.css'
 
 import type { ChatMessage, ExportDescriptor } from './types'
+import ShowWorking from './ShowWorking'
 import { plainMetadata } from './userFacingText'
 import { citationMarkerFromHref, linkCitationMarkers } from './citationMarkers'
 
@@ -116,6 +117,12 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
             supporting text the contract moved out of it travels here, word
             for word, folded under the answer and opened on request. It sits
             outside the answer's own text, like the Sources panel. */}
+        {/* The working sheet of a catalogue-path turn, folded under the
+            answer: display only, the answer text above is untouched. */}
+        {!isUser && !message.streaming && message.sheet !== undefined && (
+          <ShowWorking sheet={message.sheet} ended={message.ended} />
+        )}
+
         {detailsMarkdown && !message.streaming && (
           <details className="chat-bubble__details">
             <summary className="chat-bubble__details-summary">More detail</summary>
@@ -193,6 +200,7 @@ function propsEqual(prev: Props, next: Props): boolean {
     a.toolStatus === b.toolStatus &&
     a.exports === b.exports &&
     a.citations === b.citations &&
+    a.sheet === b.sheet &&
     !!prev.onDownload === !!next.onDownload &&
     !!prev.onCitation === !!next.onCitation
   )

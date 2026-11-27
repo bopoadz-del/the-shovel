@@ -144,6 +144,63 @@ def test_a_sheet_turn_plans_runs_in_code_and_records_the_trace(monkeypatch, tota
     assert row["record_id"] == end["trace_record"]
     assert row["rounds"][1]["calls"][0]["tool"] == "run_step" and row["rounds"][1]["calls"][0]["step"] == "s1"
     assert "step" not in row["rounds"][0]["calls"][0]  # only a run_step call names a step
+    # The end event carries the final sheet and the ending, the same as the
+    # record holds, for the answer's "how this was worked out" panel.
+    assert end["sheet"] == row["sheet"] and end["ended"] == row["ended"] == "answer"
+
+
+def _strict_json(frame):
+    """Parse as the browser's JSON.parse does: NaN / Infinity are not JSON."""
+    def refuse(constant):
+        raise ValueError(f"not JSON: {constant}")
+    return json.loads(frame, parse_constant=refuse)
+
+
+@pytest.mark.parametrize("bad,good,total", [
+    (float("nan"), 1.05, 42.0),
+    ({"value": float("inf"), "unit": "-"}, {"value": 1.1, "unit": "-"}, 44.0),
+])
+def test_a_non_finite_plan_literal_is_refused_to_the_model_and_the_end_frame_stays_json(monkeypatch, bad, good,
+                                                                                         total):
+    def update(b):  # a refused update leaves the sheet unchanged, so the retry is whole
+        return {"givens": [{"id": "g1", "what": "spoil", "value": 40, "unit": "m3", "source": "user"}],
+                "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                          "inputs": {"operator": "multiply", "a": "g1", "b": b}}]}
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", update(bad), "c1")]},
+        {"content": "", "tool_calls": [_call("sheet_update", update(good), "c2")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c3")]},
+        {"content": "Done."},
+    ])
+    events = _run(user_message="spoil 40 m3 times a factor", conversation_id=f"ws-nf-{total:g}",
+                  project_id=None, sheet_mode=True)
+    # The model reads the refusal as its tool result, and can correct it.
+    refused = [m["content"] for m in seen[1]["messages"] if m["role"] == "tool"]
+    assert any("not finite" in c for c in refused), refused
+    assert _sheet_in(seen[1]["messages"])["plan"] == []  # the bad step never reached the sheet
+    end = [e for e in events if e.get("type") == "end"][0]
+    # Serialized as the route serializes a frame (app/routers/agents.py), the
+    # end frame parses as strict JSON and carries the corrected plan.
+    frame = _strict_json(json.dumps(end, default=str))
+    assert frame["sheet"]["plan"][0]["inputs"]["b"] == good
+    assert frame["sheet"]["steps"][0]["result"]["value"] == pytest.approx(total)
+
+
+@pytest.mark.parametrize("b,total", [(1.05, 42.0), ({"value": 2.5, "unit": "-"}, 100.0)])
+def test_a_finite_plan_literal_is_not_refused_and_the_end_frame_is_json(monkeypatch, b, total):
+    seen = _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "spoil", "value": 40, "unit": "m3", "source": "user"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": b}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": "Done."},
+    ])
+    events = _run(user_message="spoil 40 m3 times a factor", conversation_id=f"ws-fin-{total:g}",
+                  project_id=None, sheet_mode=True)
+    assert not any("not finite" in m["content"] for m in seen[1]["messages"] if m["role"] == "tool")
+    end = _strict_json(json.dumps([e for e in events if e.get("type") == "end"][0], default=str))
+    assert end["sheet"]["steps"][0]["result"]["value"] == pytest.approx(total)
 
 
 @pytest.mark.parametrize("reply", ["A plain answer.", "Another reply here."])
@@ -153,7 +210,8 @@ def test_without_the_setting_no_sheet_and_no_record(monkeypatch, reply):
     assert reply in _text(events)
     assert "sheet_update" not in seen[0]["tools"]
     assert not any(m["content"].startswith("Working sheet") for m in seen[0]["messages"] if m["role"] == "system")
-    assert "trace_record" not in [e for e in events if e.get("type") == "end"][0]
+    end = [e for e in events if e.get("type") == "end"][0]
+    assert "trace_record" not in end and "sheet" not in end and "ended" not in end
     assert trace_store.records(_today()) == []
 
 
@@ -328,7 +386,10 @@ def test_the_round_ceiling_ends_a_turn_whose_step_stays_open(monkeypatch, rounds
     assert seen[-1]["tools"] == []  # only the ceiling's closing call has no tools
     row = trace_store.records(_today(), "ws-p6-1")[0]
     assert row["ended"] == "ceiling" and row["sheet"]["steps"][0]["status"] == "failed"
-    assert [e for e in events if e.get("type") == "end"][0]["trace_record"]
+    end = [e for e in events if e.get("type") == "end"][0]
+    assert end["trace_record"]
+    # The panel reads the ending from the end event: the ceiling, not "answer".
+    assert end["ended"] == row["ended"] == "ceiling"
 
 
 def _owned_conversation(conv, user, title="carry project"):
@@ -1408,3 +1469,76 @@ def test_a_bare_number_of_the_plan_in_the_unit_the_user_gave_it_in_is_credited(m
     assert total in shown
     assert [f.get("step") for f in row["figures"]] == ["s1"]
 
+# --- the recorded end events the answer's panel is tested on ----------------
+# tests/fixtures/show_working holds real SSE 'end' events of this path;
+# the panel's node and browser tests read them. Each is re-run here through
+# loop.stream with the same scripted model and must come out the same, so
+# the panel is never tested on a hand-made end event.
+
+_FIXTURES = __import__("pathlib").Path(__file__).resolve().parent / "fixtures" / "show_working"
+
+_RECORDED_TURNS = {
+    "three_step_chain.json": (
+        "each wall is 12 m long and 0.6 m high and there are 7 walls with 2 coats; what area do I paint",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "wall length", "value": 12, "unit": "m", "source": "user"},
+                       {"id": "g2", "what": "wall height", "value": 0.6, "unit": "m", "source": "user"},
+                       {"id": "g3", "what": "walls", "value": 7, "unit": "nr", "source": "user"},
+                       {"id": "g4", "what": "coats", "value": 2, "unit": "nr", "source": "spec"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s1", "b": "g3"}},
+                     {"id": "s3", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s2", "b": "g4"}}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s2"}, "c3")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s3"}, "c4")]},
+         {"content": "The painted area is 100.8 m2."}],
+        "ws-rec-1", ["user", "user", "user", "user"]),
+    "stopped_on_missing_input.json": (
+        "the pit is 1.75 m deep; work out the loose excavation volume",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "pit depth", "value": 1.75, "unit": "m", "source": "user"},
+                       {"id": "g2", "what": "bulking factor", "value": 1.25, "unit": "-",
+                        "source": "general knowledge"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s1", "b": "g2"}}],
+            "missing": [{"for": "s1", "input": "b", "label": "pit plan area"}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "What is the pit plan area?"}],
+        "ws-rec-2", ["user", None]),
+    "plan_literals.json": (
+        "the trench holds 40 m3 of spoil; multiply by 1.05 for bulking and add the 2.5 m3 from the pit",
+        [{"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "what": "trench spoil", "value": 40, "unit": "m3", "source": "user"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "g1", "b": {"value": 1.05, "unit": "-"}}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "s1", "b": {"value": 2.5, "unit": "m3"}}}]}, "c1")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+         {"content": "", "tool_calls": [_call("run_step", {"step": "s2"}, "c3")]},
+         {"content": "The loose spoil is 44.5 m3."}],
+        "ws-rec-3", ["user"]),
+}
+
+
+def _without_turn(sheet):
+    return {k: v for k, v in sheet.items() if k != "turn"}
+
+
+@pytest.mark.parametrize("name", sorted(_RECORDED_TURNS))
+def test_the_panel_fixtures_are_real_end_events(monkeypatch, name):
+    message, replies, conv, marks = _RECORDED_TURNS[name]
+    _scripted(monkeypatch, json.loads(json.dumps(replies)))
+    events = _run(user_message=message, conversation_id=conv, project_id=None, sheet_mode=True)
+    end = [e for e in events if e.get("type") == "end"][0]
+    recorded = json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
+    assert _text(events) == recorded["content"]
+    assert end["ended"] == recorded["ended"]
+    assert _without_turn(end["sheet"]) == _without_turn(recorded["sheet"])
+    # Code's own check on each given is what the panel shows as its source:
+    # a figure the user typed is marked "user"; one the model wrote is not.
+    assert [g.get("checked") for g in end["sheet"]["givens"]] == marks
