@@ -117,7 +117,12 @@ SUMMARY_KEYS = (
     "mode", "execute_hash", "gates", "refused", "derived_document_id", "superseded",
     "rows_written", "chunks_added", "chunks_over_window", "document_status", "index_status",
     "reader", "pages_not_read", "bill_state_counts", "rows_unassigned",
+    "not_read_causes",
 )
+#: The private file a skip is kept in (the plan file is only for a plan).
+SKIP_FILE = "last_skip.json"
+#: The cause of a not-read attempt that raised nothing: a reply with no lines.
+CAUSE_NO_LINES = "reply_without_lines"
 #: Error codes (the summary never carries a message).
 ERR_MISSING_IDS = "missing_ids"
 ERR_BAD_PAGES = "bad_pages"
@@ -408,19 +413,37 @@ def private_plan_name(plan: Mapping[str, Any]) -> str:
     return f"plan_{int(first)}_{int(stop)}.json"
 
 
+def not_read_causes(plan: Mapping[str, Any]) -> dict[str, int]:
+    """Attempts per cause over the pages not read: each failed call's code
+    (error class and HTTP status, never a message) and replies that gave no
+    lines, so a key or provider fault never reads as unreadable pages."""
+    counts: dict[str, int] = {}
+    for entry in (plan.get("pages_not_read_why") or {}).values():
+        errors = [str(e) for e in entry.get("errors") or []]
+        for code in errors:
+            counts[code] = counts.get(code, 0) + 1
+        other = len(entry.get("replies") or []) - len(errors)
+        if other > 0:
+            counts[CAUSE_NO_LINES] = counts.get(CAUSE_NO_LINES, 0) + other
+    return counts
+
+
 def state_counts(plan: Mapping[str, Any]) -> dict[str, Any]:
-    """Counts of a model-reader plan: pages not read, bills per state (the state
-    as a code token), rows under no bill. Empty for a plan without states."""
+    """Counts of a model-reader plan: pages not read and their causes, bills per
+    state (the state as a code token), rows under no bill. Empty for a plan
+    without states."""
     states = plan.get("bill_states")
     if not isinstance(states, Mapping):
         if "pages_not_read" in plan:  # a skip because no page gave lines
-            return {"pages_not_read": len(plan.get("pages_not_read") or [])}
+            return {"pages_not_read": len(plan.get("pages_not_read") or []),
+                    "not_read_causes": not_read_causes(plan)}
         return {}
     counts: dict[str, int] = {}
     for bill in states.get("bills") or []:
         code = str(bill.get("state") or "").lower().replace(" ", "_")
         counts[code] = counts.get(code, 0) + 1
     return {"pages_not_read": len(plan.get("pages_not_read") or []),
+            "not_read_causes": not_read_causes(plan),
             "bill_state_counts": counts,
             "rows_unassigned": states.get("rows_unassigned")}
 
@@ -492,6 +515,7 @@ def plan_one(
     report.update(state_counts(plan))
     sections = plan.get("sections")
     if sections is None:  # a skip: the plan carries only its reason
+        _write_private(work_dir, SKIP_FILE, plan)  # its causes, for the advisor
         report["error"] = ERR_NO_PLAN
         return report
     not_saved = _write_private(work_dir, private_plan_name(plan), plan)

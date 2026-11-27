@@ -505,10 +505,11 @@ def test_geometry_reader_leaves_deps_as_they_are(reader):
     ({"pages_not_read": [2, 5], "bill_states": {
         "rows_unassigned": 4,
         "bills": [{"state": "RECONCILED"}, {"state": "NOT READ"}, {"state": "RECONCILED"}]}},
-     {"pages_not_read": 2, "rows_unassigned": 4,
+     {"pages_not_read": 2, "rows_unassigned": 4, "not_read_causes": {},
       "bill_state_counts": {"reconciled": 2, "not_read": 1}}),
     ({"bill_states": {"rows_unassigned": 0, "bills": [{"state": "TOTAL ONLY"}]}},
-     {"pages_not_read": 0, "rows_unassigned": 0, "bill_state_counts": {"total_only": 1}}),
+     {"pages_not_read": 0, "rows_unassigned": 0, "not_read_causes": {},
+      "bill_state_counts": {"total_only": 1}}),
 ])
 def test_state_counts_are_counts_of_the_plan_states(plan, want):
     assert bpo.state_counts(plan) == want
@@ -836,3 +837,198 @@ def test_execute_summary_carries_the_bill_state_counts(tmp_path, states, not_rea
     assert rep["pages_not_read"] == len(not_read)
     assert rep["rows_unassigned"] == states["rows_unassigned"]
     assert rep["bill_state_counts"] == want
+
+
+def _run_model_reads(tmp_path, monkeypatch, reads, pages):
+    """One plan of ``reads`` (0-based page -> lines) through the public path."""
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(lambda p: reads[p.index], tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    rc = bpo.main_from_env(_model_env(tmp_path), deps=deps)
+    rep = _summary(lines)
+    plan_file = tmp_path / "wd" / f"plan_0_{pages}.json"
+    saved = json.loads(plan_file.read_text(encoding="utf-8")) if plan_file.exists() else None
+    return rc, rep, saved
+
+
+def _a(amount, **kw):
+    return _line("item", "Bill A", amount, quantity="1", rate=amount, **kw)
+
+
+def _b(amount, **kw):
+    return _line("item", "Bill B", amount, quantity="1", rate=amount, **kw)
+
+
+def _none(amount):
+    return _line("item", None, amount, quantity="1", rate=amount)
+
+
+@pytest.mark.parametrize("total_b, unnamed_on_split, want", [
+    # one bill ends and the next starts on page 3: each line names its bill
+    ("10", False, {"reconciled": 2}),
+    ("11", False, {"reconciled": 1, "failed": 1}),
+    # an item on that page that names no bill could be either bill's
+    ("10", True, {"not_placed": 2}),
+])
+def test_page_shared_by_two_bills_places_each_line_by_the_bill_it_names(
+        tmp_path, monkeypatch, total_b, unnamed_on_split, want):
+    split = [_a("10", ref="3"), _b("5", ref="1")] + ([_none("2")] if unnamed_on_split else [])
+    reads = {0: [_a("10", ref="1")], 1: [_a("10", ref="2")], 2: split,
+             3: [_b("5", ref="2")],
+             4: [_line("summary", "Bill A", "30"), _line("summary", "Bill B", total_b)]}
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, 5)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    bills = {b["label"]: b for b in saved["bill_states"]["bills"]}
+    assert saved["bill_states"]["pages_split"] == [3]
+    assert bills["Bill A"]["items_sum"] == 30 and bills["Bill B"]["items_sum"] == 10
+    unplaced = [3] if unnamed_on_split else []
+    assert bills["Bill A"]["pages_unplaced"] == bills["Bill B"]["pages_unplaced"] == unplaced
+
+
+@pytest.mark.parametrize("reads, pages, want, unplaced", [
+    # the bill's last page prints no bill name: NOT PLACED, never FAILED
+    ({0: [_a("10")], 1: [_a("10")], 2: [_none("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, {"not_placed": 1}, {"Bill A": [3]}),
+    ({0: [_none("7")], 1: [_a("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "27")]}, 4, {"not_placed": 1}, {"Bill A": [1]}),
+    # between two bills: either could own it, so both are NOT PLACED
+    ({0: [_a("10")], 1: [_none("4")], 2: [_b("5")],
+      3: [_line("summary", "Bill A", "10"), _line("summary", "Bill B", "5")]}, 4,
+     {"not_placed": 2}, {"Bill A": [2], "Bill B": [2]}),
+    # no page names a bill: the summary's bill reaches every unplaced page
+    ({0: [_none("10")], 1: [_none("20")], 2: [_line("summary", "Bill A", "30")]}, 3,
+     {"not_placed": 1}, {"Bill A": [1, 2]}),
+])
+def test_item_page_naming_no_bill_outside_every_range_is_not_placed(
+        tmp_path, monkeypatch, reads, pages, want, unplaced):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    got = {b["label"]: b["pages_unplaced"] for b in saved["bill_states"]["bills"]}
+    assert got == unplaced
+
+
+@pytest.mark.parametrize("reads, pages, want", [
+    # inside the bill's own range a page naming no bill is the bill's: checked
+    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, {"reconciled": 1}),
+    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "25")]}, 4, {"failed": 1}),
+    # a page of headings or sums that name no bill holds no item: still checked
+    ({0: [_a("10")], 1: [_a("10")],
+      2: [_line("total", None, "20"), _line("heading", None, None, description="h")],
+      3: [_line("summary", "Bill A", "20")]}, 4, {"reconciled": 1}),
+])
+def test_page_naming_no_bill_does_not_unplace_a_bill_it_cannot_change(
+        tmp_path, monkeypatch, reads, pages, want):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    assert all(b["pages_unplaced"] == [] for b in saved["bill_states"]["bills"])
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "http://provider.invalid/v1")
+    return httpx.HTTPStatusError("refused", request=req, response=httpx.Response(code, request=req))
+
+
+@pytest.mark.parametrize("code, pages", [(401, 3), (400, 2)])
+def test_provider_refusal_on_every_page_names_its_cause(tmp_path, monkeypatch, code, pages):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+
+    def ask(messages):
+        raise _status_error(code)
+
+    def model_read(doc, wd, tol):
+        reader = bpr.model_page_reader(ask, lambda i: b"png")
+        return bpr.model_bill_read(bpr.saved_page_reader(reader, wd), tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 1
+    rep = _summary(lines)
+    cause = f"HTTPStatusError:{code}"
+    assert rep["reason"] == bd.SKIP_PAGES_NOT_READ and rep["pages_not_read"] == pages
+    assert rep["not_read_causes"] == {cause: pages * bpr.PAGE_READ_ATTEMPTS}
+    skip = json.loads((tmp_path / "wd" / bpo.SKIP_FILE).read_text(encoding="utf-8"))
+    assert sorted(skip["pages_not_read_why"]) == [str(p) for p in range(1, pages + 1)]
+    assert all(e[bpr.ERRORS_KEY] == [cause] * bpr.PAGE_READ_ATTEMPTS
+               for e in skip["pages_not_read_why"].values())
+
+
+@pytest.mark.parametrize("bad_page, failure", [(0, "error"), (2, "no_lines")])
+def test_one_page_not_read_keeps_its_cause_in_the_plan(tmp_path, monkeypatch, bad_page, failure):
+    reads = _bill_a_three_pages(bad_page)
+
+    def ask_for(index):
+        def ask(messages):
+            if index != bad_page:
+                return json.dumps({"lines": reads[index]})
+            if failure == "error":
+                raise _status_error(401)
+            return "the page is blank"
+        return ask
+
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(
+            lambda p: bpr.model_page_reader(ask_for(p.index), lambda i: b"png")(p),
+            tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+    rep = _summary(lines)
+    want = ({"HTTPStatusError:401": 2} if failure == "error"
+            else {bpo.CAUSE_NO_LINES: 2})
+    assert rep["not_read_causes"] == want
+    saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
+    assert list(saved["pages_not_read_why"]) == [str(bad_page + 1)]
+    assert not (tmp_path / "wd" / bpo.SKIP_FILE).exists()
+
+
+@pytest.mark.parametrize("tolerance", [0.25, 1.5])
+def test_production_model_read_renders_asks_saves_and_keeps_the_tolerance(
+        tmp_path, monkeypatch, tolerance):
+    import base64
+
+    from app.core import llm_client, projects
+
+    monkeypatch.setattr(projects, "get_document", lambda d: {"id": d})
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: "/bytes/" + doc["id"])
+    rendered: list[tuple[str, int]] = []
+
+    def render(path, index):
+        rendered.append((path, index))
+        return f"png-page-{index}".encode()
+
+    monkeypatch.setattr(bpr, "render_page_png", render)
+    calls: list[tuple[int, int]] = []
+
+    async def complete(messages, **kw):
+        sent = str(messages)
+        page = next(i for i in range(3)
+                    if base64.b64encode(f"png-page-{i}".encode()).decode() in sent)
+        calls.append((kw["max_tokens"], page))
+        return json.dumps({"lines": [{"type": "item", "bill": "A", "amount": str(page + 1)}]})
+
+    monkeypatch.setattr(llm_client, "complete", complete)
+    wd = str(tmp_path / "wd")
+    for _run in range(2):
+        rows_of, states_of = bpo.production_model_read("d7", wd, tolerance)
+        rows, not_read, _raw = rows_of([_Page(i) for i in range(3)])
+        assert [r.fields["total"] for r in rows] == ["1", "2", "3"] and not_read == []
+        assert states_of(rows, not_read)["tolerance"] == tolerance
+    assert rendered == [("/bytes/d7", i) for i in range(3)]
+    assert calls == [(bpr.PAGE_READ_MAX_TOKENS, i) for i in range(3)]  # 2nd run: saved
+    assert all((tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=i)).is_file()
+               for i in range(3))

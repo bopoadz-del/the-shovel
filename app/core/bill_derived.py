@@ -272,9 +272,11 @@ def _prepare(
     else:
         got_rows, got_not_read, raw = rows_of_reads(page_reads)
         rows, not_read = list(got_rows), sorted(got_not_read)
+    why_not_read = _why_not_read(raw, not_read)
     if not rows and not_read:  # a reader that failed is never a page of no rows
         return {"derived": False, "reason": SKIP_PAGES_NOT_READ,
-                "pages_not_read": not_read, "pages": [first, stop],
+                "pages_not_read": not_read, "pages_not_read_why": why_not_read,
+                "pages": [first, stop],
                 "pages_in_file": total, "bill_verdict": verdict.reason, **sources}
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
@@ -298,6 +300,7 @@ def _prepare(
             "rows": len(rows),
             "unreconciled": sum(1 for r in rows if r.check),
             "pages_not_read": not_read,
+            "pages_not_read_why": why_not_read,
             "sections": _sections(rows),
             "columns": column_stats.as_dict(rows),
             "bill_states": states,
@@ -306,6 +309,16 @@ def _prepare(
                                     raw_reads and raw_reads["sha256"]),
         },
     }
+
+
+def _why_not_read(raw: Any, not_read: Sequence[int]) -> dict[str, Any]:
+    """The reader's own entry for each page not read (by 1-based page), as the
+    reader returned it: why the page gave no lines (attempts, replies, failed
+    calls). Kept with the plan and the skip, never in the plan hash."""
+    if not isinstance(raw, Mapping):
+        return {}
+    return {str(p): raw[str(p)] for p in not_read
+            if isinstance(raw.get(str(p)), Mapping)}
 
 
 def plan_bill_sheet(

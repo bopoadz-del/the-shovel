@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 
+import httpx
 import pytest
 
 from app.core import bill_aggregate as agg
@@ -373,14 +374,15 @@ def test_one_retry_on_empty_bad_or_failed_reply(replies, calls):
     assert len(ask.calls) == calls
 
 
-@pytest.mark.parametrize("replies, kept", [
-    (("", "{}"), ["", "{}"]),
-    ((ValueError("v"), '{"lines": []}'), ["ValueError", '{"lines": []}']),
+@pytest.mark.parametrize("replies, kept, errors", [
+    (("", "{}"), ["", "{}"], []),
+    ((ValueError("v"), '{"lines": []}'), ["ValueError", '{"lines": []}'], ["ValueError"]),
 ])
-def test_page_still_without_lines_after_retry_is_not_read(replies, kept):
+def test_page_still_without_lines_after_retry_is_not_read(replies, kept, errors):
     ask = _Ask(*replies, _good(_item("never", 1, 1, 1)))
     got = bpr.model_page_reader(ask, lambda i: b"x")(_pr(3))
-    assert got == {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": kept}
+    assert got == {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": kept,
+                   bpr.ERRORS_KEY: errors}
     assert len(ask.calls) == 2
 
 
@@ -398,7 +400,8 @@ def test_provider_error_on_every_attempt_is_not_read(error):
     ask = _Ask(error, error)
     got = bpr.model_page_reader(ask, lambda i: b"x")(_pr(1))
     assert got == {bpr.NOT_READ_KEY: True, "attempts": 2,
-                   "replies": ["RuntimeError", "RuntimeError"]}
+                   "replies": ["RuntimeError", "RuntimeError"],
+                   bpr.ERRORS_KEY: ["RuntimeError", "RuntimeError"]}
     assert len(ask.calls) == 2
 
 
@@ -772,3 +775,44 @@ def test_each_bill_reaches_only_the_unread_pages_next_to_it(offset):
     got = {s.label: s.pages_unread_reach for s in bpr.spans_from_page_reads(pages).spans}
     o = offset
     assert got == {"A": (o + 2,), "B": (o + 2, o + 4), "C": (o + 4, o + 6), "D": (o + 6, o + 8)}
+
+
+@pytest.mark.parametrize("figure", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("key", ["amount", "rate"])
+def test_reply_with_a_non_finite_figure_is_flagged(figure, key):
+    reply = '{"lines": [{"type": "item", "quantity": 1, "' + key + '": ' + figure + '}]}'
+    lines = bpr.model_page_reader(_Ask(reply), lambda i: b"x")(_pr(0))
+    (row,) = bpr.rows_from_page_reads({"1": lines}).rows
+    assert row.check == bpr.CHECK_NOT_A_NUMBER
+
+
+@pytest.mark.parametrize("bug", [AttributeError("a"), ZeroDivisionError("z")])
+def test_reader_bug_propagates_and_is_never_a_page_not_read(bug):
+    with pytest.raises(type(bug)):
+        bpr.model_page_reader(_Ask(bug, _good(_item("A", 1, 1, 1))), lambda i: b"x")(_pr(0))
+
+
+def _http_error(code):
+    req = httpx.Request("POST", "http://p.invalid")
+    return httpx.HTTPStatusError("no", request=req, response=httpx.Response(code, request=req))
+
+
+@pytest.mark.parametrize("exc, want", [
+    (RuntimeError("key unset"), "RuntimeError"),
+    (_http_error(401), "HTTPStatusError:401"),
+    (_http_error(503), "HTTPStatusError:503"),
+    (httpx.ConnectError("refused"), "ConnectError"),
+])
+def test_attempt_error_is_the_class_and_status_never_the_message(exc, want):
+    assert bpr.attempt_error(exc) == want
+
+
+@pytest.mark.parametrize("bill, own", [("Bill 2", "Bill 2"), (None, None), ("  ", None)])
+def test_row_keeps_the_bill_its_line_names_and_it_is_not_money(bill, own):
+    line = {"type": "item", "bill": bill, "amount": None}
+    (row,) = bpr.rows_from_page_reads({"1": [line]}).rows
+    assert row.extra.get(bpr.BILL_LABEL) == own
+    # a bill name is not a printed price: an item with no figures is unpriced
+    assert not bpr._carries_money(row)
+    priced = bpr.rows_from_page_reads({"1": [{**line, "amount": 5}]}).rows[0]
+    assert bpr._carries_money(priced)
