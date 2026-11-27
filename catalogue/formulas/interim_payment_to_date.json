@@ -116,7 +116,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Amount due on an interim payment certificate measured to date: work done to date plus materials on site, less retention at the contract rate up to its limit, less what earlier certificates already paid.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:calculate_payment",
+        "difference": "calculate_payment takes this period's certified amount on its own; interim_payment_to_date takes cumulative values and subtracts earlier certificates."
+      },
+      {
+        "id": "formula:calculate_interim_payment",
+        "difference": "calculate_interim_payment has no materials on site, no retention limit and no deduction of earlier certificates."
+      }
+    ]
   }
 }

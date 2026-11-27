@@ -91,7 +91,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Forward and backward pass over a whole activity network with its links and lags: early and late dates, total and free float of every activity, the project duration and the critical path.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:critical_path_float",
+        "difference": "critical_path_float works on one activity whose early and late dates are already known; cpm_network computes those dates from the network."
+      }
+    ]
   }
 }

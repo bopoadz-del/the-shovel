@@ -75,7 +75,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Net payment from one gross valuation less a retention percentage; gives the retention amount and the net.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:interim_payment_to_date",
+        "difference": "interim_payment_to_date adds materials on site, caps retention at a limit and deducts earlier certificates; calculate_interim_payment does none of these."
+      },
+      {
+        "id": "formula:calculate_payment",
+        "difference": "calculate_payment separates the claimed from the certified amount and can carry a cumulative certified total."
+      }
+    ]
   }
 }

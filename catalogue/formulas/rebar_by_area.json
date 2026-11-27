@@ -110,7 +110,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Reinforcement mass for a slab or wall from its area, bar diameter and bar spacing, one way or both ways; gives bars per metre, total bar length and mass.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:rebar_weight",
+        "difference": "rebar_weight needs the bar length or the mass already known; rebar_by_area derives the length from area and spacing."
+      }
+    ]
   }
 }

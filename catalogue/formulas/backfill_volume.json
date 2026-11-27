@@ -82,7 +82,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Backfill needed around a structure: the excavated volume less the structure's volume, and the loose volume to bring in once swell is allowed for.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:excavation_volume",
+        "difference": "excavation_volume gives the dug volume from the pit's dimensions; backfill_volume starts from that volume and subtracts the structure."
+      }
+    ]
   }
 }

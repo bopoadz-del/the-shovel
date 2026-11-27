@@ -94,7 +94,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Total float of one activity from its early and late start and finish, and whether it is critical (zero or negative float). Free float is not computed here.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:cpm_network",
+        "difference": "cpm_network computes the dates, floats and critical path of the whole network from activities and links; critical_path_float needs one activity's dates already known."
+      }
+    ]
   }
 }

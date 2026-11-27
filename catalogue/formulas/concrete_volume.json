@@ -203,7 +203,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Volume of concrete in a rectangular element, a cylinder or a trapezoidal section, times the number of elements, with an optional waste allowance on top of the net volume.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:excavation_volume",
+        "difference": "excavation_volume is the soil dug out of a pit or trench, with bulking to loose volume; concrete_volume is the concrete placed in an element."
+      },
+      {
+        "id": "formula:backfill_volume",
+        "difference": "backfill_volume is the void left around a structure after it is built; concrete_volume is the structure's own concrete."
+      }
+    ]
   }
 }

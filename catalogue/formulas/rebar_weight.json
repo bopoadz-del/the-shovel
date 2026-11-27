@@ -161,7 +161,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Mass of reinforcing bars of one diameter from their total length (or from a count of bars of that length), or the metres run that a given mass of that diameter makes.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:rebar_by_area",
+        "difference": "rebar_by_area starts from a slab or wall area and a bar spacing; rebar_weight starts from a known bar length or a known mass."
+      }
+    ]
   }
 }

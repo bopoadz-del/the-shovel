@@ -99,7 +99,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "In-situ (bank) volume of soil dug from a rectangular pit or trench, and the loose volume after bulking, for haulage and disposal.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:backfill_volume",
+        "difference": "backfill_volume takes an excavated volume and the structure's volume and gives what must be filled back; excavation_volume gives what is dug out."
+      },
+      {
+        "id": "formula:concrete_volume",
+        "difference": "concrete_volume is the concrete placed in an element, with a waste allowance, not soil removed."
+      }
+    ]
   }
 }

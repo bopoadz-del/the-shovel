@@ -133,7 +133,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Net payment due for one period: this period's certified amount less retention on it, with the disputed part (claimed less certified) and the cumulative certified when earlier certificates are given.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:interim_payment_to_date",
+        "difference": "interim_payment_to_date starts from cumulative work done to date and deducts earlier certificates; calculate_payment takes this period's amount and deducts nothing earlier."
+      },
+      {
+        "id": "formula:calculate_interim_payment",
+        "difference": "calculate_interim_payment has no claimed-versus-certified split and no cumulative; it only takes retention off one gross valuation."
+      }
+    ]
   }
 }
