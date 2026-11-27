@@ -3760,6 +3760,14 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+        # A converted input is stated beside the working, figure and unit as
+        # given and as the working uses them, so each printed step can be
+        # checked against the figure the user gave. Kept off the result: the
+        # result is the same whatever unit the input was typed in.
+        from app.lib.source_labels import conversion_lines
+        shown = conversion_lines(str(name), conversions)
+        if shown:
+            envelope["converted_inputs"] = shown
     if derived:
         # An input worked out of the ask's own figures is shown with its
         # working, so the answer can state where the value came from.

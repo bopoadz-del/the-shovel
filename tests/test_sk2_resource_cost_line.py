@@ -523,3 +523,48 @@ def test_an_out_of_range_question_without_a_written_pair_shows_the_checked_value
     row = {"parameter": "price_per_resource_unit", "label": "price", "unit": "currency/count",
            "value": value, "reason": "out_of_range", "lo": 0, "hi": 1e9, "kind": "number"}
     assert shown in source_labels.input_question("resource_cost_line", [row])
+
+
+# --- a converted input is stated in the working before the steps that use it
+@pytest.mark.parametrize("conversions,lines", [
+    ([{"parameter": "price_per_resource_unit", "value_in": 310.0, "from_unit": "currency/m3",
+       "to_unit": "currency/L", "value_out": 0.31}],
+     ["Converted cited price per resource unit: 310 per m³ = 0.31 per L"]),
+    ([{"parameter": "consumption_per_unit", "value_in": 0.022, "from_unit": "m3/m2",
+       "to_unit": "m3/ft2", "value_out": 0.0020438668800000003},
+      {"parameter": "quantity", "value_in": 640.0, "from_unit": "ft2", "to_unit": "ft2",
+       "value_out": 640.0}],
+     ["Converted resource consumed per unit of work: 0.022 m³/m² = 0.00204386688 m³/ft²"]),
+    ([{"parameter": "price_per_resource_unit", "value_in": 2800.0, "from_unit": "currency/t",
+       "to_unit": "currency/kg", "value_out": 2.8000000000000003}],
+     ["Converted cited price per resource unit: 2,800 per t = 2.8 per kg"]),
+    ([{"parameter": "quantity", "value_in": 5.0, "from_unit": "m2", "to_unit": "m2",
+       "value_out": 5.0}, "not a record"], []),
+    ([], []),
+])
+def test_conversion_lines_state_each_converted_figure_with_both_units(conversions, lines):
+    from app.lib import source_labels
+    assert source_labels.conversion_lines("resource_cost_line", conversions) == lines
+
+
+@pytest.mark.parametrize("params,first", [
+    ({"quantity": "640 m2", "consumption_per_unit": "22 L/m2", "price_per_resource_unit": "310 per m3"},
+     "Converted cited price per resource unit: 310 per m³ = 0.31 per L"),
+    ({"quantity": "100 m3", "consumption_per_unit": "35 kg/m3", "price_per_resource_unit": "2800 per t"},
+     "Converted cited price per resource unit: 2,800 per t = 2.8 per kg"),
+    ({"quantity": 640, "consumption_per_unit": 22, "price_per_resource_unit": 0.31},
+     "Net resource = quantity 640 x consumption 22 = 14,080"),
+    ({"quantity": "640 m2", "consumption_per_unit": "22 L/m2", "price_per_resource_unit": "0.31 per L"},
+     "Net resource = quantity 640 x consumption 22 = 14,080"),
+])
+def test_the_envelope_states_each_conversion_the_working_used(params, first):
+    from app.lib.construction_formulas import run_calculation
+    env = run_calculation("resource_cost_line", params)
+    assert env["status"] == "success", env
+    shown = env.get("converted_inputs") or []
+    if first.startswith("Converted "):
+        assert shown == [first]
+    else:
+        assert shown == [] and "converted_inputs" not in env
+    # the result itself stays the figures of the calculation alone
+    assert not any(line.startswith("Converted ") for line in env["result"]["working"])

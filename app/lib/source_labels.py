@@ -186,6 +186,26 @@ def _written_quantity(written: Any) -> str:
     return f"{_fmt_value(number)}{'' if joined or not unit else ' '}{unit}"
 
 
+def _shown_figure(x: Any) -> str:
+    """A converted figure to ten significant digits, grouped: the precision
+    a calculator's working prints its own figures at."""
+    return f"{float(x):,.10g}" if abs(float(x)) >= 1 else f"{float(x):.10g}"
+
+
+def conversion_lines(calculation: str, conversions: Iterable[Dict[str, Any]]) -> List[str]:
+    """One working line per input whose unit was converted before the
+    calculation ran: the figure and unit given, then the figure and unit the
+    calculation used. A record whose unit did not change adds no line."""
+    lines: List[str] = []
+    for c in conversions or ():
+        if not isinstance(c, dict) or c.get("from_unit") == c.get("to_unit"):
+            continue
+        label = parameter_label(calculation, c.get("parameter") or "") or c.get("parameter") or ""
+        lines.append(f"Converted {label}: {_shown_figure(c['value_in'])} {unit_words(c.get('from_unit') or '')}"
+                     f" = {_shown_figure(c['value_out'])} {unit_words(c.get('to_unit') or '')}")
+    return lines
+
+
 def _accepted_range(row: Dict[str, Any]) -> str:
     if row.get("above_lo"):
         # The lower bound is not itself accepted: said as it is meant.
