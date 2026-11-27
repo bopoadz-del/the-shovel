@@ -237,3 +237,52 @@ def test_no_bill_holds_the_rows_they_are_unassigned(spans):
     got = bpr.bill_states(rows, [], spans=spans, tolerance=0)
     assert got["rows_unassigned"] == len(rows)
     assert [b["rows"] for b in got["bills"]] == [0] * len(spans)
+
+
+# --- a bill whose document prints no item prices ----------------------------
+
+def _unpriced(ref, q, **kw):
+    return {"type": "item", "ref": ref, "description": "work", "unit": "nr",
+            "quantity": q, **kw}
+
+
+@pytest.mark.parametrize("pages, printed", [
+    ({"1": [_unpriced("A", 3), _unpriced("B", None)]}, 1000),
+    ({"1": [_unpriced("A", None, rate=None, amount="")], "2": [_unpriced("C", 7)]}, 25),
+])
+def test_bill_with_blank_money_columns_is_total_only(pages, printed):
+    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 2, printed)],
+                          tolerance=0)
+    (b,) = got["bills"]
+    assert b["state"] == bpr.STATE_TOTAL_ONLY
+    assert (b["item_rows_priced"], b["items_sum"], b["printed_total"]) == (0, 0, printed)
+
+
+@pytest.mark.parametrize("pages, printed, want", [
+    # one item prints a money column of its own: priced, so the sum is checked
+    ({"1": [_unpriced("A", 3), _unpriced("B", 1, figures={"Fixed Charge": 500})]},
+     1000, bpr.STATE_FAILED),
+    # a rate is printed but no amount: priced, the bill does not add up
+    ({"1": [_unpriced("A", 3, rate=10)]}, 30, bpr.STATE_FAILED),
+    # no total printed: nothing to check against
+    ({"1": [_unpriced("A", 3)]}, None, bpr.STATE_UNCHECKED),
+    # no item rows at all: not "total only"
+    ({"1": [_carried(None)]}, 1000, bpr.STATE_FAILED),
+    # a flagged row is never hidden behind "total only"
+    ({"1": [_unpriced("A", "three")]}, 1000, bpr.STATE_FAILED),
+    # every item priced and summing: reconciled, not total only
+    ({"1": [_item("A", 2, 5, 10)]}, 10, bpr.STATE_RECONCILED),
+])
+def test_total_only_does_not_fire_when_a_price_or_total_says_otherwise(pages, printed,
+                                                                       want):
+    got = bpr.bill_states(_rows(pages), [], spans=[bpr.BillSpan("b", 1, 1, printed)],
+                          tolerance=0)
+    assert got["bills"][0]["state"] == want
+
+
+@pytest.mark.parametrize("missing", [[1], [2]])
+def test_total_only_bill_with_a_page_not_read_is_not_read(missing):
+    pages = {"1": [_unpriced("A", 3)], "2": [_unpriced("B", 4)]}
+    got = bpr.bill_states(_rows(pages), missing, spans=[bpr.BillSpan("b", 1, 2, 9)],
+                          tolerance=0)
+    assert got["bills"][0]["state"] == bpr.STATE_NOT_READ

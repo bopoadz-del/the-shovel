@@ -185,6 +185,7 @@ STATE_RECONCILED = "RECONCILED"
 STATE_FAILED = "FAILED"
 STATE_UNCHECKED = "UNCHECKED"
 STATE_NOT_READ = "NOT READ"
+STATE_TOTAL_ONLY = "TOTAL ONLY"
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,17 @@ class BillSpan:
     first_page: int
     last_page: int
     printed_total: float | None = None
+
+
+_NOT_MONEY = frozenset({REF_LABEL, LINE_TYPE_LABEL})
+
+
+def _carries_money(row: g.BillRow) -> bool:
+    """True when the row prints a figure in a money column: rate, amount, or a
+    money column the page labels itself. Quantity is not money."""
+    if _text(row.fields.get("rate")) or _text(row.fields.get("total")):
+        return True
+    return any(_text(v) for k, v in row.extra.items() if k not in _NOT_MONEY)
 
 
 def bill_states(
@@ -210,6 +222,9 @@ def bill_states(
     A row belongs to the bill whose page range holds its source page. Only
     rows the model typed ``item`` are summed. The state is ``NOT READ`` when a
     page of the bill was not read, ``UNCHECKED`` when the bill prints no total,
+    ``TOTAL ONLY`` when the bill prints a total and has item rows but not one
+    of them carries a money figure in any column (rate, amount, or a money
+    column of its own): the document prints no item prices for that bill.
     ``FAILED`` when the item sum differs from the printed total by more than
     ``tolerance`` (the caller states it from the bill's own rounding) or any
     row of the bill is flagged, else ``RECONCILED``. Rows under no bill are
@@ -222,12 +237,14 @@ def bill_states(
                    if span.first_page <= r.source_page <= span.last_page]
         placed.update(members)
         items_sum = 0.0
-        summed = without = flagged = 0
+        summed = without = flagged = items = priced = 0
         for i in members:
             r = rows[i]
             flagged += 1 if r.check else 0
             if r.extra.get(LINE_TYPE_LABEL) != ITEM:
                 continue
+            items += 1
+            priced += 1 if _carries_money(r) else 0
             amount = g.parse_number(r.fields.get("total", ""))
             if amount is None:
                 without += 1
@@ -241,6 +258,8 @@ def bill_states(
             state = STATE_NOT_READ
         elif diff is None:
             state = STATE_UNCHECKED
+        elif items and not priced and not flagged:
+            state = STATE_TOTAL_ONLY
         elif abs(diff) > tolerance or flagged:
             state = STATE_FAILED
         else:
@@ -248,6 +267,7 @@ def bill_states(
         out.append({"label": span.label, "pages": [span.first_page, span.last_page],
                     "rows": len(members), "rows_summed": summed,
                     "rows_without_amount": without, "rows_flagged": flagged,
+                    "item_rows_priced": priced,
                     "items_sum": items_sum, "printed_total": printed, "diff": diff,
                     "pages_not_read": not_read, "state": state})
     return {"bills": out, "rows_unassigned": len(rows) - len(placed)}
