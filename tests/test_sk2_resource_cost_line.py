@@ -336,3 +336,64 @@ def test_an_input_the_calculator_still_needs_is_named_in_the_question(rejected, 
 
     assert source_labels.input_question("resource_cost_line", rejected, missing=missing) == question
 
+
+
+# ── a rate and a price whose units must chain (Param.per) ────────────────────
+# Through the chat tool door: the same kind converts and the converted figure
+# is what is multiplied; another kind is refused with a question naming both.
+
+@pytest.mark.parametrize("q,rate,price,expect_total", [
+    # 640 m2 x 22 L/m2 = 14,080 L; 310 per m3 = 0.31 per L -> 4,364.80
+    ("640 m2", "22 L/m2", "310 per m3", 4_364.80),
+    # 100 m3 x 35 kg/m3 = 3,500 kg; 2,800 per t = 2.8 per kg -> 9,800.00
+    ("100 m3", "35 kg/m3", "2800 per t", 9_800.00),
+    # 640 ft2 = 59.4579 m2; x 0.022 m3/m2 x 310 per m3 -> 405.50
+    ("640 ft2", "0.022 m3/m2", "310 per m3", 405.50),
+])
+def test_units_that_chain_are_converted_before_they_are_multiplied(q, rate, price, expect_total):
+    result = _chat({"quantity": q, "consumption_per_unit": rate, "price_per_resource_unit": price})
+    assert result.get("status") == "success", result
+    assert result["result"]["line_total"] == pytest.approx(expect_total, abs=0.005)
+
+
+@pytest.mark.parametrize("q,rate,price,question", [
+    ("640 m3", "0.022 m3/m2", "310 per m3",
+     "The resource consumed per unit of work (0.022 m3/m2) is per m², and the quantity of work (640 m3) "
+     "is in m³: an area does not convert to a volume, so the two do not go together. "
+     "What resource consumed per unit of work should I use?"),
+    ("640 m2", "0.022 m3/m2", "310 AED/kg",
+     "The cited price per resource unit (310 AED/kg) is per kg, and the resource consumed per unit of work "
+     "(0.022 m3/m2) is in m³: a mass does not convert to a volume, so the two do not go together. "
+     "What cited price per resource unit should I use?"),
+])
+def test_units_that_do_not_chain_are_refused_with_both_named(q, rate, price, question):
+    result = _chat({"quantity": q, "consumption_per_unit": rate, "price_per_resource_unit": price})
+    assert result.get("needs_input") is True, result
+    assert "line_total" not in (result.get("result") or {})
+    assert result["error"] == question
+
+
+@pytest.mark.parametrize("rate,question", [
+    ("45 AED/kg", "The material rate per unit is a price per count, and 45 AED/kg is a price per mass, "
+                  "so it does not convert. What material rate per unit should I use?"),
+    ("45 per m3", "I do not recognise the unit in 45 per m3; the material rate per unit is a price per count. "
+                  "What material rate per unit should I use?"),
+])
+def test_resource_line_cost_still_refuses_a_material_rate_per_measure(rate, question):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("resource_line_cost", {"quantity": "500 m2", "daily_output": "20 m2/d",
+                                                 "day_rate": 800, "material_rate_per_unit": rate})
+    assert env["status"] == "error" and env["question"] == question
+
+
+@pytest.mark.parametrize("q,c,p,waste,gross_step,total", [
+    (68_712, 7.688, 2_457.14, 11.28,
+     "With waste 11.28% = 528,257.856 x 1.1128 = 587,845.3422", 1_444_418_304.13),
+    (90_284.8, 38, 9_708.09, 17.77, None, 39_225_339_017.48),
+])
+def test_the_gross_is_the_printed_net_times_the_factor(q, c, p, waste, gross_step, total):
+    out = resource_cost_line(**_base(q, c, p), waste_percent=waste)
+    if gross_step:
+        assert gross_step in out["working"]
+    assert out["line_total"] == total

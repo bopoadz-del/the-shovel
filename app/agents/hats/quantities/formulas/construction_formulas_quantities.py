@@ -379,9 +379,11 @@ def _as_shown(x: float) -> float:
     inputs={
         'quantity': Param('count', 0, 1e12, label='quantity of work'),
         'consumption_per_unit': Param('count/count', 0, 1e9,
-                                      label='resource consumed per unit of work'),
+                                      label='resource consumed per unit of work',
+                                      per='quantity'),
         'price_per_resource_unit': Param('currency/count', 0, 1e9,
-                                         label='cited price per resource unit'),
+                                         label='cited price per resource unit',
+                                         per='consumption_per_unit'),
         'waste_percent': Param('%', 0, 100, label='waste allowance'),
         'markup_percent': Param('%', 0, 100, label='markup on the resource cost'),
     },

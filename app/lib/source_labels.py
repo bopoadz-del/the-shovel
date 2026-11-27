@@ -212,6 +212,13 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
             sentences.append(f"I do not recognise the unit in {value}; the {label} is"
                              + (f" {_with_article(_dimension_words(_counted_dimension(unit)))}."
                                 if _counted_dimension(unit) else f" in {unit_words(unit)}."))
+        elif reason == "unit_chain":
+            other = parameter_label(calculation, row.get("per") or "")
+            sentences.append(
+                f"The {label} ({value}) is per {unit_words(row.get('unit_per') or '')}, and the "
+                f"{other} ({row.get('per_value')}) is in {unit_words(row.get('per_measures') or '')}: "
+                f"{_with_article(_dimension_words(row.get('given_dimension')))} does not convert to "
+                f"{_with_article(_dimension_words(row.get('per_dimension')))}, so the two do not go together.")
         elif reason == "out_of_range":
             verb = "are" if row.get("kind") == "series" else "is"
             sentences.append(f"The {label} given ({_shown_quantity(value, row)}) {verb} outside what the "

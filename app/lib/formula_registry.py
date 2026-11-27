@@ -88,6 +88,12 @@ class Param:
     #: given (a :class:`KnowledgeConstant`; see its ``as_input``). A
     #: description of the input names that entry and its value.
     default_from: Any = None
+    #: The input this one is "per": its unit's denominator is what that
+    #: input states (a consumption "per m2 of work" is per the quantity; a
+    #: price "per m3" is per what the consumption yields). The registry then
+    #: converts a denominator of the same kind into the other input's unit
+    #: and refuses one of another kind. Empty: no other input names it.
+    per: str = ""
 
     def __post_init__(self) -> None:
         if self.basis and self.basis not in BASES:
@@ -115,6 +121,7 @@ class ParamSpec:
     required: bool
     default: Any = None
     basis: str = ""
+    per: str = ""
 
     @property
     def display_label(self) -> str:
@@ -524,7 +531,7 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
             unit=declared.unit, lo=declared.lo, hi=declared.hi,
             label=declared.label, grade=declared.grade, required=required,
             default=None if no_default else param.default,
-            basis=declared.basis,
+            basis=declared.basis, per=declared.per,
         )
     return out
 
@@ -760,18 +767,21 @@ _DIMENSIONLESS = frozenset({"count", "ratio"})
 _COUNTABLE_MEASURES = frozenset({"length", "area", "volume", "mass"})
 
 
-def _measure_fills_count(declared: Any, written: Any) -> bool:
+def _measure_fills_count(declared: Any, written: Any, chained: bool = False) -> bool:
     """True when the written unit is the declared one with a countable
     measure (length, area, volume, mass) standing in each place the declared
     unit says ``count`` -- and in no other place. Both units must have the
-    same number of parts; a unit equal to the declared one is not a fill."""
+    same number of parts; a unit equal to the declared one is not a fill.
+    A measure stands in a denominator ("per m3") only for an input that
+    declares what it is ``per`` (``chained``): only then is that measure
+    checked against another input's unit (:func:`_chain_units`)."""
     if declared is None or written is None:
         return False
     want, have = declared.dimension.split("/"), written.dimension.split("/")
     if len(want) != len(have) or want == have:
         return False
-    return all(w == h or (w == "count" and h in _COUNTABLE_MEASURES)
-               for w, h in zip(want, have))
+    return all(w == h or (w == "count" and h in _COUNTABLE_MEASURES and (i == 0 or chained))
+               for i, (w, h) in enumerate(zip(want, have)))
 
 
 def convert_figure(spec: ParamSpec, number: float, unit: str,
@@ -784,7 +794,7 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     shown = f"{written_number(number)} {unit}"
     declared, written = parse_unit(spec.unit), parse_unit(unit)
     dimensionless = declared is not None and declared.dimension in _DIMENSIONLESS
-    if _measure_fills_count(declared, written):
+    if _measure_fills_count(declared, written, bool(spec.per)):
         # A declared "count" stands for whatever is counted, so each count
         # part of the declared unit may be a measure the user states ("1,200
         # m3" for a count, "12 m2/day" for a count per day, "0.022 m3/m2" for
@@ -819,7 +829,7 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
         # currency, so only a currency-per input can match it.
         implied = parse_unit(f"currency {unit}")
         if implied is not None and (implied.dimension == declared.dimension
-                                    or _measure_fills_count(declared, implied)):
+                                    or _measure_fills_count(declared, implied, bool(spec.per))):
             return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
     if written.dimension == "currency" and declared.dimension == "currency":
@@ -840,6 +850,66 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     return {"value": value,
             "conversion": {"parameter": spec.name, "value_in": number, "from_unit": unit,
                            "to_unit": spec.unit, "value_out": value, "note": out.get("note", "")}}
+
+
+def _stated_parts(value: Any) -> Optional[Tuple[str, str]]:
+    """The unit ``value`` is stated in, split into what it measures and what
+    it is per: "5 L/m2" -> ("L", "m2"), "12 m2" -> ("m2", ""), "9 per
+    m3" -> ("currency", "m3"). None when no unit the converter knows is stated."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    parsed = value_and_unit(value)
+    if parsed is None:
+        return None
+    unit = parse_unit(parsed[1]) or parse_unit(f"currency {parsed[1]}")
+    if unit is None:
+        return None
+    head, _, tail = unit.written.partition("/")
+    return head.strip(), tail.strip()
+
+
+def _chain_units(params: Dict[str, ParamSpec], values: Dict[str, Any], out: Dict[str, Any],
+                 conversions: List[Dict[str, Any]], rejected: List[Dict[str, Any]]) -> None:
+    """Hold every input that declares what it is ``per`` to that input's
+    stated unit. Where both state a unit, the denominator of this one and
+    what the other measures must be the same kind: the same kind converts
+    (a price per m3 against a consumption in litres becomes a price per
+    litre), another kind is refused. Where either is a bare figure there is
+    nothing stated to check."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit, pe_unit_convert
+
+    refused = {row["parameter"] for row in rejected}
+    for key, p in params.items():
+        other = params.get(p.per) if p.per else None
+        if other is None or key in refused or p.per in refused:
+            continue
+        mine, theirs = _stated_parts(values.get(key)), _stated_parts(values.get(p.per))
+        if not mine or not theirs or not mine[1]:
+            continue
+        per_unit, measured = parse_unit(mine[1]), parse_unit(theirs[0])
+        if per_unit is None or measured is None:
+            continue
+        if per_unit.dimension != measured.dimension:
+            row = _rejection(p, values.get(key), "unit_chain")
+            row.update(per=p.per, per_value=values.get(p.per), unit_per=mine[1],
+                       per_measures=theirs[0], given_dimension=per_unit.dimension,
+                       per_dimension=measured.dimension)
+            rejected.append(row)
+            out[key] = values.get(key)
+            continue
+        if per_unit.scale == measured.scale:
+            continue
+        # One unit of what the other input measures, in this input's
+        # denominator: a price per m3 is 0.001 of itself per litre.
+        factor = pe_unit_convert(1.0, theirs[0], mine[1]).get("value_out")
+        if factor is None:
+            continue
+        value_in = out[key]
+        out[key] = value_in * factor
+        conversions.append({"parameter": key, "value_in": value_in,
+                            "from_unit": f"{mine[0]}/{mine[1]}", "to_unit": f"{mine[0]}/{theirs[0]}",
+                            "value_out": out[key],
+                            "note": f"per the {other.label or p.per} in {theirs[0]}"})
 
 
 def convert_written_units(name: str, values: Dict[str, Any],
@@ -882,6 +952,7 @@ def convert_written_units(name: str, values: Dict[str, Any],
         if failed:
             continue
         out[key] = converted if p.kind == "series" and isinstance(value, (list, tuple)) else converted[0]
+    _chain_units(params, values, out, conversions, rejected)
     # Currency flows from the data: a money (or money-per-time) value carries
     # its currency in its unit ("SAR/day", "AED"). When the formula takes a
     # currency label and none was supplied, adopt the currency of the first
@@ -986,8 +1057,11 @@ def schema_gaps() -> List[str]:
     for spec in all_specs():
         if not spec.display_name.strip():
             gaps.append(f"formula:{spec.name}:display_name")
-        for key, p in parameters(spec).items():
+        params = parameters(spec)
+        for key, p in params.items():
             gaps += _param_gaps(f"formula:{spec.name}.{key}", p.kind, p, p.required)
+            if p.per and (p.per == key or p.per not in params):
+                gaps.append(f"formula:{spec.name}.{key}:per")
     tool_registry.load()
     for name, t in sorted(tool_registry._TOOLS.items()):
         if not t.display_name.strip():
