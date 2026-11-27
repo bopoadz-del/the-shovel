@@ -22,6 +22,7 @@ from tests.example_project_rates import (
 # Alphabetical #1–44 of available_calculations() at audit time. The two
 # point-load deflection calculators joined the slice with SET5 E3.
 _AUDIT_A_TO_F = [
+    "arithmetic_step",
     "backfill_volume",
     "beam_deflection_cantilever_point_load",
     "beam_deflection_cantilever_udl",
@@ -97,6 +98,32 @@ def _err(name: str, params: dict, expect: str = "error") -> dict:
 def test_audit_covers_the_leading_names():
     names = available_calculations()
     assert names[:len(_AUDIT_A_TO_F)] == _AUDIT_A_TO_F
+
+
+# ── 0 arithmetic_step ──────────────────────────────────────────────────────
+
+def test_audit_arithmetic_step():
+    """One arithmetic step with units: a quotient composes the units, a sum
+    keeps them.
+    Hand: 2,059,200 currency / 3,000 m2 = 686.4 currency/m2;
+    1.5 m + 0.25 m = 1.75 m.
+    Boundary: a quotient of two values in the same unit is a pure number
+    (900 m3 / 450 m3 = 2, unit "-").
+    Bad input: a sum of two different units, a division by zero and an
+    unknown operator are errors, never a number.
+    """
+    r = _ok("arithmetic_step", {"operator": "divide", "a": 2059200, "b": 3000,
+                                "a_unit": "currency", "b_unit": "m2"})
+    assert r["result"] == pytest.approx(686.4, abs=1e-9) and r["result_unit"] == "currency/m2"
+    s = _ok("arithmetic_step", {"operator": "add", "a": 1.5, "b": 0.25, "a_unit": "m", "b_unit": "m"})
+    assert s["result"] == pytest.approx(1.75, abs=1e-12) and s["result_unit"] == "m"
+
+    edge = _ok("arithmetic_step", {"operator": "divide", "a": 900, "b": 450, "a_unit": "m3", "b_unit": "m3"})
+    assert edge["result"] == pytest.approx(2.0) and edge["result_unit"] == "-"
+
+    _err("arithmetic_step", {"operator": "add", "a": 1, "b": 2, "a_unit": "m", "b_unit": "mm"})
+    _err("arithmetic_step", {"operator": "divide", "a": 5, "b": 0})
+    _err("arithmetic_step", {"operator": "power", "a": 2, "b": 3})
 
 
 # ── 1 backfill_volume ──────────────────────────────────────────────────────

@@ -33,6 +33,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.agents.driver.catalogue_knowledge import kb_entries, markdown_headings, markdown_sections
+
 #: Every kind an entry may have, in index order.
 KINDS = ("formula", "tool", "workflow", "skill", "kernel", "knowledge", "document_type")
 
@@ -233,19 +235,16 @@ def knowledge_dir() -> str:
 
 
 def _knowledge_summary(text: str) -> Tuple[str, str]:
-    """The file's first heading, and its first line of prose."""
-    title, prose = "", ""
+    """The file's first heading (the one ``markdown_sections`` leaves out
+    as the file's name: both read ``markdown_headings``), and its first
+    line of prose."""
+    title = next(iter(markdown_headings(text)), "")
+    prose = ""
     for stripped in (line.strip() for line in text.splitlines() if line.strip()):
-        if stripped.startswith("#"):
-            if not title:
-                title = stripped.lstrip("#").strip()
+        if stripped.startswith(("#", "|", ">", "-", "*", "```")):
             continue
-        if stripped.startswith(("|", ">", "-", "*", "```")) and not prose:
-            continue
-        if not prose:
-            prose = stripped
-        if title and prose:
-            break
+        prose = stripped
+        break
     return title, prose
 
 
@@ -255,19 +254,22 @@ def _knowledge_entries() -> List[Dict[str, Any]]:
     names = sorted(f for f in os.listdir(root) if f.endswith(".md")) if os.path.isdir(root) else []
     for filename in names:
         with open(os.path.join(root, filename), encoding="utf-8", errors="replace") as f:
-            title, prose = _knowledge_summary(f.read())
+            text = f.read()
+        title, prose = _knowledge_summary(text)
         stem = filename[:-3]
         entry = _entry(
             "knowledge", stem, name=title or stem.replace("_", " "),
             code={"tool": "search_general_knowledge"},
-            source={"registry": "knowledge", "file": f"docs/knowledge/{filename}"})
+            source={"registry": "knowledge", "file": f"docs/knowledge/{filename}",
+                    "sections": markdown_sections(text)})
         entry["for"] = _one_line(prose)
         entry["gaps"] = _gaps(entry)
         out.append(entry)
     return out
 
 
-_BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries, _knowledge_entries)
+_BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries, _knowledge_entries,
+             kb_entries)
 
 _CACHE: Dict[Any, List[Dict[str, Any]]] = {}
 
@@ -290,6 +292,7 @@ def _state_key() -> Any:
     from app.agents import catalog
     from app.agents.core import tool_registry
     from app.agents.driver import routes
+    from app.blocks import _knowledge
     from app.lib import formula_registry
 
     tool_registry.load()
@@ -297,7 +300,10 @@ def _state_key() -> Any:
             tuple((n, id(s)) for n, s in sorted(tool_registry._TOOLS.items())),
             tuple(routes.catalogue()), id(routes.cards()),
             tuple(id(h) for h in catalog.list_hats()),
-            _knowledge_state())
+            _knowledge_state(),
+            # The knowledge base reloads when its file changes; the file's
+            # identity (path, mtime, size, inode) is part of the state.
+            _knowledge.kb_identity())
 
 
 def order(entry: Dict[str, Any]) -> Tuple[int, str]:

@@ -29,20 +29,9 @@ class ConstructionAdvisorBlock(UniversalBlock):
         top_k = int(params.get("top_k", 5))
 
         matches = kb.search_knowledge(query, top_k=top_k, domain=domain)
-        results = []
-        for e in matches:
-            results.append({
-                "id": e.get("id"),
-                "type": e.get("type"),
-                "title": e.get("title"),
-                "statement": e.get("statement"),
-                "domain": e.get("domain"),
-                "expression": e.get("expression"),
-                "thresholds": e.get("thresholds"),
-                "provenance": e.get("provenance", {}),
-                "credibility_tier": e.get("credibility_tier"),
-                "warnings": kb._build_warnings(e),
-            })
+        # What a match carries of its entry is stated once, in the knowledge
+        # base (``match_fields``); the catalogue describes an entry from it.
+        results = [{**kb.match_fields(e), "warnings": kb._build_warnings(e)} for e in matches]
 
         out: Dict[str, Any] = {
             "status": "success",

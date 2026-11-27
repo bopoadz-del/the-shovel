@@ -13,10 +13,12 @@ import functools
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from app.core import bill_classify as bc
 from app.core import bill_derived as bd
+from app.core import bill_page_read as bpr
 from scripts import bill_plan_once as bpo
 from tests.test_bill_derived import _BILL, _bill_a, _bill_b, _by_page, _Docs, _source
 
@@ -404,3 +406,870 @@ def test_a_refused_verdict_still_reports_what_its_pages_were_read_from(tmp_path,
     for name, value in counts.items():
         assert rep["verdict"][name] == value
     assert set(counts) <= set(bpo.VERDICT_FIELDS)
+
+
+# --- the model reader (BILL_PLAN_READER=model) ------------------------------
+
+
+
+
+@pytest.mark.parametrize("env,want", [
+    ({}, bpo.Reader()),
+    ({"BILL_PLAN_READER": " geometry "}, bpo.Reader()),
+    ({"BILL_PLAN_READER": "model"}, bpo.Reader(bpo.READER_MODEL, 0.0)),
+    ({"BILL_PLAN_READER": " MODEL ", "BILL_PLAN_TOTAL_TOLERANCE": "0.5"},
+     bpo.Reader(bpo.READER_MODEL, 0.5)),
+    ({"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "0"},
+     bpo.Reader(bpo.READER_MODEL, 0.0)),
+])
+def test_parse_reader_reads_the_reader_and_its_tolerance(env, want):
+    assert bpo.parse_reader(env) == want
+
+
+@pytest.mark.parametrize("env", [
+    {"BILL_PLAN_READER": "ocr"},
+    {"BILL_PLAN_TOTAL_TOLERANCE": "0.5"},
+    {"BILL_PLAN_READER": "geometry", "BILL_PLAN_TOTAL_TOLERANCE": "1"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "-0.01"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "nan"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "inf"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "half"},
+])
+def test_parse_reader_rejects_a_bad_reader_or_tolerance(env):
+    with pytest.raises(ValueError):
+        bpo.parse_reader(env)
+
+
+@pytest.mark.parametrize("env", [
+    {"BILL_PLAN_READER": "ocr"},
+    {"BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": "-1"},
+])
+def test_main_rejects_a_bad_reader_before_any_io(env):
+    calls: list = []
+    lines: list[str] = []
+    deps = _deps({"d1": {"project_id": "p1"}}, lambda *a, **k: calls.append(a), lines)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1", **env}
+    assert bpo.main_from_env(env, deps=deps) == 2
+    assert calls == [] and _summary(lines) == {"ok": False, "error": bpo.ERR_BAD_READER}
+
+
+@pytest.mark.parametrize("tolerance", ["", "0.5"])
+def test_main_refuses_the_model_reader_when_it_is_not_wired(tolerance):
+    calls: list = []
+    lines: list[str] = []
+    deps = _deps({"d1": {"project_id": "p1"}}, lambda *a, **k: calls.append(a), lines)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_READER": "model", "BILL_PLAN_TOTAL_TOLERANCE": tolerance}
+    assert bpo.main_from_env(env, deps=deps) == 2
+    assert calls == [] and _summary(lines)["error"] == bpo.ERR_BAD_READER
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.5])
+def test_model_reader_hands_one_pair_to_plan_and_derive(tolerance):
+    got: list = []
+    pair = (object(), object())
+
+    def model_read(doc, wd, tol):
+        got.append((doc, wd, tol))
+        return pair
+
+    def plan(*a, **k):
+        return k
+
+    def derive(*a, **k):
+        return k
+
+    deps = bpo.Deps(get_document={}.get, plan=plan, derive=derive, model_read=model_read)
+    out = bpo.with_reader(deps, bpo.Reader(bpo.READER_MODEL, tolerance), "d9", "/w")
+    assert got == [("d9", "/w", tolerance)]
+    want = {"rows_of_reads": pair[0], "states_of_rows": pair[1]}
+    assert out.plan() == want and out.derive() == want
+    no_derive = bpo.with_reader(
+        bpo.Deps(get_document={}.get, plan=plan, model_read=model_read),
+        bpo.Reader(bpo.READER_MODEL, tolerance), "d9", "/w")
+    assert no_derive.derive is None
+
+
+@pytest.mark.parametrize("reader", [bpo.Reader(), bpo.Reader(bpo.READER_GEOMETRY, 0.0)])
+def test_geometry_reader_leaves_deps_as_they_are(reader):
+    def model_read(*a):
+        raise AssertionError("model reader asked for")
+
+    deps = bpo.Deps(get_document={}.get, plan=lambda *a, **k: k, model_read=model_read)
+    assert bpo.with_reader(deps, reader, "d1", "/w") is deps
+
+
+@pytest.mark.parametrize("plan,want", [
+    ({"rows": 3}, {}),
+    ({"bill_states": None}, {}),
+    ({"pages_not_read": [2, 5], "bill_states": {
+        "rows_unassigned": 4,
+        "bills": [{"state": "RECONCILED"}, {"state": "NOT READ"}, {"state": "RECONCILED"}]}},
+     {"pages_not_read": 2, "rows_unassigned": 4, "not_read_causes": {},
+      "bill_state_counts": {"reconciled": 2, "not_read": 1}}),
+    ({"bill_states": {"rows_unassigned": 0, "bills": [{"state": "TOTAL ONLY"}]}},
+     {"pages_not_read": 0, "rows_unassigned": 0, "not_read_causes": {},
+      "bill_state_counts": {"total_only": 1}}),
+])
+def test_state_counts_are_counts_of_the_plan_states(plan, want):
+    assert bpo.state_counts(plan) == want
+
+
+class _Page:
+    def __init__(self, index):
+        self.index = index
+
+
+@pytest.mark.parametrize("first,second", [
+    ([{"type": "item", "amount": "5"}], [{"type": "item", "amount": "7"}]),
+    ([{"type": "heading", "description": "x"}], []),
+])
+def test_saved_page_reader_saves_lines_and_gives_them_back(tmp_path, first, second):
+    replies = [first, second]
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return replies.pop(0)
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    assert read(_Page(3)) == first
+    assert read(_Page(3)) == first  # given back, not asked again
+    assert read(_Page(4)) == second
+    assert asked == [3, 4]
+    assert (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=3)).is_file()
+
+
+@pytest.mark.parametrize("not_read", [
+    {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": ["", "x"]},
+    None,
+    # a list that holds no line object is not a read either: never saved
+    ["page too faint to read"],
+    [None],
+])
+def test_saved_page_reader_asks_a_page_not_read_again(tmp_path, not_read):
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return not_read
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    assert read(_Page(0)) == not_read and read(_Page(0)) == not_read
+    assert asked == [0, 0]
+    assert not (tmp_path / "wd").exists() or not any((tmp_path / "wd").iterdir())
+
+
+def _line(kind, bill, amount, **kw):
+    return {"type": kind, "bill": bill, "amount": amount, **kw}
+
+
+def _two_bill_reads(total_b: str):
+    """Two bills over three pages; the summary on page 3 prints each total."""
+    return {
+        0: [_line("heading", "Bill A", None, description="h"),
+            _line("item", "Bill A", "10", quantity="2", rate="5", ref="1")],
+        1: [_line("item", "Bill B", "6", quantity="3", rate="2", ref="1"),
+            _line("item", "Bill B", "4", quantity="1", rate="4", ref="2")],
+        2: [_line("summary", "Bill A", "10"), _line("summary", "Bill B", total_b)],
+    }
+
+
+@pytest.mark.parametrize("total_b,tolerance,want_counts", [
+    ("10", 0.0, {"reconciled": 2}),
+    ("10.5", 0.0, {"reconciled": 1, "failed": 1}),
+    ("10.5", 0.5, {"reconciled": 2}),
+])
+def test_main_plans_with_the_model_reader_and_checks_each_bill(
+    tmp_path, monkeypatch, total_b, tolerance, want_counts,
+):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=3)
+    docs.install(monkeypatch, tmp_path)
+    reads = _two_bill_reads(total_b)
+    asked: list[int] = []
+
+    def model(page):
+        asked.append(page.index)
+        return reads[page.index]
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(bpr.saved_page_reader(model, wd), tolerance=tol)
+
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_READER": "model",
+           "BILL_PLAN_TOTAL_TOLERANCE": str(tolerance)}
+    reports = []
+    for _ in range(2):
+        lines: list[str] = []
+        deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL,
+                     model_read=model_read)
+        assert bpo.main_from_env(env, deps=deps) == 0
+        reports.append(_summary(lines))
+
+    rep = reports[0]
+    assert rep["reader"] == bpo.READER_MODEL
+    # every non-heading line is a row with its line type; only items are summed
+    assert rep["rows"] == 5
+    assert rep["bill_state_counts"] == want_counts
+    # the summary page belongs to no bill: its 2 lines are counted, never moved
+    assert rep["pages_not_read"] == 0 and rep["rows_unassigned"] == 2
+    assert asked == [0, 1, 2]  # the second run gave the saved reads back
+    assert reports[1]["plan_hash"] == rep["plan_hash"]
+    assert docs.added == [] and docs.indexed == []
+    saved = json.loads((tmp_path / "wd" / "plan_0_3.json").read_text(encoding="utf-8"))
+    assert [b["label"] for b in saved["bill_states"]["bills"]] == ["Bill A", "Bill B"]
+    assert saved["bill_states"]["tolerance"] == tolerance
+    _assert_public(rep, ["Bill A", "Bill B"])
+
+
+@pytest.mark.parametrize("bad_page", [0, 1])
+def test_model_reader_page_not_read_is_counted_and_asked_again(tmp_path, monkeypatch, bad_page):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=3)
+    docs.install(monkeypatch, tmp_path)
+    reads = _two_bill_reads("10")
+    # The bill of the page not read has no page left: no span, its summary
+    # total is listed as a bill without pages; the other bill still checks.
+    reads[bad_page] = {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": []}
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(bpr.saved_page_reader(lambda p: reads[p.index], wd),
+                                   tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_READER": "model"}
+    assert bpo.main_from_env(env, deps=deps) == 0
+    rep = _summary(lines)
+    assert rep["pages_not_read"] == 1
+    saved = json.loads((tmp_path / "wd" / "plan_0_3.json").read_text(encoding="utf-8"))
+    lost = ["Bill A", "Bill B"][bad_page]
+    assert saved["bill_states"]["summary_without_pages"] == [lost]
+    states = {b["label"]: b for b in saved["bill_states"]["bills"]}
+    # the bill whose only page was not read still has a state: NOT READ
+    assert states[lost]["state"] == bpr.STATE_NOT_READ and states[lost]["pages"] is None
+    assert states[lost]["pages_not_read"] == [bad_page + 1]
+    # The bill left on the other page could reach the unread page too (no
+    # other page names a bill between them), so it cannot be checked either.
+    assert rep["bill_state_counts"] == {"not_read": 2}
+    kept = states[["Bill B", "Bill A"][bad_page]]
+    assert kept["state"] == bpr.STATE_NOT_READ and kept["pages_not_read"] == [bad_page + 1]
+    assert not (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=bad_page)).exists()
+
+
+def _bill_a_three_pages(missing: int):
+    """Bill A on pages 1-3, an item of 10 on each; the summary on page 4 prints 30."""
+    reads = {i: [_line("item", "Bill A", "10", quantity="1", rate="10", ref=str(i))]
+             for i in range(3)}
+    reads[3] = [_line("summary", "Bill A", "30")]
+    reads[missing] = {bpr.NOT_READ_KEY: True, "attempts": 2, "replies": []}
+    return reads
+
+
+def _model_env(tmp_path):
+    return {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+            "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_READER": "model"}
+
+
+@pytest.mark.parametrize("missing", [0, 1, 2])
+def test_bill_with_its_first_middle_or_last_page_not_read_is_not_read(
+        tmp_path, monkeypatch, missing):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    reads = _bill_a_three_pages(missing)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(bpr.saved_page_reader(lambda p: reads[p.index], wd),
+                                   tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+    rep = _summary(lines)
+    assert rep["pages_not_read"] == 1
+    assert rep["bill_state_counts"] == {"not_read": 1}
+    saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
+    (bill,) = saved["bill_states"]["bills"]
+    assert bill["pages_not_read"] == [missing + 1] and bill["items_sum"] == 20
+
+
+@pytest.mark.parametrize("junk", ['["page too faint to read"]', "[null]", "[[]]"])
+@pytest.mark.parametrize("edge", [0, 2])
+def test_junk_reply_on_a_bills_edge_page_is_not_read_and_asked_again(
+        tmp_path, monkeypatch, junk, edge):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    good = _bill_a_three_pages(1)
+    good[1] = [_line("item", "Bill A", "10", quantity="1", rate="10", ref="1")]
+    asked: list[int] = []
+
+    def model_read(doc, wd, tol):
+        def ask_for(index):
+            def ask(messages):
+                asked.append(index)
+                if index == edge:
+                    return '{"lines": ' + junk + '}'
+                return json.dumps({"lines": good[index]})
+            return ask
+
+        def page(p):
+            return bpr.model_page_reader(ask_for(p.index), lambda i: b"png")(p)
+        return bpr.model_bill_read(bpr.saved_page_reader(page, wd), tolerance=tol)
+
+    for _run in range(2):
+        lines: list[str] = []
+        deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL,
+                     model_read=model_read)
+        assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+        rep = _summary(lines)
+        assert rep["pages_not_read"] == 1
+        assert rep["bill_state_counts"] == {"not_read": 1}
+        saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
+        (bill,) = saved["bill_states"]["bills"]
+        assert bill["pages_not_read"] == [edge + 1] and bill["items_sum"] == 20
+    # the junk page is never saved: each run asks it again (twice per run,
+    # PAGE_READ_ATTEMPTS), the read pages only once
+    attempts = bpr.PAGE_READ_ATTEMPTS
+    assert asked.count(edge) == 2 * attempts
+    assert sorted(set(asked) - {edge}) == sorted({0, 1, 2, 3} - {edge})
+    assert all(asked.count(i) == 1 for i in set(asked) - {edge})
+    assert not (tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=edge)).exists()
+
+
+@pytest.mark.parametrize("junk", [["page too faint"], [None]])
+@pytest.mark.parametrize("good", [[{"type": "item", "amount": "5"}],
+                                  [{"type": "item", "amount": "8"}]])
+def test_saved_file_that_is_not_a_read_is_asked_again(tmp_path, junk, good):
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    (wd / bpr.SAVED_READ_NAME.format(index=2)).write_text(json.dumps(junk), encoding="utf-8")
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return good
+
+    read = bpr.saved_page_reader(inner, str(wd))
+    assert read(_Page(2)) == good and read(_Page(2)) == good
+    assert asked == [2]
+
+
+@pytest.mark.parametrize("printed, want", [("30", {"reconciled": 1}), ("31", {"failed": 1})])
+def test_bill_with_every_page_read_is_checked_against_its_total(
+        tmp_path, monkeypatch, printed, want):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    reads = _bill_a_three_pages(0)
+    reads[0] = [_line("item", "Bill A", "10", quantity="1", rate="10", ref="0")]
+    reads[3] = [_line("summary", "Bill A", printed)]
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(lambda p: reads[p.index], tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+    rep = _summary(lines)
+    assert rep["pages_not_read"] == 0 and rep["bill_state_counts"] == want
+
+
+@pytest.mark.parametrize("pages, error", [(3, RuntimeError), (2, httpx.ConnectError)])
+def test_provider_failure_on_every_page_is_pages_not_read_not_no_rows(
+        tmp_path, monkeypatch, pages, error):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+    calls: list[int] = []
+
+    def ask(messages):
+        calls.append(1)
+        raise error("provider down")
+
+    def model_read(doc, wd, tol):
+        reader = bpr.model_page_reader(ask, lambda i: b"png")
+        return bpr.model_bill_read(bpr.saved_page_reader(reader, wd), tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 1
+    rep = _summary(lines)
+    assert rep["error"] == bpo.ERR_NO_PLAN
+    assert rep["reason"] == bd.SKIP_PAGES_NOT_READ != bd.SKIP_NO_ROWS
+    assert rep["pages_not_read"] == pages
+    assert len(calls) == pages * bpr.PAGE_READ_ATTEMPTS
+
+
+@pytest.mark.parametrize("pages", [2, 3])
+def test_pages_read_with_no_rows_is_still_no_rows(tmp_path, monkeypatch, pages):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(lambda p: [{"type": "heading", "description": "h"}],
+                                   tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 1
+    rep = _summary(lines)
+    assert rep["reason"] == bd.SKIP_NO_ROWS and "pages_not_read" not in rep
+
+
+@pytest.mark.parametrize("states, not_read, want", [
+    ({"bills": [{"state": "RECONCILED"}], "rows_unassigned": 2}, [5], {"reconciled": 1}),
+    ({"bills": [{"state": "NOT READ"}, {"state": "FAILED"}], "rows_unassigned": 0}, [],
+     {"not_read": 1, "failed": 1}),
+])
+def test_execute_summary_carries_the_bill_state_counts(tmp_path, states, not_read, want):
+    plan = {"reason": "bill", "pages": [0, 1], "plan_hash": "h1", "rows": 1,
+            "sections": {}, "pages_not_read": not_read, "bill_states": states}
+    deps = bpo.Deps(get_document={"d1": {"project_id": "p1"}}.get,
+                    plan=lambda *a, **k: plan, derive=lambda *a, **k: {},
+                    log=lambda _line: None)
+    rep = bpo.execute_one("p1", "d1", execute_hash="other", gates=bpo.Gates(),
+                          work_dir=str(tmp_path), deps=deps)
+    assert rep["pages_not_read"] == len(not_read)
+    assert rep["rows_unassigned"] == states["rows_unassigned"]
+    assert rep["bill_state_counts"] == want
+
+
+def _run_model_reads(tmp_path, monkeypatch, reads, pages):
+    """One plan of ``reads`` (0-based page -> lines) through the public path."""
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(lambda p: reads[p.index], tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    rc = bpo.main_from_env(_model_env(tmp_path), deps=deps)
+    rep = _summary(lines)
+    plan_file = tmp_path / "wd" / f"plan_0_{pages}.json"
+    saved = json.loads(plan_file.read_text(encoding="utf-8")) if plan_file.exists() else None
+    return rc, rep, saved
+
+
+def _a(amount, **kw):
+    return _line("item", "Bill A", amount, quantity="1", rate=amount, **kw)
+
+
+def _b(amount, **kw):
+    return _line("item", "Bill B", amount, quantity="1", rate=amount, **kw)
+
+
+def _none(amount):
+    return _line("item", None, amount, quantity="1", rate=amount)
+
+
+@pytest.mark.parametrize("total_b, unnamed_on_split, want", [
+    # one bill ends and the next starts on page 3: each line names its bill
+    ("10", False, {"reconciled": 2}),
+    ("11", False, {"reconciled": 1, "failed": 1}),
+    # an item on that page that names no bill could be either bill's
+    ("10", True, {"not_checked": 2}),
+])
+def test_page_shared_by_two_bills_places_each_line_by_the_bill_it_names(
+        tmp_path, monkeypatch, total_b, unnamed_on_split, want):
+    split = [_a("10", ref="3"), _b("5", ref="1")] + ([_none("2")] if unnamed_on_split else [])
+    reads = {0: [_a("10", ref="1")], 1: [_a("10", ref="2")], 2: split,
+             3: [_b("5", ref="2")],
+             4: [_line("summary", "Bill A", "30"), _line("summary", "Bill B", total_b)]}
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, 5)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    bills = {b["label"]: b for b in saved["bill_states"]["bills"]}
+    assert saved["bill_states"]["pages_split"] == [3]
+    assert bills["Bill A"]["items_sum"] == 30 and bills["Bill B"]["items_sum"] == 10
+    unplaced = [3] if unnamed_on_split else []
+    assert bills["Bill A"]["pages_unplaced"] == bills["Bill B"]["pages_unplaced"] == unplaced
+
+
+@pytest.mark.parametrize("reads, pages, want, unplaced", [
+    # the bill's last page prints no bill name: NOT CHECKED, never FAILED
+    ({0: [_a("10")], 1: [_a("10")], 2: [_none("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, {"not_checked": 1}, {"Bill A": [3]}),
+    ({0: [_none("7")], 1: [_a("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "27")]}, 4, {"not_checked": 1}, {"Bill A": [1]}),
+    # between two bills: either could own it, so both are NOT CHECKED
+    ({0: [_a("10")], 1: [_none("4")], 2: [_b("5")],
+      3: [_line("summary", "Bill A", "10"), _line("summary", "Bill B", "5")]}, 4,
+     {"not_checked": 2}, {"Bill A": [2], "Bill B": [2]}),
+    # no page names a bill: the summary's bill reaches every unplaced page
+    ({0: [_none("10")], 1: [_none("20")], 2: [_line("summary", "Bill A", "30")]}, 3,
+     {"not_checked": 1}, {"Bill A": [1, 2]}),
+])
+def test_item_page_naming_no_bill_outside_every_range_is_not_checked(
+        tmp_path, monkeypatch, reads, pages, want, unplaced):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    got = {b["label"]: b["pages_unplaced"] for b in saved["bill_states"]["bills"]}
+    assert got == unplaced
+
+
+@pytest.mark.parametrize("reads, pages, want_sum", [
+    # inside the bill's own range an item naming no bill is still not placed:
+    # the model, not the page range, says which bill a line is; never FAILED
+    ({0: [_a("10")], 1: [_none("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, 20),
+    ({0: [_a("10")], 1: [_none("10"), _none("3")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "25")]}, 4, 20),
+])
+def test_item_naming_no_bill_inside_a_range_is_not_checked_with_its_count(
+        tmp_path, monkeypatch, reads, pages, want_sum):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == {"not_checked": 1}
+    (bill,) = saved["bill_states"]["bills"]
+    assert bill["items_sum"] == want_sum
+    assert bill["rows_unplaced"] == len(reads[1])
+    assert saved["bill_states"]["rows_unassigned"] == len(reads[1]) + 1  # + the summary line
+
+
+@pytest.mark.parametrize("reads, pages, want", [
+    # the model names the bill each line continues: checked, both ways
+    ({0: [_a("10")], 1: [_a("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "30")]}, 4, {"reconciled": 1}),
+    ({0: [_a("10")], 1: [_a("10")], 2: [_a("10")],
+      3: [_line("summary", "Bill A", "25")]}, 4, {"failed": 1}),
+    # a page of headings or sums that name no bill holds no item: still checked
+    ({0: [_a("10")], 1: [_a("10")],
+      2: [_line("total", None, "20"), _line("heading", None, None, description="h")],
+      3: [_line("summary", "Bill A", "20")]}, 4, {"reconciled": 1}),
+])
+def test_rows_the_model_placed_are_checked_and_no_item_page_unplaces_nothing(
+        tmp_path, monkeypatch, reads, pages, want):
+    rc, rep, saved = _run_model_reads(tmp_path, monkeypatch, reads, pages)
+    assert rc == 0 and rep["bill_state_counts"] == want
+    assert all(b["pages_unplaced"] == [] and b["rows_unplaced"] == 0
+               for b in saved["bill_states"]["bills"])
+
+
+@pytest.mark.parametrize("ending", ["Bill A", "Bill 7"])
+def test_each_page_is_read_with_the_bill_the_page_before_ended_on(
+        tmp_path, monkeypatch, ending):
+    """Through main: page 2's prompt carries the bill page 1's last line names;
+    page 1 (no page before) and page 4 (the page before was not read) carry none."""
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+    replies = {
+        0: {"lines": [_line("item", "Bill 0", "5", quantity="1", rate="5"),
+                      _line("item", ending, "4", quantity="1", rate="4"),
+                      _line("summary", "Bill Z", "9")]},
+        1: {"lines": [_line("item", None, "6", quantity="1", rate="6")]},
+        2: None,
+        3: {"lines": [_line("item", None, "1", quantity="1", rate="1")]},
+    }
+    prompts: dict[int, str] = {}
+
+    def model_read(doc, wd, tol):
+        calls: dict[str, int] = {}
+
+        def render(i):
+            calls["i"] = i
+            return b"png"
+
+        def asking(messages):
+            i = calls["i"]
+            prompts[i] = messages[0]["content"][0]["text"]
+            reply = replies[i]
+            return "" if reply is None else json.dumps(reply)
+
+        reader = bpr.model_page_reader(asking, render)
+        return bpr.model_bill_read(bpr.saved_page_reader(reader, wd), tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    bpo.main_from_env(_model_env(tmp_path), deps=deps)
+    added = bpr.PAGE_READ_BEFORE.format(bill=json.dumps(ending))
+    assert prompts[1] == bpr.PAGE_READ_PROMPT + added
+    assert prompts[0] == prompts[2] == prompts[3] == bpr.PAGE_READ_PROMPT
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "http://provider.invalid/v1")
+    return httpx.HTTPStatusError("refused", request=req, response=httpx.Response(code, request=req))
+
+
+@pytest.mark.parametrize("code, pages", [(401, 3), (400, 2)])
+def test_provider_refusal_on_every_page_names_its_cause(tmp_path, monkeypatch, code, pages):
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=pages)
+    docs.install(monkeypatch, tmp_path)
+
+    def ask(messages):
+        raise _status_error(code)
+
+    def model_read(doc, wd, tol):
+        reader = bpr.model_page_reader(ask, lambda i: b"png")
+        return bpr.model_bill_read(bpr.saved_page_reader(reader, wd), tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 1
+    rep = _summary(lines)
+    cause = f"HTTPStatusError:{code}"
+    assert rep["reason"] == bd.SKIP_PAGES_NOT_READ and rep["pages_not_read"] == pages
+    assert rep["not_read_causes"] == {cause: pages * bpr.PAGE_READ_ATTEMPTS}
+    skip = json.loads((tmp_path / "wd" / bpo.SKIP_FILE).read_text(encoding="utf-8"))
+    assert sorted(skip["pages_not_read_why"]) == [str(p) for p in range(1, pages + 1)]
+    assert all(e[bpr.ERRORS_KEY] == [cause] * bpr.PAGE_READ_ATTEMPTS
+               for e in skip["pages_not_read_why"].values())
+
+
+@pytest.mark.parametrize("bad_page, failure", [(0, "error"), (2, "no_lines")])
+def test_one_page_not_read_keeps_its_cause_in_the_plan(tmp_path, monkeypatch, bad_page, failure):
+    reads = _bill_a_three_pages(bad_page)
+
+    def ask_for(index):
+        def ask(messages):
+            if index != bad_page:
+                return json.dumps({"lines": reads[index]})
+            if failure == "error":
+                raise _status_error(401)
+            return "the page is blank"
+        return ask
+
+    words, _, _ = _bill_a()
+    docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=4)
+    docs.install(monkeypatch, tmp_path)
+
+    def model_read(doc, wd, tol):
+        return bpr.model_bill_read(
+            lambda p: bpr.model_page_reader(ask_for(p.index), lambda i: b"png")(p),
+            tolerance=tol)
+
+    lines: list[str] = []
+    deps = _deps(docs.rows, _real_plan(words, []), lines, classify=_BILL, model_read=model_read)
+    assert bpo.main_from_env(_model_env(tmp_path), deps=deps) == 0
+    rep = _summary(lines)
+    want = ({"HTTPStatusError:401": 2} if failure == "error"
+            else {bpo.CAUSE_NO_LINES: 2})
+    assert rep["not_read_causes"] == want
+    saved = json.loads((tmp_path / "wd" / "plan_0_4.json").read_text(encoding="utf-8"))
+    assert list(saved["pages_not_read_why"]) == [str(bad_page + 1)]
+    assert not (tmp_path / "wd" / bpo.SKIP_FILE).exists()
+
+
+@pytest.mark.parametrize("tolerance", [0.25, 1.5])
+def test_production_model_read_renders_asks_saves_and_keeps_the_tolerance(
+        tmp_path, monkeypatch, tolerance):
+    import base64
+
+    from app.core import llm_client, projects
+
+    monkeypatch.setattr(projects, "get_document", lambda d: {"id": d})
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: "/bytes/" + doc["id"])
+    rendered: list[tuple[str, int]] = []
+
+    def render(path, index):
+        rendered.append((path, index))
+        return f"png-page-{index}".encode()
+
+    monkeypatch.setattr(bpr, "render_page_png", render)
+    calls: list[tuple[int, int]] = []
+
+    async def complete(messages, **kw):
+        sent = str(messages)
+        page = next(i for i in range(3)
+                    if base64.b64encode(f"png-page-{i}".encode()).decode() in sent)
+        calls.append((kw["max_tokens"], page))
+        return json.dumps({"lines": [{"type": "item", "bill": "A", "amount": str(page + 1)}]})
+
+    monkeypatch.setattr(llm_client, "complete", complete)
+    wd = str(tmp_path / "wd")
+    for _run in range(2):
+        rows_of, states_of = bpo.production_model_read("d7", wd, tolerance)
+        rows, not_read, _raw = rows_of([_Page(i) for i in range(3)])
+        assert [r.fields["total"] for r in rows] == ["1", "2", "3"] and not_read == []
+        assert states_of(rows, not_read)["tolerance"] == tolerance
+    assert rendered == [("/bytes/d7", i) for i in range(3)]
+    assert calls == [(bpr.PAGE_READ_MAX_TOKENS, i) for i in range(3)]  # 2nd run: saved
+    assert all((tmp_path / "wd" / bpr.SAVED_READ_NAME.format(index=i)).is_file()
+               for i in range(3))
+
+
+# --- a saved read answers one question: it is given back only for that question ---
+
+@pytest.mark.parametrize("bill", ["Bill A", "Section 9"])
+def test_a_saved_read_is_given_back_only_for_the_question_it_answers(tmp_path, bill):
+    plain = [{"type": "item", "bill": None, "amount": "5"}]
+    named = [{"type": "item", "bill": bill, "amount": "5"}]
+    asked: list[object] = []
+
+    def inner(page):
+        asked.append(page.bill_before)
+        return named if page.bill_before else plain
+
+    read = bpr.saved_page_reader(inner, str(tmp_path / "wd"))
+    alone = bpr.PageInContext(2, bill_before=None)
+    after = bpr.PageInContext(2, bill_before=bill)
+    assert read(alone) == plain and read(alone) == plain      # the same question: given back
+    assert asked == [None]
+    assert read(after) == named                               # the page before now ended in a bill: asked again
+    assert asked == [None, bill]
+    assert read(after) == named and asked == [None, bill]     # and that read is kept for that question
+    assert read(alone) == plain and asked == [None, bill, None]
+
+
+@pytest.mark.parametrize("good", [[{"type": "item", "amount": "5"}], [{"type": "item", "bill": "B", "amount": "8"}]])
+def test_a_file_saved_before_the_question_was_recorded_is_asked_again(tmp_path, good):
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    path = wd / bpr.SAVED_READ_NAME.format(index=1)
+    path.write_text(json.dumps([{"type": "item", "amount": "1"}]), encoding="utf-8")   # a bare read, as saved before
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return good
+
+    read = bpr.saved_page_reader(inner, str(wd))
+    assert read(_Page(1)) == good and read(_Page(1)) == good
+    assert asked == [1]
+    kept = json.loads(path.read_text(encoding="utf-8"))
+    assert kept == {bpr.SAVED_ASKED: bpr.asked_digest(bpr.PAGE_READ_PROMPT), bpr.SAVED_READ: good}
+
+
+@pytest.mark.parametrize("instruction", ["Read this page of the table.", "List every priced line."])
+def test_a_read_saved_under_another_instruction_is_asked_again(tmp_path, instruction):
+    lines = [{"type": "item", "amount": "5"}]
+    asked: list[int] = []
+
+    def inner(page):
+        asked.append(page.index)
+        return lines
+
+    wd = str(tmp_path / "wd")
+    other = bpr.saved_page_reader(inner, wd, question=bpr.page_question(instruction))
+    assert other(_Page(0)) == lines and other(_Page(0)) == lines and asked == [0]
+    default = bpr.saved_page_reader(inner, wd)
+    assert default(_Page(0)) == lines and asked == [0, 0]     # saved for another instruction: asked again
+    assert default(_Page(0)) == lines and asked == [0, 0]
+
+
+@pytest.mark.parametrize("prompt, bill, want", [
+    ("P", None, "P"),
+    ("P", "", "P"),
+    ("P", "Bill A", "P" + bpr.PAGE_READ_BEFORE.format(bill=json.dumps("Bill A"))),
+    (bpr.PAGE_READ_PROMPT, "Section 9",
+     bpr.PAGE_READ_PROMPT + bpr.PAGE_READ_BEFORE.format(bill=json.dumps("Section 9"))),
+])
+def test_page_question_is_the_instruction_the_reader_sends(prompt, bill, want):
+    question = bpr.page_question(prompt)(bpr.PageInContext(4, bill_before=bill))
+    assert question == want == bpr.prompt_for(prompt, bill)
+    seen: list[str] = []
+
+    def ask(messages):
+        seen.append(messages[0]["content"][0]["text"])
+        return json.dumps({"lines": [{"type": "item", "amount": 1}]})
+
+    bpr.model_page_reader(ask, lambda i: b"png", prompt=prompt)(bpr.PageInContext(4, bill_before=bill))
+    assert seen == [question]                                  # the key is made from what is really sent
+    assert bpr.asked_digest(question) == bpr.asked_digest(want)
+    assert bpr.asked_digest(question) != bpr.asked_digest(want + " ")
+
+
+_LINES = [{"type": "item", "amount": "5"}]
+
+
+@pytest.mark.parametrize("saved, served", [
+    ({"asked": "KEY", "read": _LINES}, True),
+    ({"asked": "OTHER", "read": _LINES}, False),             # a read made with another question
+    ({"read": _LINES}, False),                                 # no question recorded
+    (_LINES, False),                                           # a bare read, as saved before
+    ({"asked": "KEY", "read": []}, False),                     # not a read
+    ({"asked": "KEY", "read": ["text"]}, False),
+    ({"asked": "KEY"}, False), ("text", False), (None, False),
+])
+def test_saved_read_for_gives_lines_only_for_a_read_of_the_same_question(saved, served):
+    assert bpr.saved_read_for(saved, "KEY") == (_LINES if served else None)
+
+
+@pytest.mark.parametrize("name", ["Bill A", "Section 4"])
+def test_a_page_read_without_its_context_is_asked_again_once_the_page_before_is_read(tmp_path, name):
+    """Run 1: page 1 fails, so page 2 is read with no bill before it and names
+    none. Run 2: page 1 is read, page 2 is asked again with the bill page 1
+    ended on, and the bill reconciles. Run 3: nothing is asked."""
+    import base64
+
+    failing: set = {0}
+    asks: list[int] = []
+    told = bpr.PAGE_READ_BEFORE.format(bill=json.dumps(name))
+
+    def ask(messages):
+        text = messages[0]["content"][0]["text"]
+        index = base64.b64decode(messages[0]["content"][1]["image_url"]["url"].split(",", 1)[1])[0]
+        asks.append(index)
+        if index in failing:
+            raise _status_error(503)
+        if index == 0:
+            return json.dumps({"lines": [{"type": "item", "bill": name, "description": "a", "amount": 10}]})
+        if index == 1:
+            return json.dumps({"lines": [{"type": "item", "bill": name if told in text else None,
+                                          "description": "b", "amount": 10}]})
+        return json.dumps({"lines": [{"type": "summary", "bill": name, "description": "total", "amount": 20}]})
+
+    def run():
+        asks.clear()
+        reader = bpr.model_page_reader(ask, lambda i: bytes([i]))
+        rows_of = bpr.rows_of_model_reads(bpr.saved_page_reader(reader, str(tmp_path / "wd")))
+        rows, not_read, pages = rows_of([_Page(0), _Page(1), _Page(2)])
+        found = bpr.spans_from_page_reads(pages)
+        states = bpr.bill_states(rows, not_read, spans=found.spans, tolerance=0.5)["bills"]
+        return not_read, pages, [(b["label"], b["state"], b["items_sum"]) for b in states]
+
+    not_read, pages, states = run()
+    assert not_read == [1] and pages["2"][0]["bill"] is None
+    assert asks == [0] * bpr.PAGE_READ_ATTEMPTS + [1, 2]
+    assert [state for _l, state, _s in states] != [bpr.STATE_RECONCILED]
+
+    failing.clear()
+    not_read, pages, states = run()
+    assert not_read == [] and pages["2"][0]["bill"] == name
+    assert asks == [0, 1, 2]              # page 2 again, now told the bill; page 3 again, its context changed too
+    assert states == [(name, bpr.STATE_RECONCILED, 20.0)]
+
+    not_read, pages, states = run()
+    assert asks == [] and states == [(name, bpr.STATE_RECONCILED, 20.0)]
+
+
+@pytest.mark.parametrize("errors, replies, want", [
+    (["HTTPStatusError:503"], ["HTTPStatusError:503", "the page is blank"],
+     {"HTTPStatusError:503": 1, bpo.CAUSE_NO_LINES: 1}),
+    (["HTTPStatusError:429"], ["HTTPStatusError:429", ""], {"HTTPStatusError:429": 1, bpo.CAUSE_NO_LINES: 1}),
+    ([], ["x", "y"], {bpo.CAUSE_NO_LINES: 2}),
+    (["ReadTimeout", "ReadTimeout"], ["ReadTimeout", "ReadTimeout"], {"ReadTimeout": 2}),
+])
+def test_not_read_causes_counts_a_failed_call_and_a_reply_without_lines_apart(errors, replies, want):
+    plan = {"pages_not_read_why": {"1": {bpr.ERRORS_KEY: errors, "replies": replies}}}
+    assert bpo.not_read_causes(plan) == want
+
+
+@pytest.mark.parametrize("document, path", [({}, None), ({"id": "d7"}, None), (None, "")])
+def test_production_model_read_says_so_when_the_documents_bytes_are_not_found(tmp_path, monkeypatch, document, path):
+    """No bytes to render a page from is an error named as such, never a page
+    sent to the model without its image."""
+    from app.core import llm_client, projects
+
+    monkeypatch.setattr(projects, "get_document", lambda d: document)
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: path)
+    asked: list[int] = []
+
+    async def complete(messages, **kw):
+        asked.append(1)
+        return json.dumps({"lines": [{"type": "item", "bill": "A", "amount": 1}]})
+
+    monkeypatch.setattr(llm_client, "complete", complete)
+    monkeypatch.setattr(bpr, "render_page_png", lambda p, i: b"png")
+    rows_of, _states_of = bpo.production_model_read("d7", str(tmp_path / "wd"), 0.5)
+    with pytest.raises(OSError, match="document bytes not found"):
+        rows_of([_Page(0)])
+    assert asked == []
+

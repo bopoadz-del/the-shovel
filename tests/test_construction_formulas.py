@@ -94,6 +94,7 @@ def test_library_surface_is_broad():
 import dataclasses  # noqa: E402
 
 _SMOKE_INPUTS = {
+    "arithmetic_step": dict(operator="divide", a=900, b=450, a_unit="m3", b_unit="m3"),
     "beam_deflection_cantilever_point_load": dict(p_kn=10, span_m=5, ec_mpa=30000, i_mm4=1e9),
     "beam_deflection_cantilever_udl": dict(w_kn_m=10, span_m=5, ec_mpa=30000, i_mm4=1e9),
     "beam_deflection_ss_point_load_midspan": dict(p_kn=10, span_m=5, ec_mpa=30000, i_mm4=1e9),
