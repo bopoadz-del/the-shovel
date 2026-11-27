@@ -93,8 +93,9 @@ def test_durable_store_fails_and_names_the_wrong_setting(env, missing):
     assert missing in detail
 
 
-def test_durable_store_fails_without_an_efs_volume():
-    _, ok, detail = check_durable_store(_described(efs=False))
+@pytest.mark.parametrize("volume,mount", [("data", "/app/data"), ("docs", "/srv/store")])
+def test_durable_store_fails_without_an_efs_volume(volume, mount):
+    _, ok, detail = check_durable_store(_described(efs=False, volume=volume, mount=mount))
     assert not ok
     assert detail == "no_efs_mount"
 
@@ -156,8 +157,12 @@ def test_no_points_at_all_fails():
     assert not ok and "newest=<none>" in detail
 
 
-def test_mounted_but_unbacked_volume_fails_only_the_backup_checks():
-    checks = run_checks(_described(fs_id="fs-0ccc"), None, {"RecoveryPoints": []}, NOW)
+@pytest.mark.parametrize("fs_id,policy", [
+    ("fs-0ccc", None),
+    ("fs-0eee", {"BackupPolicy": {"Status": "DISABLED"}}),
+])
+def test_mounted_but_unbacked_volume_fails_only_the_backup_checks(fs_id, policy):
+    checks = run_checks(_described(fs_id=fs_id), policy, {"RecoveryPoints": []}, NOW)
     assert [(n, ok) for n, ok, _ in checks] == [
         ("durable_store", True), ("backup_policy", False), ("recovery_point", False),
     ]
@@ -183,9 +188,12 @@ def test_cli_exit_zero_only_when_every_check_is_ok(tmp_path, capsys, fs_id):
     assert "verdict=FAIL failed=backup_policy" in capsys.readouterr().out
 
 
-def test_cli_unreadable_input_is_exit_two(tmp_path):
+@pytest.mark.parametrize("content", ["{not json", None])
+def test_cli_unreadable_input_is_exit_two(tmp_path, content):
     bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
+    if content is not None:
+        bad.write_text(content, encoding="utf-8")
+    # content None: the file does not exist at all.
     assert main([str(bad)]) == 2
 
 
