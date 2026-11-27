@@ -321,7 +321,8 @@ def test_run_step_without_an_output_and_no_main_output_is_failed():
     s = _sheet_with(givens, [{"id": "s1", "entry": "formula:excavation_volume",
                               "inputs": {k: f"g{i + 1}" for i, k in enumerate(keys)}}])
     s = ws.run_step(s, "s1", "c1")
-    assert s["steps"][0]["status"] == "failed" and "no output" in s["steps"][0]["error"]
+    assert s["steps"][0]["status"] == "failed"
+    assert "names none; set the step's output to one of: bank_volume_m3" in s["steps"][0]["error"]
 
 
 def test_unknown_step_id_is_failed():
@@ -569,3 +570,48 @@ def test_a_result_lists_every_number_it_rests_on_through_earlier_steps(a, b):
     # s3 reads s1 directly and again through s2: s1 is followed once.
     assert sorted(ws.rests_on(work, "s3")) == sorted([float(a), float(b), float(a)])
     assert ws.rests_on(work, "s9") == []
+
+
+@pytest.mark.parametrize("output,result,expected", [
+    ("", {"bank_volume_m3": 120.0, "loose_volume_m3": 150.0, "note": "text"},
+     "f has several outputs and the plan step names none; set the step's output to one of: "
+     "bank_volume_m3, loose_volume_m3"),
+    ("area", {"volume": 3, "length": 2.5},
+     "f has no output 'area'; set the step's output to one of: length, volume"),
+    ("area", {"note": "text"}, "f has no output 'area'"),
+    ("", None, "f has several outputs and the plan step names none"),
+])
+def test_a_step_that_kept_no_output_is_told_which_outputs_exist(output, result, expected):
+    assert ws._no_output_error("f", output, result) == expected
+
+
+@pytest.mark.parametrize("a,b", [(40, 2), (7.5, 67)])
+def test_code_marks_a_given_checked_and_only_an_unchanged_one_keeps_the_mark(a, b):
+    s, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": a, "unit": "m", "checked": True},   # the model cannot set the mark
+                   {"id": "g2", "value": b, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]})
+    assert problems == [] and not any(g.get("checked") for g in s["givens"])
+    marked = ws.mark_given(s, lambda number: number == float(a))
+    assert [g.get("checked") for g in marked["givens"]] == [True, None]
+    assert not any(g.get("checked") for g in s["givens"])  # the sheet passed in is not changed
+    assert ws.rests_on(marked, "s1") == [float(b)]         # the checked given is no longer open
+    # The same value and unit written again keeps code's mark; a new value loses it.
+    same, _ = ws.apply_update(marked, {"givens": [{"id": "g1", "value": a, "unit": "m"}]})
+    assert same["givens"][0].get("checked") is True
+    changed, _ = ws.apply_update(marked, {"givens": [{"id": "g1", "value": a + 1, "unit": "m"}]})
+    assert changed["givens"][0].get("checked") is None
+    assert sorted(ws.rests_on(changed, "s1")) == sorted([float(a + 1), float(b)])
+    # The next turn's sheet carries the mark with the given.
+    carried = ws.new_sheet("t2", "q2", marked)
+    assert [g.get("checked") for g in carried["givens"]] == [True, None]
+
+
+@pytest.mark.parametrize("by,kept", [("user", [40.0]), ("passage", []), (True, [])])
+def test_user_givens_are_the_givens_code_marked_as_the_users_own(by, kept):
+    s, _ = ws.apply_update(ws.new_sheet("t1", "q"), {"givens": [{"id": "g1", "value": 40, "unit": "m"},
+                                                                {"id": "g2", "value": 3, "unit": "m"}]})
+    marked = ws.mark_given(s, lambda number: by if number == 40.0 else "")
+    assert marked["givens"][0].get("checked") == by and marked["givens"][1].get("checked") is None
+    assert ws.user_givens(marked) == kept
+    assert ws.user_givens(None) == [] and ws.user_givens({"givens": ["g1"]}) == []

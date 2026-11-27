@@ -1735,10 +1735,13 @@ def figure_provenance(
         if sheets:
             from app.agents.driver import sheet as working_sheet
 
-            given_pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _nums(rec.text))
-            for nums, _meta in calc_entries:
-                given_pool |= _rescaled(nums)
-            passages = [_nums(r.text) for r in retrievals]
+            given_pool, passages = _given_pools(ev, [nums for nums, _meta in calc_entries])
+            # A given code marked as the user's own (checked when it was
+            # written, possibly in an earlier turn whose message is not in
+            # front of this check) is the user's figure when the answer
+            # quotes it.
+            for sheet_payload in sheets:
+                user_vals |= set(working_sheet.user_givens(sheet_payload))
 
             for sheet_payload in sheets:
                 for row in working_sheet.code_results(sheet_payload):
@@ -1833,6 +1836,37 @@ def figure_provenance(
     except Exception:  # noqa: BLE001 -- a gate must never break an answer
         _LOG.exception("figure_provenance failed; passing answer through")
         return text, []
+
+
+def _given_pools(ev: Any, produced: Iterable[Iterable[float]]) -> tuple[set[float], list[list[float]]]:
+    """What was given to the platform in ``ev``: the numbers of every user
+    message and of every ``produced`` set (calculator and workflow results),
+    rescaled, and the numbers of each retrieved passage."""
+    pool = _rescaled(n for rec in ev.records if rec.kind == "user" for n in _nums(rec.text))
+    for nums in produced:
+        pool |= _rescaled(nums)
+    return pool, [_nums(r.text) for r in ev.records if r.kind == "retrieval" and r.text]
+
+
+def given_check(messages: list[dict[str, Any]] | None, *, tool_passages: bool = True):
+    """A check ``number -> str`` for a turn's messages so far: who gave the
+    number -- ``"user"`` (a user message), ``"calculator"`` (a calculator's
+    result), ``"passage"`` (a retrieved passage) -- or ``""`` when nobody
+    did. The working sheet marks a given with it when the given is written,
+    so a given checked in one turn stays checked in the next, where the
+    message that carried it is no longer in front of the check."""
+    ev = build_evidence(None, messages, tool_passages=tool_passages)
+    users, passages = _given_pools(ev, [])
+    produced, _ = _given_pools(ev, [set(c.result_numbers) for c in _calculator_credits(ev)])
+
+    def check(number: float) -> str:
+        if _match(number, users):
+            return "user"
+        if _match(number, produced):
+            return "calculator"
+        return "passage" if _given_to_us(number, set(), passages) else ""
+
+    return check
 
 
 def _given_to_us(number: float, given_pool: set[float], passages: list[list[float]]) -> bool:

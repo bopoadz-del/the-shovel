@@ -976,3 +976,37 @@ def test_a_missing_input_that_names_no_step_is_refused_and_the_turn_ends_as_an_a
     assert "must say which plan step it is for" in refused
     row = trace_store.records(_today(), conv)[0]
     assert row["ended"] == "answer" and row["sheet"]["done"] is True and row["sheet"]["missing"] == []
+
+
+@pytest.mark.parametrize("a,b", [(40, 67), (12.5, 30)])
+def test_a_given_the_user_wrote_in_an_earlier_turn_still_backs_a_result_in_the_next(monkeypatch, a, b):
+    """Turn 1 carries both numbers; turn 2's message carries neither. The
+    givens were checked when they were written, so turn 2's result is shown."""
+    conv = f"carry-given-{a}"
+    pid = _owned_conversation(conv, "cg-u")
+    who = {"conversation_id": conv, "user_id": "cg-u", "project_id": pid, "sheet_mode": True}
+    plan = {"givens": [{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}
+    _scripted(monkeypatch, [{"content": "", "tool_calls": [_call("sheet_update", plan, "c1")]},
+                            {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+                            {"content": f"The total is {a + b} m."}])
+    assert f"{a + b} m" in _text(_run(user_message=f"add {a} m and {b} m", **who))
+    first = trace_store.records(_today(), conv)[0]
+    assert [g.get("checked") for g in first["sheet"]["givens"]] == ["user", "user"]
+    trace_store.forget_held()  # read back from the file, as after a restart
+    again = {"plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                       "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}}]}
+    _scripted(monkeypatch, [{"content": "", "tool_calls": [_call("sheet_update", again, "c1")]},
+                            {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+                            {"content": f"The area is {a * b:g} m*m."}])
+    shown = _text(_run(user_message="now multiply them instead", **who))
+    assert f"{a * b:g} m*m" in shown and "incomplete" not in shown
+    # A reply that quotes the earlier turn's own figure keeps it, as the user's.
+    _scripted(monkeypatch, [{"content": "", "tool_calls": [_call("sheet_update", again, "c1")]},
+                            {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+                            {"content": f"The length you gave is {a} m, so the area is {a * b:g} m*m."}])
+    shown = _text(_run(user_message="and once more", **who))
+    assert f"{a} m" in shown and f"{a * b:g} m*m" in shown
+    quoted = [f for f in trace_store.records(_today(), conv)[-1]["figures"] if f.get("figure") == f"{a} m"]
+    assert quoted and quoted[0]["source"] == "user_input"

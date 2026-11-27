@@ -275,6 +275,14 @@ def _args(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+
+def _given_check(messages: List[Dict[str, Any]]):
+    """The check the sheet marks a given with (citation_provenance.given_check)."""
+    from app.agents import citation_provenance as cp
+
+    return cp.given_check(messages)
+
+
 async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                  project_id: Optional[str] = None, conversation_id: Optional[str] = None,
                  user_id: Optional[str] = None, api_key: Optional[str] = None,
@@ -524,12 +532,18 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
             elif work is not None and name == tools.SHEET_UPDATE:
                 work, problems = sheet.apply_update(work, args)
+                # A given is checked when it is written: against the user's
+                # messages, the passages and the calculator results so far.
+                work = sheet.mark_given(work, _given_check(_trail()))
                 result_of_call = {"ok": not problems, "problems": problems, "sheet": work}
                 if problems:
                     result_of_call["error"] = "; ".join(problems)
             elif work is not None and name == tools.RUN_STEP:
                 used.append(name)
                 step_id = str(args.get("step") or "")
+                # Checked again before a step runs: a passage fetched after
+                # the given was written counts too.
+                work = sheet.mark_given(work, _given_check(_trail()))
                 work = await off_loop(sheet.run_step, work, step_id, call.get("id") or "")
                 entry = next((s for s in work["steps"] if s.get("id") == step_id), {})
                 result_of_call = {"ok": entry.get("status") == "done", "step": entry, "sheet": work}

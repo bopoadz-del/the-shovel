@@ -143,6 +143,10 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
                  "source": str(given.get("source") or "user")}
         if _changed(out["givens"], entry, ("value", "unit")):
             replaced.add(entry["id"])
+        else:
+            kept = next((g.get("checked") for g in out["givens"] if g.get("id") == entry["id"]), None)
+            if kept:
+                entry["checked"] = kept  # the same value and unit: code's mark stays
         _put(out["givens"], entry)
     known = {g["id"] for g in out["givens"]} | {s.get("id") for s in out["plan"]}
     known |= {s.get("id") for s in update.get("plan") or [] if isinstance(s, dict)}
@@ -339,13 +343,40 @@ def code_results(sheet: Any) -> List[Dict[str, Any]]:
     return rows
 
 
+def mark_given(sheet: Dict[str, Any], is_given: Any) -> Dict[str, Any]:
+    """The sheet with ``checked`` on every given whose value ``is_given``
+    (a check against the user's messages, the retrieved passages and the
+    calculators' results of the turn so far): the mark says who gave it
+    (``"user"``, ``"calculator"``, ``"passage"``). The mark is
+    code's: an update from the model cannot set it, a given whose value or
+    unit changes loses it (``apply_update`` writes the given anew), and one
+    that stays the same keeps it into the next turn."""
+    out = copy.deepcopy(sheet)
+    for given in out.get("givens") or []:
+        number = _number(given.get("value"))
+        by = is_given(number) if number is not None and not given.get("checked") else ""
+        if by:
+            given["checked"] = by if isinstance(by, str) else True
+    return out
+
+
+def user_givens(sheet: Any) -> List[float]:
+    """The values of the givens code marked as the user's own."""
+    if not isinstance(sheet, dict):
+        return []
+    values = [_number(g.get("value")) for g in sheet.get("givens") or []
+              if isinstance(g, dict) and g.get("checked") == "user"]
+    return [v for v in values if v is not None]
+
+
 def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
-    """The numbers a step's result rests on that code did not compute: the
-    value of every given it reads and every number written in the plan
-    itself, followed back through the earlier steps it reads. The model
-    wrote each of them, so a result is only as sourced as these are; who
-    reads this list checks each one against what the user and the tools
-    gave. Read from the plan's own inputs and nothing else."""
+    """The numbers a step's result rests on that nothing has checked yet:
+    the value of every given it reads that code has not marked ``checked``
+    (``mark_given``) and every number written in the plan itself, followed
+    back through the earlier steps it reads. The model wrote each of them,
+    so a result is only as sourced as these are; who reads this list checks
+    each one against what the user and the tools gave. Read from the plan's
+    own inputs and nothing else."""
     plan = {p.get("id"): p for p in sheet.get("plan") or [] if isinstance(p, dict)}
     givens = {g.get("id"): g for g in sheet.get("givens") or [] if isinstance(g, dict)}
     found: List[float] = []
@@ -360,8 +391,9 @@ def rests_on(sheet: Dict[str, Any], step_id: str) -> List[float]:
             if isinstance(ref, str) and _STEP_ID.match(ref):
                 frontier.append(ref)
             elif isinstance(ref, str) and _GIVEN_ID.match(ref):
-                number = _number((givens.get(ref) or {}).get("value"))
-                if number is not None:
+                given = givens.get(ref) or {}
+                number = _number(given.get("value"))
+                if number is not None and not given.get("checked"):
                     found.append(number)
             else:  # a literal: a number written in the plan (text and flags are no number)
                 number = _number(ref)
@@ -433,6 +465,17 @@ def _output_of(spec: Any, chosen: str) -> str:
     return numeric[0] if len(numeric) == 1 else ""
 
 
+def _no_output_error(name: str, output: str, result: Any) -> str:
+    """Why a step that ran kept no result, with the outputs the formula did
+    return (those holding a number), so the step can be re-planned with one
+    of them. The names come from the formula's own result."""
+    returned = sorted(k for k, v in result.items() if _number(v) is not None) if isinstance(result, dict) else []
+    what = f"has no output {output!r}" if output else "has several outputs and the plan step names none"
+    if not returned:
+        return f"{name} {what}"
+    return f"{name} {what}; set the step's output to one of: {', '.join(returned)}"
+
+
 def run_step(sheet: Dict[str, Any], step_id: str, call_id: str = "") -> Dict[str, Any]:
     """Run plan step ``step_id`` and write its result (code, never the model).
 
@@ -488,7 +531,7 @@ def run_step(sheet: Dict[str, Any], step_id: str, call_id: str = "") -> Dict[str
     if isinstance(result, dict) and result.get("error"):
         return _end(status="failed", error=str(result["error"]))
     if not isinstance(result, dict) or not output or output not in result:
-        return _end(status="failed", error=f"{name} returned no output {output or '(none named)'!r}")
+        return _end(status="failed", error=_no_output_error(name, output, result))
     number = _number(result[output])
     if number is None:
         return _end(status="failed", error=f"output {output!r} of {name} is not a number")

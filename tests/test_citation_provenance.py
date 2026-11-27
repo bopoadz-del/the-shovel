@@ -450,3 +450,26 @@ def test_given_to_us_is_true_only_for_a_number_the_user_or_a_source_gave(number,
     from app.agents.citation_provenance import _given_to_us
 
     assert _given_to_us(number, pool, passages) is expected
+
+
+@pytest.mark.parametrize("message,number,expected", [
+    ("the trench is 40 m long and 1.5 m wide", 40.0, "user"),
+    ("the trench is 40 m long and 1.5 m wide", 1.5, "user"),
+    ("the trench is 40 m long and 1.5 m wide", 4321.0, ""),
+    ("work it out again", 40.0, ""),
+])
+def test_given_check_holds_a_number_to_the_messages_so_far(message, number, expected):
+    from app.agents.citation_provenance import given_check
+
+    assert given_check([{"role": "user", "content": message}])(number) == expected
+
+
+@pytest.mark.parametrize("produced,number,expected", [([{120.0}], 120.0, True), ([{120.0}], 121.0, False),
+                                                      ([], 120.0, False)])
+def test_given_pools_take_user_numbers_produced_numbers_and_passages(produced, number, expected):
+    from app.agents.citation_provenance import _given_pools, _given_to_us, build_evidence
+
+    ev = build_evidence(None, [{"role": "user", "content": "rate 67 per m3"}], tool_passages=True)
+    pool, passages = _given_pools(ev, produced)
+    assert _given_to_us(67.0, pool, passages) is True
+    assert _given_to_us(number, pool, passages) is expected
