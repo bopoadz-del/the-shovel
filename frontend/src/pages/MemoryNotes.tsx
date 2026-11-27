@@ -6,12 +6,17 @@
  * read_memory / list_memory no longer return it. Below, every decision ever
  * made, with the content it was made on. The screen never edits a note.
  *
+ * A decision names the version of the note on screen; when the model wrote
+ * the note again since, the server refuses (409) and the screen reloads. A
+ * list only shows for the project it was loaded for: a slower answer for a
+ * project no longer chosen is dropped.
+ *
  *   GET  /v1/projects                                   → project picker
  *   GET  /v1/admin/projects/{id}/memory                 → notes + marks
  *   POST /v1/admin/projects/{id}/memory/{name}/review   → keep / discard
  *   GET  /v1/admin/projects/{id}/memory/reviews         → decision record
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, ApiError } from '../lib/api'
 
 export interface MemoryNote {
@@ -23,6 +28,7 @@ export interface MemoryNote {
   review: string
   reviewed_at: string
   reviewed_by: string
+  version: string
 }
 
 export interface MemoryDecision {
@@ -52,8 +58,10 @@ function day(iso: string): string {
 export default function MemoryNotes({ initialProjectId = '' }: { initialProjectId?: string }) {
   const [projects, setProjects] = useState<ProjectOption[]>([])
   const [projectId, setProjectId] = useState(initialProjectId)
-  const [notes, setNotes] = useState<MemoryNote[] | null>(null)
-  const [decisions, setDecisions] = useState<MemoryDecision[]>([])
+  // The list and the record, with the project they were loaded for.
+  const [loaded, setLoaded] = useState<{ projectId: string, notes: MemoryNote[] | null,
+    decisions: MemoryDecision[] }>({ projectId: '', notes: null, decisions: [] })
+  const wanted = useRef(initialProjectId)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -63,36 +71,51 @@ export default function MemoryNotes({ initialProjectId = '' }: { initialProjectI
       .catch(() => setProjects([]))
   }, [])
 
-  const load = useCallback(async (pid: string) => {
+  const load = useCallback(async (pid: string, keepMessage = false) => {
     if (!pid) return
-    setMessage(null)
+    if (!keepMessage) setMessage(null)
     try {
       const enc = encodeURIComponent(pid)
       const [n, r] = await Promise.all([
         apiGet<{ notes: MemoryNote[] }>(`/v1/admin/projects/${enc}/memory`),
         apiGet<{ reviews: MemoryDecision[] }>(`/v1/admin/projects/${enc}/memory/reviews`),
       ])
-      setNotes(n.notes)
-      setDecisions(r.reviews)
+      if (wanted.current !== pid) return
+      setLoaded({ projectId: pid, notes: n.notes, decisions: r.reviews })
     } catch (err) {
-      setNotes(null)
+      if (wanted.current !== pid) return
+      setLoaded({ projectId: pid, notes: null, decisions: [] })
       setMessage(err instanceof ApiError ? err.message : 'Could not load the notes.')
     }
   }, [])
 
-  useEffect(() => { void load(projectId) }, [load, projectId])
+  useEffect(() => {
+    wanted.current = projectId
+    void load(projectId)
+  }, [load, projectId])
 
-  const decide = async (name: string, decision: 'keep' | 'discard') => {
-    setBusy(name)
+  const shown = loaded.projectId === projectId ? loaded : { projectId, notes: null, decisions: [] }
+  const notes = shown.notes
+  const decisions = shown.decisions
+
+  const decide = async (note: MemoryNote, decision: 'keep' | 'discard') => {
+    const pid = shown.projectId
+    setBusy(note.name)
     setMessage(null)
     try {
       await apiPost(
-        `/v1/admin/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}/review`,
-        { decision },
+        `/v1/admin/projects/${encodeURIComponent(pid)}/memory/${encodeURIComponent(note.name)}/review`,
+        { decision, version: note.version },
       )
-      await load(projectId)
+      await load(pid)
     } catch (err) {
-      setMessage(err instanceof ApiError ? err.message : 'Could not record the decision.')
+      if (err instanceof ApiError && err.status === 409) {
+        setMessage(`The model wrote ${note.name} again since this list was loaded; `
+          + 'the version shown now is the new one. Nothing was recorded.')
+        await load(pid, true)
+      } else {
+        setMessage(err instanceof ApiError ? err.message : 'Could not record the decision.')
+      }
     } finally {
       setBusy(null)
     }
@@ -134,9 +157,9 @@ export default function MemoryNotes({ initialProjectId = '' }: { initialProjectI
               <pre className="memory-note__data">{JSON.stringify(n.data, null, 2)}</pre>
               <div className="memory-note__actions">
                 <button type="button" className="admin-btn" disabled={busy !== null || n.review === 'kept'}
-                        onClick={() => void decide(n.name, 'keep')}>Keep</button>
+                        onClick={() => void decide(n, 'keep')}>Keep</button>
                 <button type="button" className="admin-btn" disabled={busy !== null || n.review === 'discarded'}
-                        onClick={() => void decide(n.name, 'discard')}>Discard</button>
+                        onClick={() => void decide(n, 'discard')}>Discard</button>
               </div>
             </li>
           ))}
@@ -149,7 +172,7 @@ export default function MemoryNotes({ initialProjectId = '' }: { initialProjectI
             {decisions.map((d, i) => (
               <li key={`${d.name}-${i}`}>
                 {day(d.decided_at)} · {d.decision === 'discard' ? 'Discarded' : 'Kept'} {d.name}
-                {d.decided_by && <> by {d.decided_by}</>} (version written {day(d.note_written_at)})
+                {' '}(version written {day(d.note_written_at)})
                 <pre className="memory-note__data">{JSON.stringify(d.data, null, 2)}</pre>
               </li>
             ))}

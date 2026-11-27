@@ -57,19 +57,29 @@ const CASES = [
 let store = {}
 let posts = []
 let refuse = false
+let gates = {}
+const DECIDER = 'u-3f9a12bc'
 
 function reset() {
   store = {}
   for (const c of CASES) {
     store[c.project] = {
       notes: c.notes.map((n) => ({ name: n.name, data: n.data, bytes: 10, written_at: n.written_at,
-        written_by_turn: n.turn, review: '', reviewed_at: '', reviewed_by: '' })),
+        written_by_turn: n.turn, review: '', reviewed_at: '', reviewed_by: '',
+        version: `v1-${c.project}-${n.name}` })),
       reviews: [],
     }
   }
   store['proj-empty'] = { notes: [], reviews: [] }
   posts = []
   refuse = false
+  gates = {}
+}
+
+// The model writes the note again on the server: new content, new version.
+function rewrite(project, name, data) {
+  const note = store[project].notes.find((n) => n.name === name)
+  Object.assign(note, { data, version: `v2-${project}-${name}`, review: '' })
 }
 
 function json(obj, status = 200) {
@@ -89,13 +99,18 @@ globalThis.fetch = async (url, init = {}) => {
     const body = JSON.parse(init.body)
     posts.push({ project: m[1], name: m[2], body })
     const note = store[m[1]].notes.find((n) => n.name === m[2])
+    if (body.version !== note.version) return json({ detail: 'written again after it was opened' }, 409)
     note.review = body.decision === 'keep' ? 'kept' : 'discarded'
     store[m[1]].reviews.push({ name: m[2], decision: body.decision, data: note.data,
-      note_written_at: note.written_at, decided_at: '2026-11-27T01:00:00+00:00', decided_by: 'owner' })
+      note_written_at: note.written_at, decided_at: '2026-11-27T01:00:00+00:00', decided_by: DECIDER })
     return json({ name: m[2], decision: body.decision })
   }
   m = p.match(/^\/v1\/admin\/projects\/([^/]+)\/memory$/)
-  if (m) return json({ notes: store[m[1]].notes })
+  if (m) {
+    const notes = structuredClone(store[m[1]].notes)
+    if (gates[m[1]]) await gates[m[1]].held
+    return json({ notes })
+  }
   return json({}, 404)
 }
 
@@ -114,6 +129,13 @@ async function mount(projectId) {
     note: (name) => container.querySelector(`[data-note="${name}"]`),
     button: (name, label) => [...container.querySelector(`[data-note="${name}"]`).querySelectorAll('button')]
       .find((b) => b.textContent === label),
+    async choose(projectId) {
+      const sel = container.querySelector('#memory-project')
+      await act(async () => {
+        sel.value = projectId
+        sel.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+      })
+    },
     async click(el) {
       await act(async () => { el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
       await settle()
@@ -147,7 +169,8 @@ for (const c of CASES) {
     const v = await mount(c.project)
     try {
       await v.click(v.button(target.name, 'Discard'))
-      assert.deepEqual(posts, [{ project: c.project, name: target.name, body: { decision: 'discard' } }])
+      assert.deepEqual(posts, [{ project: c.project, name: target.name,
+        body: { decision: 'discard', version: `v1-${c.project}-${target.name}` } }])
       const el = v.note(target.name)
       assert.equal(el.getAttribute('data-review'), 'discarded')
       assert.ok(el.textContent.includes('the model no longer sees it'))
@@ -159,6 +182,8 @@ for (const c of CASES) {
       const record = v.container.querySelector('.memory-decisions')
       assert.ok(record.textContent.includes('Every decision (1)'))
       assert.ok(record.textContent.includes(`Discarded ${target.name}`))
+      // The decider's internal id is never printed on the screen.
+      assert.equal(v.container.textContent.includes(DECIDER), false)
     } finally { v.unmount() }
   })
 
@@ -197,6 +222,81 @@ for (const c of CASES) {
     try {
       assert.equal(v.container.querySelectorAll('[data-note]').length, 0)
       assert.ok(v.container.querySelector('[role="alert"]').textContent.includes('Admin access required'))
+    } finally { v.unmount() }
+  })
+}
+
+for (const c of CASES) {
+  test(`a click on a version of ${c.project} the model has since rewritten records nothing and shows the new one`,
+    async () => {
+      reset()
+      const target = c.notes[0]
+      const v = await mount(c.project)
+      try {
+        const newer = { rewritten_for: c.project }
+        rewrite(c.project, target.name, newer)
+        await v.click(v.button(target.name, 'Keep'))
+        assert.deepEqual(posts.map((x) => x.body.version), [`v1-${c.project}-${target.name}`])
+        assert.deepEqual(store[c.project].reviews, [])
+        assert.ok(v.container.querySelector('[role="alert"]').textContent.includes(`wrote ${target.name} again`))
+        assert.deepEqual(JSON.parse(v.note(target.name).querySelector('pre').textContent), newer)
+        assert.equal(v.note(target.name).getAttribute('data-review'), '')
+        // The decision on the version now shown lands.
+        await v.click(v.button(target.name, 'Keep'))
+        assert.equal(posts[1].body.version, `v2-${c.project}-${target.name}`)
+        assert.deepEqual(store[c.project].reviews.map((r) => r.data), [newer])
+      } finally { v.unmount() }
+    })
+}
+
+for (const [slow, fast] of [['proj-object', 'proj-array'], ['proj-array', 'proj-object']]) {
+  test(`a slow answer for ${slow} after switching to ${fast} is dropped; Discard acts on what is shown`, async () => {
+    reset()
+    // Both lists are held until the test lets them go: the new project's
+    // first, the old project's last.
+    const hold = () => { let go; const held = new Promise((r) => { go = r }); return { held, go } }
+    gates[slow] = hold()
+    gates[fast] = hold()
+    const v = await mount(slow)
+    try {
+      await v.choose(fast)
+      await settle()
+      // Nothing is listed under the new project before its own list arrives.
+      assert.equal(v.container.querySelectorAll('[data-note]').length, 0)
+      gates[fast].go()
+      await settle()
+      gates[slow].go()
+      await settle()
+      assert.equal(v.container.querySelector('#memory-project').value, fast)
+      const want = store[fast].notes
+      assert.deepEqual([...v.container.querySelectorAll('[data-note]')].map((el) => el.getAttribute('data-note')),
+        want.map((n) => n.name))
+      const shown = want[0]
+      assert.deepEqual(JSON.parse(v.note(shown.name).querySelector('pre').textContent), shown.data)
+      await v.click(v.button(shown.name, 'Discard'))
+      assert.deepEqual(posts, [{ project: fast, name: shown.name,
+        body: { decision: 'discard', version: shown.version } }])
+      assert.ok(store[slow].notes.every((n) => n.review === ''))
+    } finally { v.unmount() }
+  })
+}
+
+for (const [from, to] of [['proj-object', 'proj-array'], ['proj-array', 'proj-object']]) {
+  test(`switching from ${from} to ${to} lists none of ${from}'s notes while ${to}'s list loads`, async () => {
+    reset()
+    const v = await mount(from)
+    try {
+      assert.equal(v.container.querySelectorAll('[data-note]').length, store[from].notes.length)
+      let go
+      gates[to] = { held: new Promise((r) => { go = r }) }
+      await v.choose(to)
+      await settle()
+      assert.equal(v.container.querySelectorAll('[data-note]').length, 0)
+      assert.equal(v.container.querySelectorAll('.memory-note__actions button').length, 0)
+      go()
+      await settle()
+      assert.deepEqual([...v.container.querySelectorAll('[data-note]')].map((el) => el.getAttribute('data-note')),
+        store[to].notes.map((n) => n.name))
     } finally { v.unmount() }
   })
 }

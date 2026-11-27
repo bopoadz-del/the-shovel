@@ -48,14 +48,23 @@ def _write(client, monkeypatch, h, pid, name, data):
     assert wrote["ok"] is True, wrote
 
 
-def _decide(client, pid, name, decision):
-    return client.post(f"/v1/admin/projects/{pid}/memory/{name}/review", json={"decision": decision})
-
-
 def _admin_notes(client, pid):
     got = client.get(f"/v1/admin/projects/{pid}/memory")
     assert got.status_code == 200, got.text
     return {n["name"]: n for n in got.json()["notes"]}
+
+
+def _decide(client, pid, name, decision, version=None):
+    """POST a decision on the version the owner reads now (the admin list),
+    or on ``version`` when given."""
+    if version is None:
+        version = _admin_notes(client, pid).get(_stem(name), {}).get("version") or "unseen"
+    return client.post(f"/v1/admin/projects/{pid}/memory/{name}/review",
+                       json={"decision": decision, "version": version})
+
+
+def _ver(pid, name):
+    return {n["name"]: n for n in llm_memory.listing(pid, with_review=True)}[_stem(name)]["version"]
 
 
 @pytest.mark.parametrize("name,data", NOTES)
@@ -119,7 +128,7 @@ def test_every_decision_is_recorded_with_the_content_it_was_made_on(client, monk
 
 
 @pytest.mark.parametrize("path,body", [
-    ("memory/paths/review", {"decision": "discard"}),
+    ("memory/paths/review", {"decision": "discard", "version": "any"}),
     ("memory/reviews", None),
 ])
 def test_only_an_admin_can_review_or_read_the_decisions(client, monkeypatch, path, body):
@@ -199,7 +208,7 @@ def test_the_store_marks_and_records_without_touching_the_content(name, data):
     pid = f"cal-{uuid.uuid4().hex[:8]}"
     llm_memory.write(pid, name, json.dumps(data), "c#3")
     before = llm_memory.listing(pid, with_data=True, with_review=True)[0]
-    done = llm_memory.review(pid, name, "discard", by="u1")
+    done = llm_memory.review(pid, name, "discard", _ver(pid, name), by="u1")
     assert done == {"name": _stem(name), "decision": "discard", "review": "discarded",
                     "decided_at": done["decided_at"], "decided_by": "u1"}
     after = llm_memory.listing(pid, with_data=True, with_review=True)[0]
@@ -209,7 +218,7 @@ def test_the_store_marks_and_records_without_touching_the_content(name, data):
     assert llm_memory.listing(pid) == []
     with pytest.raises(llm_memory.MemoryRefused):
         llm_memory.read(pid, name)
-    llm_memory.review(pid, name, "keep", by="u2")
+    llm_memory.review(pid, name, "keep", _ver(pid, name), by="u2")
     assert llm_memory.read(pid, name)["data"] == data
     assert [r["decision"] for r in llm_memory.reviews(pid)] == ["discard", "keep"]
 
@@ -217,7 +226,7 @@ def test_the_store_marks_and_records_without_touching_the_content(name, data):
 @pytest.mark.parametrize("pid", ["", None])
 def test_a_review_without_a_project_is_refused(pid):
     with pytest.raises(llm_memory.MemoryRefused):
-        llm_memory.review(pid, "paths", "keep")
+        llm_memory.review(pid, "paths", "keep", "v")
 
 
 @pytest.mark.parametrize("present", [(), ("review",), ("review", "reviewed_at", "reviewed_by")])
@@ -259,18 +268,131 @@ def test_the_review_route_functions_mark_record_and_refuse(name, data):
     pid = f"cal-route-{uuid.uuid4().hex[:8]}"
     llm_memory.write(pid, name, json.dumps(data), "c#2")
     admin = {"user_id": "boss", "role": "admin"}
-    done = admin_review_project_memory(pid, name, MemoryReviewBody(decision="discard"), auth=admin)
+    ver = _ver(pid, name)
+    done = admin_review_project_memory(pid, name, MemoryReviewBody(decision="discard", version=ver),
+                                       auth=admin)
     assert (done["name"], done["review"], done["decided_by"]) == (_stem(name), "discarded", "boss")
     log = admin_project_memory_reviews(pid, auth=admin)
     assert log["project_id"] == pid and log["count"] == 1
     assert log["reviews"][0]["data"] == data
-    for decision, target, status in (("drop", name, 422), ("keep", "absent-note", 404)):
+    for decision, target, version, status in (("drop", name, ver, 422), ("keep", "absent-note", ver, 404),
+                                              ("keep", name, "0" * 16, 409)):
         with pytest.raises(HTTPException) as refused:
-            admin_review_project_memory(pid, target, MemoryReviewBody(decision=decision), auth=admin)
+            admin_review_project_memory(pid, target, MemoryReviewBody(decision=decision, version=version),
+                                        auth=admin)
         assert refused.value.status_code == status
-    for call in (lambda a: admin_review_project_memory(pid, name, MemoryReviewBody(decision="keep"), auth=a),
+    for call in (lambda a: admin_review_project_memory(pid, name, MemoryReviewBody(decision="keep", version=ver),
+                                                       auth=a),
                  lambda a: admin_project_memory_reviews(pid, auth=a)):
         with pytest.raises(HTTPException) as refused:
             call({"user_id": "u", "role": "user"})
         assert refused.value.status_code == 403
     assert admin_project_memory_reviews(pid, auth=admin)["count"] == 1
+
+
+@pytest.mark.parametrize("decision", ["keep", "discard"])
+def test_a_decision_on_a_version_the_owner_never_saw_is_refused(client, monkeypatch, decision):
+    """The owner opens the list on version A; the model writes B; the click
+    made on A is refused (409), nothing is marked or recorded; a decision on
+    the version now shown lands and records B."""
+    h = _user(client, "stale")
+    pid = _project(client, h, "Calibrate stale")
+    _write(client, monkeypatch, h, pid, "paths", {"v": "A"})
+    with _Admin():
+        seen = _admin_notes(client, pid)["paths"]
+    _write(client, monkeypatch, h, pid, "paths", {"v": "B"})
+    with _Admin():
+        r = _decide(client, pid, "paths", decision, version=seen["version"])
+        assert r.status_code == 409, r.text
+        assert "written again" in r.json()["detail"]
+        now = _admin_notes(client, pid)["paths"]
+        assert (now["data"], now["review"]) == ({"v": "B"}, "")
+        assert now["version"] != seen["version"]
+        assert client.get(f"/v1/admin/projects/{pid}/memory/reviews").json()["count"] == 0
+        assert _decide(client, pid, "paths", decision, version=now["version"]).status_code == 200
+        log = client.get(f"/v1/admin/projects/{pid}/memory/reviews").json()["reviews"]
+    assert [(e["decision"], e["data"]) for e in log] == [(decision, {"v": "B"})]
+
+
+@pytest.mark.parametrize("decision", ["keep", "discard"])
+def test_a_write_landing_between_the_read_and_the_mark_leaves_no_mark_and_no_record(
+        monkeypatch, decision):
+    pid = f"cal-race-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "paths", json.dumps({"v": "A"}), "c#1")
+    ver = _ver(pid, "paths")
+    real = llm_memory.LlmMemoryReview
+
+    def write_first(**kw):
+        llm_memory.write(pid, "paths", json.dumps({"v": "B", "by": decision}), "c#2")
+        return real(**kw)
+
+    monkeypatch.setattr(llm_memory, "LlmMemoryReview", write_first)
+    with pytest.raises(llm_memory.MemoryConflict):
+        llm_memory.review(pid, "paths", decision, ver, by="o")
+    monkeypatch.setattr(llm_memory, "LlmMemoryReview", real)
+    row = llm_memory.listing(pid, with_data=True, with_review=True)[0]
+    assert (row["data"], row["review"], row["reviewed_by"]) == ({"v": "B", "by": decision}, "", "")
+    assert llm_memory.reviews(pid) == []
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_writing_a_discarded_note_again_needs_a_place_under_the_count_limit(monkeypatch, limit):
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", str(limit))
+    pid = f"cal-cap-{uuid.uuid4().hex[:8]}"
+    for i in range(limit):
+        llm_memory.write(pid, f"n{i}", json.dumps({"i": i}))
+    llm_memory.review(pid, "n0", "discard", _ver(pid, "n0"))
+    llm_memory.write(pid, "extra", json.dumps({"x": limit}))
+    with pytest.raises(llm_memory.MemoryRefused, match="limit"):
+        llm_memory.write(pid, "n0", json.dumps({"again": limit}))
+    seen = [n["name"] for n in llm_memory.listing(pid)]
+    assert len(seen) == limit and "n0" not in seen
+    # Must not fire: a note in sight is replaced at the limit, and a
+    # discarded note comes back once a place is free.
+    llm_memory.write(pid, "extra", json.dumps({"x": -limit}))
+    llm_memory.review(pid, "extra", "discard", _ver(pid, "extra"))
+    assert llm_memory.write(pid, "n0", json.dumps({"again": limit}))["created"] is False
+    assert llm_memory.read(pid, "n0")["data"] == {"again": limit}
+    assert len(llm_memory.listing(pid)) == limit
+
+
+@pytest.mark.parametrize("written,decided", [
+    ("2026-11-02T08:00:00+00:00", "2026-11-02T08:00:01+00:00"),
+    ("2026-10-30T23:59:59+00:00", "2026-10-31T10:15:00+00:00"),
+])
+def test_the_record_keeps_when_the_note_was_written_not_when_it_was_decided(
+        monkeypatch, written, decided):
+    pid = f"cal-at-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setattr(llm_memory, "_now", lambda: written)
+    llm_memory.write(pid, "paths", json.dumps({"w": written}), "c#1")
+    monkeypatch.setattr(llm_memory, "_now", lambda: decided)
+    llm_memory.review(pid, "paths", "keep", _ver(pid, "paths"), by="o")
+    (rec,) = llm_memory.reviews(pid)
+    assert (rec["note_written_at"], rec["decided_at"]) == (written, decided)
+
+
+@pytest.mark.parametrize("decision,version", [
+    (["keep"], "v"), ({"d": 1}, "v"), (None, "v"), (1, "v"),
+    ("keep", None), ("discard", ""), ("keep", 5), ("discard", ["v"]),
+])
+def test_a_decision_or_version_of_the_wrong_type_is_refused(decision, version):
+    pid = f"cal-type-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "paths", json.dumps({"a": 1}))
+    with pytest.raises(llm_memory.MemoryRefused):
+        llm_memory.review(pid, "paths", decision, version)
+    assert llm_memory.reviews(pid) == []
+    assert llm_memory.listing(pid, with_review=True)[0]["review"] == ""
+
+
+@pytest.mark.parametrize("first,second", [({"a": 1}, {"a": 2}), ([1], [1, 2])])
+def test_the_version_changes_with_each_write_and_holds_across_reads(first, second):
+    pid = f"cal-ver-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "paths", json.dumps(first), "c#1")
+    v1 = _ver(pid, "paths")
+    assert _ver(pid, "paths") == v1 and len(v1) == 16
+    llm_memory.write(pid, "paths", json.dumps(second), "c#1")
+    v2 = _ver(pid, "paths")
+    assert v2 != v1
+    # A decision does not change the version: the note's content is the same.
+    llm_memory.review(pid, "paths", "keep", v2)
+    assert _ver(pid, "paths") == v2

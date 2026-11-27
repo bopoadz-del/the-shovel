@@ -626,19 +626,23 @@ def admin_project_memory(project_id: str, auth: dict = Depends(require_api_key))
 
 class MemoryReviewBody(BaseModel):
     decision: str
+    version: str
 
 
 @router.post("/v1/admin/projects/{project_id}/memory/{name}/review")
 def admin_review_project_memory(project_id: str, name: str, body: MemoryReviewBody,
                                 auth: dict = Depends(require_api_key)):
-    """Keep or discard one of the model's notes. A discarded note stays in
+    """Keep or discard one of the model's notes at the version the owner
+    read (409 when it was written again since). A discarded note stays in
     the table, marked, and the model's read_memory / list_memory no longer
     return it; every decision is recorded. The content is never edited."""
     _require_admin(auth)
     from app.core import llm_memory
     try:
-        done = llm_memory.review(project_id, name, body.decision,
+        done = llm_memory.review(project_id, name, body.decision, body.version,
                                  by=str(auth.get("user_id") or ""))
+    except llm_memory.MemoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except llm_memory.MemoryRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except LookupError as exc:

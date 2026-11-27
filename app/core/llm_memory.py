@@ -22,6 +22,7 @@ Limits are settings (environment): ``LLM_MEMORY_MAX_BYTES`` per document and
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -47,6 +48,10 @@ _NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 _lock = threading.Lock()
 _initialized_for_url: Optional[str] = None
+
+
+class MemoryConflict(ValueError):
+    """The note changed after the owner opened it; the decision was not made."""
 
 
 class MemoryRefused(ValueError):
@@ -169,19 +174,23 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
            "review": "", "reviewed_at": "", "reviewed_by": ""}
     with SessionLocal() as s:
         with s.begin():
-            done = s.execute(update(LlmMemory)
-                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
-                             .values(**row)).rowcount
-            if not done:
+            prev = s.scalar(select(LlmMemory.review)
+                            .where(LlmMemory.project_id == project_id, LlmMemory.name == stem))
+            if prev is None or prev == DISCARDED:
                 _one_new_note_at_a_time(s, project_id)
                 # Discarded notes are out of the model's sight, so they do not
-                # take a place it could only free by replacing them.
+                # take a place it could only free by replacing them; writing
+                # one again brings it back into sight, so it needs a place.
                 count = s.scalar(select(func.count()).select_from(LlmMemory)
                                  .where(LlmMemory.project_id == project_id,
                                         LlmMemory.review != DISCARDED)) or 0
                 if count >= max_docs():
                     raise MemoryRefused(f"this project already holds {count} notes (the limit); "
                                        "replace or reuse one of them (list_memory shows them)")
+            done = s.execute(update(LlmMemory)
+                             .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
+                             .values(**row)).rowcount
+            if not done:
                 s.add(LlmMemory(project_id=project_id, name=stem, **row))
         created = not done
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
@@ -241,19 +250,31 @@ def listing(project_id: str, with_data: bool = False,
                 entry["data"] = json.loads(row.data)
             if with_review:
                 entry.update(review=row.review, reviewed_at=row.reviewed_at,
-                             reviewed_by=row.reviewed_by)
+                             reviewed_by=row.reviewed_by, version=version_of(row))
             out.append(entry)
         return out
 
 
-def review(project_id: str, name: Any, decision: Any, by: str = "") -> Dict[str, Any]:
-    """The owner keeps or discards the current version of note ``name``: the
-    note is marked and the decision recorded, with the content it was made
-    on, in one transaction. The note's content is never changed."""
+def version_of(row: Any) -> str:
+    """A token for one version of a note: it changes with every write (its
+    content, time and turn), so a decision names the version it was made on."""
+    raw = f"{row.written_at}\n{row.written_by_turn}\n{row.data}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def review(project_id: str, name: Any, decision: Any, version: Any,
+           by: str = "") -> Dict[str, Any]:
+    """The owner keeps or discards note ``name`` at the ``version`` they
+    read (``version_of``, listed with the note): the note is marked and the
+    decision recorded, with the content it was made on, in one transaction.
+    When the note was written again since, nothing is marked or recorded and
+    ``MemoryConflict`` says so. The note's content is never changed."""
     if not project_id:
         raise MemoryRefused("a review needs a project")
-    if decision not in DECISIONS:
+    if not isinstance(decision, str) or decision not in DECISIONS:
         raise MemoryRefused(f"decision must be one of {sorted(DECISIONS)}")
+    if not isinstance(version, str) or not version:
+        raise MemoryRefused("a review needs the version of the note that was read")
     stem = clean_name(name)
     init_db()
     at = _now()
@@ -262,11 +283,28 @@ def review(project_id: str, name: Any, decision: Any, by: str = "") -> Dict[str,
             row = s.get(LlmMemory, (project_id, stem))
             if row is None:
                 raise LookupError(f"no note named {stem!r} in project {project_id!r}")
-            row.review, row.reviewed_at, row.reviewed_by = DECISIONS[decision], at, by or ""
-            s.add(LlmMemoryReview(project_id=project_id, name=stem, decision=decision,
-                                  data=row.data, note_written_at=row.written_at,
-                                  note_written_by_turn=row.written_by_turn,
-                                  decided_at=at, decided_by=by or ""))
+            if version_of(row) != version:
+                raise MemoryConflict(f"note {stem!r} was written again after it was opened; "
+                                     "reload and decide on the version shown")
+            record = LlmMemoryReview(project_id=project_id, name=stem, decision=decision,
+                                     data=row.data, note_written_at=row.written_at,
+                                     note_written_by_turn=row.written_by_turn,
+                                     decided_at=at, decided_by=by or "")
+            # The mark lands only if the row is still the version just read:
+            # a write that commits after the read leaves it untouched.
+            marked = s.execute(update(LlmMemory)
+                               .where(LlmMemory.project_id == project_id,
+                                      LlmMemory.name == stem,
+                                      LlmMemory.data == record.data,
+                                      LlmMemory.written_at == record.note_written_at,
+                                      LlmMemory.written_by_turn == record.note_written_by_turn)
+                               .values(review=DECISIONS[decision], reviewed_at=at,
+                                       reviewed_by=by or "")
+                               .execution_options(synchronize_session=False)).rowcount
+            if not marked:
+                raise MemoryConflict(f"note {stem!r} was written again while the decision was "
+                                     "being made; reload and decide on the version shown")
+            s.add(record)
     return {"name": stem, "decision": decision, "review": DECISIONS[decision],
             "decided_at": at, "decided_by": by or ""}
 
