@@ -1722,6 +1722,17 @@ def figure_provenance(
                 if nums:
                     calc_entries.append((nums, {"source": pt.SOURCE_CALCULATOR,
                                                 "formula": str(payload["workflow"]), "inputs": {}}))
+            # A working sheet handed back by a tool run carries the results
+            # code wrote on it (a step run by the formula registry): each is a
+            # figure from code, credited with its value and unit as written,
+            # the same way as a calculator's result.
+            if isinstance(payload, dict) and isinstance(payload.get("sheet"), dict):
+                from app.agents.driver import sheet as working_sheet
+
+                for row in working_sheet.code_results(payload["sheet"]):
+                    calc_entries.append(({row["value"]}, {
+                        "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
+                        "step": row["step"], "unit": row["unit"]}))
         calc_pool: set[float] = set()
         for nums, _meta in calc_entries:
             calc_pool |= nums

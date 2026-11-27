@@ -800,3 +800,98 @@ def test_the_public_route_takes_the_sheet_on_request_and_the_question_goes_back(
     rows = trace_store.records(_today(), conv)
     assert len(rows) == 1 and rows[0]["question_set"] == qset and rows[0]["ended"] == "answer"
     assert trace_store.records(_today(), plain) == []
+
+
+# --- a result code wrote on the sheet reaches the answer ------------------------
+
+@pytest.mark.parametrize("a,ua,op,b,ub,reply,figure", [
+    (55, "m", "add", 2, "m", "The total is 57 m.", "57 m"),
+    (550, "m", "add", 2.75, "m", "The total is 552.75 m.", "552.75 m"),
+    (12, "m", "multiply", 4, "m", "The area is 48 m*m.", "48 m*m"),
+    (100, "m3", "divide", 4, "-", "The volume is 25 m3.", "25 m3"),
+    (12.5, "m2", "multiply", 3, "-", "The area is 37.5 m2.", "37.5 m2"),
+])
+def test_a_figure_code_wrote_on_the_sheet_is_shown_and_listed_in_the_trace(monkeypatch, a, ua, op, b, ub,
+                                                                             reply, figure):
+    conv = f"fig-{op}-{a}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": a, "unit": ua}, {"id": "g2", "value": b, "unit": ub}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": op, "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": reply},
+    ])
+    events = _run(user_message="work it out", conversation_id=conv, sheet_mode=True)
+    shown = _text(events)
+    assert figure in shown and "incomplete" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    credited = [f for f in row["figures"] if f.get("step") == "s1"]
+    assert credited and credited[0]["source"] == "calculator"
+    assert credited[0]["formula"] == "formula:arithmetic_step"
+    assert credited[0]["unit"] == row["sheet"]["steps"][0]["result"]["unit"]
+    assert row["figures_from_tools"] is True and row["ended"] == "answer"
+
+
+@pytest.mark.parametrize("a,b,wrong", [(55, 2, "58"), (12, 4, "49")])
+def test_a_figure_in_a_unit_that_no_step_produced_is_still_removed(monkeypatch, a, b, wrong):
+    """The gate stays on: only the value code wrote is credited."""
+    conv = f"nofig-{a}"
+    _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": f"The total is {wrong} m."},
+    ])
+    shown = _text(_run(user_message="work it out", conversation_id=conv, sheet_mode=True))
+    assert f"{wrong} m" not in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert not [f for f in row["figures"] if wrong in str(f.get("figure")) and f.get("source")]
+
+
+# --- an input counts as asked only when its step has no result ------------------
+
+def _found_then_ran(a, b):
+    """Round 1 records b as missing; round 2 finds it and plans s1 without
+    rewriting missing; round 3 runs s1; round 4 answers with the total."""
+    return [
+        {"content": "", "tool_calls": [_call("sheet_update", {"missing": [{"for": "s1", "input": "b"}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c2")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c3")]},
+        {"content": f"The total is {a + b} m."},
+    ]
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12, 30)])
+def test_a_turn_whose_missing_step_ran_ends_as_an_answer_and_carries_no_asked_input(monkeypatch, a, b):
+    conv = f"ran-c-{a}"
+    pid = _owned_conversation(conv, "ran-u")
+    who = {"conversation_id": conv, "user_id": "ran-u", "project_id": pid, "sheet_mode": True}
+    _scripted(monkeypatch, _found_then_ran(a, b))
+    shown = _text(_run(user_message="first", **who))
+    assert f"{a + b} m" in shown
+    row = trace_store.records(_today(), conv)[0]
+    assert row["ended"] == "answer" and row["sheet"]["done"] is True and row["sheet"]["missing"] == []
+    trace_store.forget_held()  # read back from the file, as after a restart
+    seen = _scripted(monkeypatch, [{"content": "Thanks."}])
+    _run(user_message="second", **who)
+    assert _sheet_in(seen[0]["messages"])["missing"] == []
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12, 30)])
+def test_an_input_for_a_step_without_a_result_is_still_asked_when_another_step_ran(monkeypatch, a, b):
+    conv = f"ran-o-{a}"
+    replies = _found_then_ran(a, b)
+    replies[0] = {"content": "", "tool_calls": [_call("sheet_update", {
+        "missing": [{"for": "s1", "input": "b"}, {"for": "s2", "input": "rate"}]}, "c1")]}
+    replies[-1] = {"content": f"The total is {a + b} m. What is the rate?"}
+    _scripted(monkeypatch, replies)
+    _run(user_message="first", conversation_id=conv, sheet_mode=True)
+    row = trace_store.records(_today(), conv)[0]
+    assert row["ended"] == "asked_input"
+    assert row["sheet"]["missing"] == [{"for": "s2", "input": "rate", "label": "rate", "asked": True}]

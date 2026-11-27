@@ -438,3 +438,108 @@ def test_a_corrected_unit_alone_reopens_the_dependents(unit):
 ])
 def test_dependents_follow_the_plans_own_inputs(ids, expected):
     assert ws.dependents(_chain(100, 4, 2), ids) == expected
+
+
+def _replan_s1(s, **change):
+    step = {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}}
+    s, problems = ws.apply_update(s, {"plan": [{**step, **change}]})
+    assert problems == []
+    return s
+
+
+@pytest.mark.parametrize("output,a,b,c", [("result", 100, 4, 2), ("result_unit", 7, 3, 5)])
+def test_a_replanned_step_changing_only_its_output_reopens_it_and_its_dependents(output, a, b, c):
+    s = _replan_s1(_chain(a, b, c), output=output)
+    assert _results(s) == {"s3": round(c / b, 6)} and s["done"] is False
+    assert ws.open_steps(s) == ["s1", "s2"]
+
+
+@pytest.mark.parametrize("entry,a,b,c", [("formula:another_entry", 100, 4, 2), ("formula:third_entry", 7, 3, 5)])
+def test_a_replanned_step_changing_only_its_entry_reopens_it_and_its_dependents(entry, a, b, c):
+    s = _replan_s1(_chain(a, b, c), entry=entry)
+    assert _results(s) == {"s3": round(c / b, 6)} and s["done"] is False
+    assert ws.open_steps(s) == ["s1", "s2"]
+
+
+# --- a step that ran closes what it was missing --------------------------------
+
+def _waiting_for(missing, a, b):
+    s = ws.new_sheet("t-2", "q")
+    s, problems = ws.apply_update(s, {"missing": missing})
+    assert problems == []
+    return _replan_after_finding(s, a, b)
+
+
+def _replan_after_finding(s, a, b):
+    """The model finds the value and plans s1, without rewriting missing."""
+    s, problems = ws.apply_update(s, {
+        "givens": [{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]})
+    assert problems == []
+    return s
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12.5, 3)])
+def test_a_step_that_runs_closes_the_missing_input_it_was_for(a, b):
+    s = _waiting_for([{"for": "s1", "input": "b"}, {"for": "s2", "input": "rate"}, {"input": "loose"}], a, b)
+    assert len(ws.unasked(s)) == 3  # planning alone closes nothing
+    s = ws.run_step(s, "s1", "c1")
+    assert s["steps"][0]["result"]["value"] == a + b and s["done"] is True
+    # s1 has its result: its item is closed; s2 (no result) and the item
+    # tied to no step stay as the model wrote them.
+    assert [(m["for"], m["input"]) for m in s["missing"]] == [("s2", "rate"), ("", "loose")]
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12.5, 3)])
+def test_a_step_that_fails_or_waits_closes_nothing(a, b):
+    s = _waiting_for([{"for": "s1", "input": "b"}], a, b)
+    failed = ws.run_step(s, "s9", "c1")  # not a plan step: failed
+    assert [m["input"] for m in failed["missing"]] == ["b"]
+    s, _ = ws.apply_update(s, {"plan": [{"id": "s1", "entry": "formula:no_such_entry", "inputs": {"a": "g1"}}]})
+    s = ws.run_step(s, "s1", "c2")
+    assert s["steps"][0]["status"] == "failed" and [m["input"] for m in s["missing"]] == ["b"]
+
+
+@pytest.mark.parametrize("value,unit", [(552.75, "m"), (48, "m*m")])
+def test_close_answered_reads_only_done_steps_with_a_result(value, unit):
+    s = ws.new_sheet("t-3", "q")
+    s["missing"] = [{"for": "s1", "input": "x"}, {"for": "s2", "input": "y"}, {"for": "s3", "input": "z"}]
+    s["steps"] = [{"id": "s1", "status": "done", "result": {"name": "result", "value": value, "unit": unit}},
+                  {"id": "s2", "status": "done"},  # done but no result: not closed
+                  {"id": "s3", "status": "waiting_input"}]
+    assert [m["for"] for m in ws.close_answered(s)["missing"]] == ["s2", "s3"]
+    assert len(s["missing"]) == 3  # the sheet passed in is not changed
+    assert ws.close_answered(ws.new_sheet("t-4", "q"))["missing"] == []
+
+
+@pytest.mark.parametrize("a,b,op,expected,unit", [(55, 2, "add", 57, "m"), (12, 4, "multiply", 48, "m*m")])
+def test_code_results_lists_every_result_code_wrote(a, b, op, expected, unit):
+    s = _sheet_with([{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
+                    [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": op, "a": "g1", "b": "g2"}},
+                     {"id": "s2", "entry": "formula:no_such_entry", "inputs": {"a": "g1"}}])
+    s = ws.run_step(ws.run_step(s, "s1", "c1"), "s2", "c2")
+    assert ws.code_results(s) == [{"step": "s1", "entry": "formula:arithmetic_step", "name": "result",
+                                   "value": expected, "unit": unit}]
+
+
+@pytest.mark.parametrize("sheet", [
+    None, "a sheet", [], {}, {"steps": None}, {"steps": ["s1", 3]},
+    {"steps": [{"id": "s1", "status": "failed", "result": {"value": 5, "unit": "m"}}]},
+    {"steps": [{"id": "s1", "status": "done", "result": "5 m"}]},
+    {"steps": [{"id": "s1", "status": "done", "result": {"value": float("nan"), "unit": "m"}}]},
+    {"steps": [{"id": "s1", "status": "done", "result": {"value": True, "unit": "m"}}]},
+    {"steps": [{"id": "s1", "status": "done", "result": {"value": None, "unit": "m"}}]},
+])
+def test_code_results_of_anything_without_a_done_numeric_result_is_empty(sheet):
+    assert ws.code_results(sheet) == []
+
+
+@pytest.mark.parametrize("a,b", [(55, 77), (12.5, 3)])
+def test_a_missing_input_written_for_a_step_that_already_ran_is_closed(a, b):
+    s = ws.run_step(_replan_after_finding(ws.new_sheet("t-5", "q"), a, b), "s1", "c1")
+    s, problems = ws.apply_update(s, {"missing": [{"for": "s1", "input": "b"}, {"for": "s2", "input": "rate"}]})
+    assert problems == [] and [m["for"] for m in s["missing"]] == ["s2"]
+    # A correction that reopens s1 lets its input be missing again.
+    s, _ = ws.apply_update(s, {"givens": [{"id": "g2", "value": b + 1, "unit": "m"}],
+                               "missing": [{"for": "s1", "input": "b"}]})
+    assert [m["for"] for m in s["missing"]] == ["s1"] and s["done"] is False

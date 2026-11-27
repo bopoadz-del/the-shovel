@@ -17,6 +17,9 @@ Who writes what -- the point of the sheet:
 * code writes every ``steps[].result`` from the tool's own result
   (``record_result``); an update from the model that carries a step or a
   result is refused, so no figure on the sheet was typed by the model;
+* every write (``apply_update``, ``run_step``, ``record_result``) closes a
+  missing input whose step has its result (``close_answered``), so what is
+  left in ``missing`` is always waiting on a step that has not run;
 * a plan input names a given (``g1``) or an earlier step (``s1``); code
   resolves the reference (``resolve_inputs``), so a value is never re-typed.
 
@@ -172,6 +175,7 @@ def apply_update(sheet: Dict[str, Any], update: Any) -> Tuple[Dict[str, Any], Li
         return sheet, problems
     stale = dependents(out, replaced) | {i for i in replaced if _STEP_ID.match(i)}
     out["steps"] = [st for st in out["steps"] if st.get("id") not in stale]
+    out = close_answered(out)
     out["done"] = is_done(out)
     return out, []
 
@@ -254,6 +258,7 @@ def record_result(sheet: Dict[str, Any], step_id: str, call_id: str,
     else:
         entry.update(status="done", result={"name": name, "value": value, "unit": unit})
     _put(out["steps"], entry)
+    out = close_answered(out)
     out["done"] = is_done(out)
     return out
 
@@ -287,6 +292,39 @@ def is_done(sheet: Dict[str, Any]) -> bool:
     if not plan:
         return False
     return all((_step(sheet, p["id"]) or {}).get("status") == "done" for p in plan)
+
+
+def close_answered(sheet: Dict[str, Any]) -> Dict[str, Any]:
+    """The sheet with every missing input whose step has its result taken
+    off: the step ran, so what it was waiting for is no longer missing (a
+    fact code reads from the steps, not a judgment). An item tied to no
+    step, or to a step without a result, stays as the model wrote it."""
+    out = copy.deepcopy(sheet)
+    ran = {st.get("id") for st in out.get("steps") or []
+           if st.get("status") == "done" and st.get("result")}
+    out["missing"] = [m for m in out.get("missing") or [] if not m.get("for") or m.get("for") not in ran]
+    return out
+
+
+def code_results(sheet: Any) -> List[Dict[str, Any]]:
+    """The results code wrote on the sheet: one per done step, with its
+    step id, entry, output name, value and unit exactly as written. The
+    model cannot write a step (``apply_update`` refuses it), so every row
+    here is a figure from code. Anything not shaped like a sheet gives []."""
+    if not isinstance(sheet, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for st in sheet.get("steps") or []:
+        if not isinstance(st, dict) or st.get("status") != "done" or not isinstance(st.get("result"), dict):
+            continue
+        result = st["result"]
+        value = _number(result.get("value"))
+        if value is None:
+            continue
+        rows.append({"step": str(st.get("id") or ""), "entry": str(st.get("entry") or ""),
+                     "name": str(result.get("name") or ""), "value": value,
+                     "unit": str(result.get("unit") or "")})
+    return rows
 
 
 def mark_asked(sheet: Dict[str, Any]) -> Dict[str, Any]:
@@ -375,8 +413,9 @@ def run_step(sheet: Dict[str, Any], step_id: str, call_id: str = "") -> Dict[str
 
     def _end(**fields: Any) -> Dict[str, Any]:
         _put(out["steps"], {"id": step_id, "call_id": str(call_id or ""), "entry": plan["entry"], **fields})
-        out["done"] = is_done(out)
-        return out
+        closed = close_answered(out)
+        closed["done"] = is_done(closed)
+        return closed
 
     if spec is None:
         return _end(status="failed", error=(f"{plan.get('entry')!r} is not a registered formula; "

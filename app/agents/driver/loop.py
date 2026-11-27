@@ -766,9 +766,11 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     if sheet_mode:
         ended = "ceiling" if ceiling else "answer" if model_answered else "asked_input"
         if work is not None and ended == "answer" and sheet.unasked(work):
-            # The model ended the turn with inputs still missing on its sheet:
+            # The model ended the turn with inputs still missing on its sheet.
+            # Every sheet write closes an input whose step has its result
+            # (sheet.close_answered), so these wait on steps that never ran:
             # its answer is where it asked for them. Mark them asked, so the
-            # next turn's sheet does not ask a second time.
+            # next turn does not ask again.
             work = sheet.mark_asked(work)
             ended = "asked_input"
         record = trace_record.build(
