@@ -967,22 +967,33 @@ def _stated_parts(value: Any) -> Optional[Tuple[str, str]]:
     """The unit ``value`` is stated in, split into what it measures and what
     it is per: "5 L/m2" -> ("L", "m2"), "12 m2" -> ("m2", ""), "9 per
     m3" -> ("currency", "m3"). None when no unit the converter knows is stated."""
-    from app.agents.base.formulas.construction_formulas_planning import normalise_rate, parse_unit
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
 
     parsed = value_and_unit(value)
     if parsed is None:
         return None
     unit = parse_unit(parsed[1]) or parse_unit(f"currency {parsed[1]}")
     if unit is None:
-        # A counted noun in a place ("12 blocks per m2", "3 per block"):
-        # each part is a unit the converter knows or a plain word.
-        for text in (parsed[1], f"currency {parsed[1]}"):
-            parts = [part.strip() for part in normalise_rate(text).split("/")]
-            if 1 <= len(parts) <= 2 and all(_part_unit(part) is not None for part in parts):
-                return parts[0], (parts[1] if len(parts) == 2 else "")
         return None
     head, _, tail = unit.written.partition("/")
     return head.strip(), tail.strip()
+
+
+def _counted_parts(value: Any) -> Optional[Tuple[str, str]]:
+    """As :func:`_stated_parts`, for a unit with a counted noun in a place
+    ("12 blocks per m2" -> ("blocks", "m2"), "3 per block" -> ("currency",
+    "block")): each part is a unit the converter knows or a plain word.
+    None when a part is neither."""
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate
+
+    parsed = value_and_unit(value)
+    if parsed is None:
+        return None
+    for text in (parsed[1], f"currency {parsed[1]}"):
+        parts = [part.strip() for part in normalise_rate(text).split("/")]
+        if 1 <= len(parts) <= 2 and all(_part_unit(part) is not None for part in parts):
+            return parts[0], (parts[1] if len(parts) == 2 else "")
+    return None
 
 
 def _part_unit(part: str) -> Any:
@@ -1011,7 +1022,8 @@ def _chain_units(params: Dict[str, ParamSpec], values: Dict[str, Any], out: Dict
         other = params.get(p.per) if p.per else None
         if other is None or key in refused or p.per in refused:
             continue
-        mine, theirs = _stated_parts(values.get(key)), _stated_parts(values.get(p.per))
+        mine, theirs = [_stated_parts(values.get(k)) or _counted_parts(values.get(k))
+                        for k in (key, p.per)]
         if not mine or not theirs or not mine[1]:
             continue
         per_unit, measured = _part_unit(mine[1]), _part_unit(theirs[0])

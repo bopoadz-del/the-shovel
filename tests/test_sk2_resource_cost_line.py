@@ -678,3 +678,19 @@ def test_a_counted_noun_on_the_quantity_is_checked_as_a_count(quantity, consumpt
     env = run_calculation("resource_cost_line", {"quantity": quantity, "consumption_per_unit": consumption,
                                                  "price_per_resource_unit": "3.20 per block"})
     assert (env["status"] != "success") is refused, env
+
+
+@pytest.mark.parametrize("value,parts", [
+    ("12 blocks per m2", ("blocks", "m2")),
+    ("3 per block", ("currency", "block")),
+    ("1590 bricks", ("bricks", "")),
+    ("6 m33/m2", None),
+    ("6 bags per kN/m", None),
+    (6, None),
+])
+def test_counted_parts_read_a_noun_in_a_place(value, parts):
+    from app.lib.formula_registry import _counted_parts, _stated_parts
+
+    assert _counted_parts(value) == parts
+    if parts is not None:
+        assert _stated_parts(value) is None   # the stated reading is unchanged
