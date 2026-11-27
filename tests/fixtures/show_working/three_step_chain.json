@@ -1,0 +1,29 @@
+{
+  "_note": "A recorded SSE 'end' event of a catalogue-path turn, in the shape app/agents/driver/loop.py sends (sheet + ended + provenance). Every value is invented.",
+  "content": "The slab needs 39.69 m3 of concrete including the allowance.",
+  "ended": "answer",
+  "provenance": [
+    {"figure": "9 m", "source": "user_input"},
+    {"figure": "3.5 m", "source": "project_document", "doc_name": "Drawing set B", "page_or_section": "p. 3"},
+    {"figure": "39.69 m3", "source": "calculator"}
+  ],
+  "sheet": {
+    "givens": [
+      {"id": "g1", "what": "length", "value": 9, "unit": "m", "source": "user"},
+      {"id": "g2", "what": "width", "value": 3.5, "unit": "m", "source": "document"},
+      {"id": "g3", "what": "thickness", "value": 1.2, "unit": "m", "source": "user"}
+    ],
+    "plan": [
+      {"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"a": "g1", "b": "g2", "op": "multiply"}},
+      {"id": "s2", "entry": "formula:arithmetic_step", "inputs": {"a": "s1", "b": "g3", "op": "multiply"}},
+      {"id": "s3", "entry": "formula:arithmetic_step", "inputs": {"a": "s2", "b": 1.05, "op": "multiply"}}
+    ],
+    "steps": [
+      {"id": "s1", "status": "done", "result": {"name": "result", "value": 31.5, "unit": "m2"}},
+      {"id": "s2", "status": "done", "result": {"name": "result", "value": 37.8, "unit": "m3"}},
+      {"id": "s3", "status": "done", "result": {"name": "result", "value": 39.690000000000005, "unit": "m3"}}
+    ],
+    "missing": [],
+    "done": true
+  }
+}

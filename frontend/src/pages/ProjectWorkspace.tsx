@@ -185,6 +185,10 @@ interface ChatMessage {
   coverage?: AnswerCoverage
   /** Supporting text the answer contract moved out of the lead (rule 5). */
   details?: string
+  /** Final working sheet of a catalogue-path turn (SSE 'end'). */
+  sheet?: unknown
+  /** trace/1 ending of a catalogue-path turn. */
+  ended?: string
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -1562,10 +1566,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawCitations = readCitations(evt['citations']) ?? []
               const rawCoverage = readCoverage(evt['coverage'])
               const rawDetails = readDetails(evt['details'])
+              const rawSheet = evt['sheet'] && typeof evt['sheet'] === 'object' ? evt['sheet'] : undefined
+              const rawEnded = typeof evt['ended'] === 'string' ? evt['ended'] : undefined
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage, details: rawDetails }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage, details: rawDetails, sheet: rawSheet, ended: rawEnded }
                     : m
                 )
               )
