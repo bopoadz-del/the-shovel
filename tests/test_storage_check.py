@@ -219,3 +219,38 @@ def test_an_efs_volume_without_a_file_system_id_fails_the_backup_checks(fs_id):
         ("backup_policy", False, "no_file_system_id"),
         ("recovery_point", False, "no_file_system_id"),
     ]
+
+
+@pytest.mark.parametrize("limit", [26.0, 10.0])
+def test_a_point_exactly_at_the_limit_still_counts(limit):
+    at_limit = [_point(NOW - timedelta(hours=limit))]
+    assert check_recovery_point(at_limit, "fs-0aaa", NOW, limit)[1] is True
+    just_over = [_point(NOW - timedelta(hours=limit, seconds=36))]
+    assert check_recovery_point(just_over, "fs-0aaa", NOW, limit)[1] is False
+
+
+@pytest.mark.parametrize("age_h,code", [(25.5, 0), (27.0, 1)])
+def test_the_cli_default_limit_is_one_day_plus_the_backup_window(tmp_path, age_h, code):
+    td = _write(tmp_path, "td.json", _described())
+    pol = _write(tmp_path, "pol.json", {"BackupPolicy": {"Status": "ENABLED"}})
+    rp = _write(tmp_path, "rp.json", {"RecoveryPoints": [_point(NOW - timedelta(hours=age_h))]})
+    assert main([td, "--backup-policy", pol, "--recovery-points", rp, "--now", NOW.isoformat()]) == code
+
+
+@pytest.mark.parametrize("created,ok", [
+    ("2026-11-24T20:00:00", True),   # 1 h before NOW when read as UTC
+    ("2026-11-24T16:30:00", False),  # 4.5 h before NOW when read as UTC
+])
+def test_a_creation_date_without_a_zone_is_read_as_utc(created, ok):
+    points = [{"CreationDate": created, "Status": "COMPLETED"}]
+    assert check_recovery_point(points, "fs-0aaa", NOW, 4.0)[1] is ok
+
+
+@pytest.mark.parametrize("rw_fs,ro_fs", [("fs-0aaa", "fs-0bbb"), ("fs-1111", "fs-2222")])
+def test_a_read_only_volume_on_the_same_path_is_not_the_backed_up_one(rw_fs, ro_fs):
+    described = _described(fs_id=rw_fs)
+    taskdef = described["taskDefinition"]
+    taskdef["volumes"].insert(0, {"name": "snapshot", "efsVolumeConfiguration": {"fileSystemId": ro_fs}})
+    taskdef["containerDefinitions"][0]["mountPoints"].insert(
+        0, {"sourceVolume": "snapshot", "containerPath": "/app/data", "readOnly": True})
+    assert mounted_file_system(described) == rw_fs
