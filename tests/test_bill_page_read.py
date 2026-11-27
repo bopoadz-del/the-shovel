@@ -159,8 +159,9 @@ def test_rows_of_reads_each_page_and_numbers_it_from_one(reads, want_pages, want
         return reads[page_read.index]
 
     rows_of = bpr.rows_of_model_reads(read_page, "Bill 9")
-    rows, not_read = rows_of([SimpleNamespace(index=i) for i in sorted(reads)])
+    rows, not_read, raw = rows_of([SimpleNamespace(index=i) for i in sorted(reads)])
     assert asked == sorted(reads)
+    assert raw == {str(i + 1): reads[i] for i in reads}  # every reply, read or not
     assert [r.source_page for r in rows] == want_pages
     assert not_read == want_not_read
     assert all(tuple(r.path[:1]) == ("Bill 9",) for r in rows)

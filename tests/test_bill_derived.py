@@ -10,6 +10,8 @@ the documents table. The derived workbook is real and is read back through
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from typing import Any
 
@@ -779,3 +781,57 @@ def test_planned_states_see_the_pages_not_read(tmp_path, monkeypatch, unread_ind
                                                                tolerance=0),
                               classify=_BILL, page_source=_blank_pages())
     assert [b["state"] for b in plan["bill_states"]["bills"]] == want
+
+
+# -- the model's raw output is kept beside the copy's rows --------------------
+
+
+@pytest.mark.parametrize("reads", [_READS_A, _READS_B])
+def test_raw_model_output_is_stored_beside_the_copy(tmp_path, monkeypatch, reads):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    plan = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(reads), **kw)
+    assert plan["raw_reads"]["pages"] == len(reads)
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               rows_of_reads=_model_reader(reads), **kw)
+    assert out["derived"] is True
+    (row,) = docs.added
+    kept = row["metadata"]["raw_reads"]
+    with open(kept["file_path"], "rb") as fh:
+        body = fh.read()
+    assert json.loads(body) == {str(k + 1): v for k, v in reads.items()}
+    assert kept["sha256"] == hashlib.sha256(body).hexdigest() == plan["raw_reads"]["sha256"]
+    assert kept["pages"] == len(reads)
+    assert kept["file_path"] != row["file_path"]
+
+
+@pytest.mark.parametrize("page", [0, 2])
+def test_plan_hash_sees_a_raw_reply_change_that_leaves_the_rows_alone(tmp_path, monkeypatch,
+                                                                      page):
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    kw = {"classify": _BILL, "page_source": _blank_pages()}
+    noted = {**_READS_B, page: [{**ln, "unplaced": ["12.5"]} for ln in _READS_B[page]]}
+    a = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(_READS_B), **kw)
+    b = bd.plan_bill_sheet("p1", "src1", rows_of_reads=_model_reader(noted), **kw)
+    assert a["rows"] == b["rows"] and a["sections"] == b["sections"]
+    assert a["raw_reads"]["sha256"] != b["raw_reads"]["sha256"]
+    assert a["plan_hash"] != b["plan_hash"]
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=a["plan_hash"],
+                               rows_of_reads=_model_reader(noted), **kw)
+    assert out["reason"] == bd.SKIP_PLAN_MISMATCH
+    assert docs.added == []
+
+
+@pytest.mark.parametrize("build", [_bill_a, _bill_b])
+def test_geometry_copy_keeps_no_raw_output(tmp_path, monkeypatch, build):
+    words, _want, _flagged = build()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    plan, out = _plan_then_derive(words)
+    assert plan["raw_reads"] is None
+    assert out["derived"] is True
+    (row,) = docs.added
+    assert "raw_reads" not in row["metadata"]
+    assert not list(tmp_path.glob("*.raw.json"))

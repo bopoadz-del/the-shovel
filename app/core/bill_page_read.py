@@ -166,12 +166,16 @@ def rows_of_model_reads(
     ``read_page`` gets one ``bill_classify.PageRead`` (0-based ``index``) and
     returns the model's lines for that page (or anything else, which is NOT
     READ). The rows and the 1-based pages not read are what
-    :func:`rows_from_page_reads` gives for those pages."""
+    :func:`rows_from_page_reads` gives for those pages; the third value is
+    every reply exactly as the model gave it, by 1-based page, so the copy
+    keeps the raw output beside the rows it accepted."""
 
-    def rows_of(page_reads: Sequence[Any]) -> tuple[list[g.BillRow], list[int]]:
+    def rows_of(
+        page_reads: Sequence[Any],
+    ) -> tuple[list[g.BillRow], list[int], dict[str, Any]]:
         pages = {str(r.index + 1): read_page(r) for r in page_reads}
         got = rows_from_page_reads(pages, bill_label)
-        return got.rows, got.pages_not_read
+        return got.rows, got.pages_not_read, pages
 
     return rows_of
 
