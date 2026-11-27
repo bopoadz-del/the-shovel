@@ -1794,7 +1794,11 @@ def chunk_text(text: str, words_per_chunk: int = 500) -> list[str]:
 # level with overlap and respects BOQ row boundaries (lines that start with
 # an item code like ``D 999.14``) so a rate stays adjacent to its item code.
 
-_BOQ_ITEM_PATTERN = re.compile(r"^\s*[A-Z]\s*\d+(?:\.\d+)+\b")
+# ``re.M`` so ``^`` matches at every line start: without it
+# ``finditer(text, pos)`` only matches at offset 0, which made the row-break
+# rule in ``chunk_text_with_overlap`` unreachable. ``[ \t]*`` (not ``\s*``)
+# keeps a match on its own line, so ``match.start()`` is the row's line start.
+_BOQ_ITEM_PATTERN = re.compile(r"^[ \t]*[A-Z][ \t]*\d+(?:\.\d+)+\b", re.M)
 
 # ``re`` is used here; the module-level ``import re`` was added with the
 # noise-filter helper earlier.

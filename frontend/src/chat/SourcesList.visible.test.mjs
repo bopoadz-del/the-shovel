@@ -47,7 +47,7 @@ globalThis.fetch = async () => new Response('{}', { status: 404, headers: { 'con
 const { createRoot } = await import('react-dom/client')
 const { act } = await import('react')
 const { default: RightPanel } = await server.ssrLoadModule('/src/layout/RightPanel.tsx')
-const { readCoverage } = await server.ssrLoadModule('/src/chat/citationMarkers.ts')
+const { readCoverage, readDetails } = await server.ssrLoadModule('/src/chat/citationMarkers.ts')
 
 function visibleText(html) {
   return html
@@ -395,4 +395,68 @@ test('W3: the coverage reader keeps a well-formed value and refuses malformed on
     'indexed 3 of 9',
     null,
   ]) assert.equal(readCoverage(bad), undefined, `accepted ${JSON.stringify(bad)}`)
+})
+
+// ── Rule 5: the lead is the answer, the details fold under it ─────────────
+// The answer text (.chat-bubble__markdown) holds the lead only; the moved
+// supporting text renders word for word in a closed <details> beside it,
+// with its markers as "[n]" controls. Every case is an invented answer.
+
+function sectionText(html, cls) {
+  const m = html.match(new RegExp(`<div class="${cls}">([\\s\\S]*?)</div>`))
+  return m ? visibleText(m[1]) : null
+}
+
+const DETAIL_CASES = [
+  {
+    content: 'The gutter falls at 1 in 200 [1].',
+    details: 'Outlets sit at 18 m centres [2].\n\nThe overflow weir is 50 mm above the outlet.',
+    citations: [
+      { marker: 1, document: 'Gamma Roof Notes.pdf', section: 'p. 2', passage: 'fall 1:200', tier: 'Project document', kind: 'document' },
+      { marker: 2, document: 'Gamma Roof Notes.pdf', section: 'p. 3', passage: 'outlets 18 m', tier: 'Project document', kind: 'document' },
+    ],
+    lead: /The gutter falls at 1 in 200 \[1\]/,
+    moved: [/Outlets sit at 18 m centres \[2\]/, /overflow weir is 50 mm/],
+  },
+  {
+    content: 'The lift pit is 1.6 m deep.',
+    details: '- The pit ladder is galvanised.\n- The sump is 600 mm square.',
+    citations: [],
+    lead: /The lift pit is 1\.6 m deep\./,
+    moved: [/pit ladder is galvanised/, /sump is 600 mm square/],
+  },
+]
+
+for (const [i, c] of DETAIL_CASES.entries()) {
+  test(`rule 5: the answer text is the lead, the details fold beside it (case ${i + 1})`, () => {
+    const html = renderToStaticMarkup(React.createElement(ChatBubble, {
+      message: { id: `d${i}`, role: 'assistant', content: c.content, details: c.details, citations: c.citations },
+    }))
+    const answer = sectionText(html, 'chat-bubble__markdown')
+    assert.ok(answer !== null, 'the answer text renders')
+    assert.match(answer, c.lead)
+    for (const re of c.moved) assert.doesNotMatch(answer, re, 'moved text is not in the answer text')
+    assert.match(html, /<details class="chat-bubble__details">/, 'the details render closed')
+    const folded = sectionText(html, 'chat-bubble__details-body')
+    for (const re of c.moved) assert.match(folded, re, 'moved text is shown word for word')
+  })
+
+  test(`rule 5: no details, or a streaming answer, renders no fold (case ${i + 1})`, () => {
+    for (const message of [
+      { id: `n${i}`, role: 'assistant', content: c.content, citations: c.citations },
+      { id: `s${i}`, role: 'assistant', content: c.content, details: c.details, citations: c.citations, streaming: true },
+      { id: `b${i}`, role: 'assistant', content: c.content, details: readDetails('   '), citations: c.citations },
+    ]) {
+      const html = renderToStaticMarkup(React.createElement(ChatBubble, { message }))
+      assert.doesNotMatch(html, /chat-bubble__details/)
+    }
+  })
+}
+
+test('rule 5: the details reader keeps text and refuses blank or non-text values', () => {
+  assert.equal(readDetails('Outlets sit at 18 m centres.'), 'Outlets sit at 18 m centres.')
+  assert.equal(readDetails('- a\n- b'), '- a\n- b')
+  for (const bad of ['', '   \n', null, undefined, 42, ['x'], { text: 'x' }]) {
+    assert.equal(readDetails(bad), undefined, `accepted ${JSON.stringify(bad)}`)
+  }
 })
