@@ -215,7 +215,10 @@ async def test_progress_tracker_zero_planned_avoids_division_error(container):
         input_data={},
         params={"planned_percent": 0.0, "actual_percent": 5.0},
     )
-    assert result["overall_progress"]["schedule_performance_index"] == 1.0
+    # Nothing planned yet: the ratio is undefined (the progress_kpi kernel's
+    # rule), not 1.0 -- 1.0 would read as "on track" while 5% is done ahead.
+    assert result["overall_progress"]["schedule_performance_index"] is None
+    assert "schedule_performance_index_error" not in result["overall_progress"]
 
 
 @requires_construction_kit

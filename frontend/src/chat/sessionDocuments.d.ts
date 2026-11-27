@@ -5,6 +5,11 @@ export interface SessionDocumentRow {
 }
 
 export function withSessionId(form: FormData, sessionId: string | null | undefined): FormData
+export function uploadSessionFor(
+  target: 'project' | 'session',
+  sessionId: string | null | undefined,
+): string | null | undefined
+export function uploadNotice(doc: unknown): string | null
 export function belongsToProjectList(doc: unknown): boolean
 export function sessionDocumentTag(origin: unknown): 'Uploaded' | 'Produced'
 export function documentPath(

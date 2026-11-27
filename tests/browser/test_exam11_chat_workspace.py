@@ -46,7 +46,6 @@ from tests.exam11_checks import (
 pytestmark = pytest.mark.browser
 
 _W2 = pytest.mark.xfail(strict=True, reason="W2 not landed: per-session documents")
-_W3 = pytest.mark.xfail(strict=True, reason="W3 not landed: citations in the side panel only")
 
 # Two questions per item, taken from the UI-PHYS catalog: the stub answers
 # only catalog asks (an invented question gets its honest error bubble, which
@@ -140,11 +139,15 @@ def test_11_2_sessions_are_listed_above_documents(page: Page, live_app, pair):
     assert _PAIRS[pair][1][:20] in rows.first.inner_text(), "stage=newest-first"
 
 
+_SESSION_FIXTURES = ("S1_contract_data.md", "S5_batch_plant_letter.md")
+
+
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("fixture_name", ["S1_contract_data.md", "S5_batch_plant_letter.md"])
+@pytest.mark.parametrize("fixture_name", _SESSION_FIXTURES)
 def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_name):
-    if not (FIXTURE_DIR / fixture_name).exists():
-        pytest.fail(f"stage=fixture missing {fixture_name}")
+    for name in _SESSION_FIXTURES:
+        if not (FIXTURE_DIR / name).exists():
+            pytest.fail(f"stage=fixture missing {name}")
     _login(page, live_app["base"])
     _create_project(page, f"Exam11 PerSession {fixture_name[:6]}")
     _ask(page, _PAIRS[0][0])
@@ -155,6 +158,16 @@ def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_n
     expect(this_session.filter(has_text=fixture_name), "stage=listed-in-session").to_have_count(1)
     expect(this_session.filter(has_text="Uploaded"), "stage=tagged-uploaded").to_have_count(1)
 
+    # A file attached in a chat belongs to that chat only (#451): another chat
+    # sees it neither in its session group nor in the project group. A file
+    # added to the project is the one every chat sees.
+    project_file = next(n for n in _SESSION_FIXTURES if n != fixture_name)
+    page.locator("#doc-project-file-input").set_input_files(str(FIXTURE_DIR / project_file))
+    expect(
+        _group(page, "Project").filter(has_text=project_file),
+        "stage=project-file-listed",
+    ).to_have_count(1, timeout=30_000)
+
     page.get_by_role("button", name="New chat").click()
     _ask(page, _PAIRS[0][1])
     expect(
@@ -163,7 +176,11 @@ def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_n
     ).to_have_count(0)
     expect(
         _group(page, "Project").filter(has_text=fixture_name),
-        "stage=listed-in-project",
+        "stage=session-file-not-in-project",
+    ).to_have_count(0)
+    expect(
+        _group(page, "Project").filter(has_text=project_file),
+        "stage=project-file-in-other-session",
     ).to_have_count(1)
 
 
@@ -185,7 +202,6 @@ def test_11_4_a_produced_file_is_saved_and_tagged(page: Page, live_app, pair):
     )
 
 
-@_W3
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("which", [0, 1])
 def test_11_5_citations_only_in_the_side_panel(page: Page, live_app, ui_phys_catalog, which):

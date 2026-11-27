@@ -67,4 +67,7 @@ export interface ChatMessage {
   citations?: AnswerCitation[]
   /** Coverage from the SSE 'end' event; a Sources panel line, never answer text. */
   coverage?: AnswerCoverage
+  /** The answer contract's rule 5: supporting text moved out of the lead,
+   *  word for word. Shown under the answer, folded, never deleted. */
+  details?: string
 }

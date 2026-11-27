@@ -13,6 +13,38 @@ export function withSessionId(form, sessionId) {
   return form
 }
 
+/** The session an upload is filed under. The workspace always has a chat
+ *  open, so the target is chosen by the control the user used, not by
+ *  whether a session exists: ``'project'`` files the upload as a project
+ *  document (no session; the server decides whether it is indexed for the
+ *  project's search, see ``uploadNotice``), any other target attaches it to
+ *  the open session. */
+export function uploadSessionFor(target, sessionId) {
+  return target === 'project' ? null : sessionId
+}
+
+/** The server's card states (``document_state.state``) that end with the
+ *  file outside search: stored without being indexed, or failed to read.
+ *  A file still waiting to be read, or already searchable, has no note. */
+const NOTICE_STATES = new Set(['stored', 'failed'])
+
+/** What to tell the user right after an upload: the server's own note
+ *  (``panel_status.detail``) when the server's card state for the row says
+ *  the file is stored outside search or failed, or null otherwise. A row
+ *  the server is still reading (indexing scheduled) is not an error, so it
+ *  has no notice. The client never guesses who may index or whether
+ *  indexing will happen; it repeats the server's state and note. */
+export function uploadNotice(doc) {
+  if (!doc || typeof doc !== 'object') return null
+  const state = doc.document_state
+  const family = state && typeof state === 'object' ? state.state : null
+  if (!NOTICE_STATES.has(family)) return null
+  const status = doc.panel_status
+  const detail = status && typeof status === 'object' ? status.detail : null
+  const text = typeof detail === 'string' ? detail.trim() : ''
+  return text || null
+}
+
 /** The by-id route of one document (``tail``: ``/preview``,
  *  ``/preview/raw``, ``/download``), naming the open chat. A file attached to
  *  a chat is reachable by id only from that chat (the server answers 404
