@@ -88,19 +88,31 @@ def clean_name(name: Any) -> str:
     return stem
 
 
+def _not_json_constant(token: str) -> Any:
+    raise ValueError(f"{token} is not a JSON number")
+
+
 def parse_data(data: Any) -> Tuple[str, Any]:
     """``(json_text, value)`` for a document: a JSON object or array, given
     as such or as JSON text. Anything else is refused."""
     value = data
     if isinstance(data, str):
         try:
-            value = json.loads(data)
+            value = json.loads(data, parse_constant=_not_json_constant)
         except ValueError as exc:
-            raise MemoryRefused(f"data is not JSON ({exc.msg} at character {exc.pos}); "
+            msg = getattr(exc, "msg", str(exc))
+            where = f" at character {exc.pos}" if getattr(exc, "pos", None) is not None else ""
+            raise MemoryRefused(f"data is not JSON ({msg}{where}); "
                                "send the whole document as a JSON object") from None
     if not isinstance(value, (dict, list)):
         raise MemoryRefused("data must be a JSON object or array (the whole document)")
-    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    try:
+        # Strict JSON only: NaN and Infinity are not JSON and would be stored
+        # as text no JSON reader accepts.
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        raise MemoryRefused("data is not JSON (NaN and Infinity are not JSON numbers); "
+                           "write the figure as a number or as text") from None
     return text, value
 
 

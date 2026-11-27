@@ -435,6 +435,12 @@ def _working_document_records(text: str) -> list[EvidenceRecord]:
     return records
 
 
+def _is_notes(name: Any) -> bool:
+    from app.agents.core.tool_registry import is_notes
+
+    return is_notes(name)
+
+
 def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[EvidenceRecord]:
     """Tool-run records (name + the arguments actually passed + the result)
     and the operator's own words."""
@@ -455,6 +461,9 @@ def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[Evidence
                     pending_args[str(tid)] = args if isinstance(args, str) else json.dumps(args or {})
         elif role == "tool":
             name = m.get("name") or None
+            if _is_notes(name):
+                # The model's own notes are never evidence for a figure.
+                continue
             tid = str(m.get("tool_call_id") or "")
             text = str(m.get("content") or "")
             records.append(EvidenceRecord(

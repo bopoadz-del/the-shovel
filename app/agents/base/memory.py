@@ -81,7 +81,7 @@ def _label(written_at: str) -> str:
     return f"Your own note, written {written_at[:10]}. A note on how to work, not a fact."
 
 
-@tool("write_memory", owner="base", display_name="Working notes", schema=WRITE_SCHEMA, params={
+@tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={
     "name": Param(label="note name", kind="text", required=True),
     "data": Param(label="note as JSON", kind="text", required=True),
 })
@@ -99,7 +99,7 @@ async def handle_write_memory(call: ToolCall) -> dict:
                       "turn": turn, "ok": True}}
 
 
-@tool("read_memory", owner="base", display_name="Working notes", schema=READ_SCHEMA, params={
+@tool("read_memory", owner="base", display_name="Working notes", kind="notes", schema=READ_SCHEMA, params={
     "name": Param(label="note name", kind="text", required=True),
 })
 async def handle_read_memory(call: ToolCall) -> dict:
@@ -115,7 +115,7 @@ async def handle_read_memory(call: ToolCall) -> dict:
                       "turn": turn_of(call), "ok": True}}
 
 
-@tool("list_memory", owner="base", display_name="Working notes", schema=LIST_SCHEMA, params={})
+@tool("list_memory", owner="base", display_name="Working notes", kind="notes", schema=LIST_SCHEMA, params={})
 async def handle_list_memory(call: ToolCall) -> dict:
     try:
         notes = await off_loop(llm_memory.listing, call.project_id or "")

@@ -13,7 +13,9 @@ deterministically and declares ``statement=``: a function from its result to
 the figures it states (``Statement``). When the model's synthesis is missing,
 that statement is the answer -- by kind, never by a list of tool names. A
 ``"search"`` tool returns passages: its result is evidence for an answer and
-is never shown as the answer itself.
+is never shown as the answer itself. A ``"notes"`` tool returns the model's
+own working notes: never a figure, never evidence for one, never a source and
+never credited in an answer (``is_notes``).
 
 A computed tool also DECLARES the reason codes its failures carry
 (``reason_codes=``). Only a declared code is ever shown to a user (as
@@ -62,7 +64,7 @@ Handler = Callable[[ToolCall], Awaitable[Dict[str, Any]]]
 
 #: "computed": deterministic figures (needs ``statement``); "search":
 #: passages, never an answer on their own; "": undeclared.
-RESULT_KINDS = ("", "computed", "search")
+RESULT_KINDS = ("", "computed", "search", "notes")
 
 #: The shape of a reason code a tool may declare.
 _REASON_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
@@ -367,6 +369,15 @@ def result_spec(name: str) -> Optional[Union[ToolSpec, ResultSpec]]:
     load()
     declare_deferred_results()
     return _TOOLS.get(name) or _RESULTS.get(name)
+
+
+def is_notes(name: Any) -> bool:
+    """True when the tool ``name`` declares its result as the model's own
+    notes (kind ``"notes"``)."""
+    if not isinstance(name, str) or not name:
+        return False
+    spec = result_spec(name)
+    return spec is not None and spec.kind == "notes"
 
 
 def tools_of_kind(kind: str) -> List[str]:

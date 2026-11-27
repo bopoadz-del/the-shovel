@@ -518,3 +518,138 @@ def test_the_admin_read_returns_the_notes_whole_and_needs_an_admin(name, data):
     with pytest.raises(HTTPException) as refused:
         admin_project_memory(pid, auth={"user_id": "u", "role": "user"})
     assert refused.value.status_code == 403
+
+
+def _streamed_text(r):
+    """The answer text the user sees: every token event of the stream."""
+    out = []
+    for line in r.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                event = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "token":
+                out.append(str(event.get("content") or ""))
+    return "".join(out)
+
+
+@pytest.mark.parametrize("call,answer", [
+    (("write_memory", {"name": "paths", "data": json.dumps({"ask_first": "which bill"})}),
+     "The slab needs 12 cubic metres of concrete."),
+    (("write_memory", {"name": "how-to", "data": json.dumps([{"start_with": "list_project_documents"}])}),
+     "Start from the project document list."),
+    (("read_memory", {"name": "paths"}), "The slab needs 12 cubic metres of concrete."),
+    (("list_memory", {}), "Ask which bill first."),
+])
+def test_the_users_answer_never_credits_or_shows_the_notes(client, monkeypatch, call, answer):
+    h = _user(client, "ans")
+    pid = _project(client, h, "Memory answer")
+    llm_memory.write(pid, "paths", json.dumps({"ask_first": "which bill"}), "c#1")
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call(call[0], call[1], "m1")]},
+                          {"content": answer}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert _tool_results(seen)["m1"]["ok"] is True
+    text = _streamed_text(r)
+    assert answer in text
+    assert "Calculated with" not in text
+    assert "Working notes" not in text and "ask_first" not in text and "start_with" not in text
+
+
+@pytest.mark.parametrize("data", ['{"x": NaN}', "[Infinity, 1]", '{"y": -Infinity}'])
+def test_nan_and_infinity_are_refused_and_the_owner_still_reads_the_project(client, monkeypatch, data):
+    from app.routers.admin import admin_project_memory
+    h = _user(client, "nan")
+    pid = _project(client, h, "Memory nan")
+    llm_memory.write(pid, "kept", json.dumps({"ok": 1}), "c#1")
+    got, _ = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "bad", "data": data})
+    assert got["ok"] is False and "not a JSON number" in got["result"]["error"]
+    assert [n["name"] for n in llm_memory.listing(pid)] == ["kept"]
+    shown = admin_project_memory(pid, auth={"user_id": "a", "role": "admin"})
+    assert [n["data"] for n in shown["notes"]] == [{"ok": 1}]
+    json.dumps(shown, allow_nan=False)  # the admin page's answer is strict JSON
+
+
+@pytest.mark.parametrize("value", [{"x": float("nan")}, [1, float("inf")], {"y": [float("-inf")]}])
+def test_a_document_given_as_a_value_with_nan_or_infinity_is_refused(value):
+    with pytest.raises(llm_memory.MemoryRefused, match="NaN and Infinity"):
+        llm_memory.parse_data(value)
+
+
+@pytest.mark.parametrize("value,stored", [('{"x": 1.5}', '{"x":1.5}'), ("[1e3, -2]", "[1000.0,-2]")])
+def test_finite_numbers_stay_accepted(value, stored):
+    assert llm_memory.parse_data(value)[0] == stored
+
+
+@pytest.mark.parametrize("first,second", [({"v": 1}, {"v": 2}), ([1], [2, 3])])
+def test_a_write_that_loses_the_insert_race_replaces_the_winners_note(monkeypatch, first, second):
+    from sqlalchemy.exc import IntegrityError
+
+    pid = f"mem-retry-{uuid.uuid4().hex[:8]}"
+    real = llm_memory.write
+    calls = []
+
+    def racing(project_id, name, data, turn=""):
+        calls.append(turn)
+        if len(calls) == 1:
+            # Another writer stores the same new note first; this insert collides.
+            real(project_id, name, json.dumps(first), "other#1")
+            raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+        return real(project_id, name, data, turn)
+
+    monkeypatch.setattr(llm_memory, "write", racing)
+    done = llm_memory.write_retrying(pid, "race", json.dumps(second), "mine#2")
+    assert calls == ["mine#2", "mine#2"]
+    assert done["created"] is False
+    note = llm_memory.read(pid, "race")
+    assert note["data"] == second and note["written_by_turn"] == "mine#2"
+
+
+def _tool_msg(name, result):
+    return {"role": "tool", "name": name, "tool_call_id": f"id-{name}",
+            "content": json.dumps({"name": name, "ok": True, "result": result})}
+
+
+@pytest.mark.parametrize("figure", [12, 2160000])
+def test_a_note_is_never_evidence_for_a_figure(figure):
+    from app.agents import citation_provenance as cp
+    note = _tool_msg("read_memory", {"status": "success", "data": {"slab_m3": figure}})
+    calc = _tool_msg("payment_certificate", {"status": "success", "net_due": figure})
+    tools = lambda msgs: [r.tool for r in cp.build_evidence(None, msgs).records if r.kind == "tool_run"]
+    assert tools([note]) == []
+    assert tools([note, calc]) == ["payment_certificate"]
+
+
+@pytest.mark.parametrize("tier", [1, 3])
+def test_a_note_that_names_a_source_is_never_a_source_row(tier):
+    from app.agents.driver.sources import cited_entry_rows
+    entry = {"id": "r-1", "statement": "Cover is 50 mm to footings.", "credibility_tier": tier,
+             "provenance": {"source": "Model's own guess", "verified_against_standard": True}}
+    answer = "Cover is 50 mm to footings."
+    assert cited_entry_rows([_tool_msg("read_memory", {"data": entry})], answer) == []
+    shown = cited_entry_rows([_tool_msg("knowledge_lookup", {"entries": [entry]})], answer)
+    assert [(r["doc_name"], r["credibility_tier"]) for r in shown] == [("Model's own guess", tier)]
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("write_memory", True), ("read_memory", True), ("list_memory", True),
+    ("search_project_documents", False), ("payment_certificate", False),
+    ("no_such_tool", False), (None, False), ("", False), (["write_memory"], False), ({"n": 1}, False),
+])
+def test_only_a_tool_declaring_notes_is_notes(name, expected):
+    from app.agents.core.tool_registry import is_notes
+    assert is_notes(name) is expected
+
+
+@pytest.mark.parametrize("calls,expected", [
+    ([("write_memory", {"name": "n", "data": "{}"}), ("payment_certificate", {"gross_valuation": 10})],
+     1),
+    ([("list_memory", {}), ("read_memory", {"name": "n"})], 0),
+])
+def test_the_credit_lines_skip_notes_tools_only(calls, expected):
+    from app.agents.driver.sources import tool_credit_lines
+    text = tool_credit_lines(calls)
+    assert text.count("Calculated with") == expected
+    assert "Working notes" not in text
