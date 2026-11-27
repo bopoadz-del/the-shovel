@@ -9,7 +9,7 @@ import uuid
 import numpy as np
 import pytest
 
-from app.agents.base.bill_section_map import NAME
+from app.agents.base.bill_section_map import NAME, _error, handle_bill_section_map
 from app.agents.core import tool_registry
 from app.core.rag.vector_store import get_store
 
@@ -21,9 +21,10 @@ def _index(project_id: str, doc_id: str, chunks: list[str]) -> None:
 
 async def _call(project_id, args):
     tool_registry.load()
-    spec = tool_registry.get(NAME)
-    return await spec.handler(tool_registry.ToolCall(agent=None, name=NAME, args=args,
-                                                     project_id=project_id))
+    # The registry answers the tool's name with this module's handler.
+    assert tool_registry.get(NAME).handler is handle_bill_section_map
+    return await handle_bill_section_map(tool_registry.ToolCall(agent=None, name=NAME, args=args,
+                                                                project_id=project_id))
 
 
 def _ids():
@@ -99,6 +100,13 @@ async def test_another_projects_document_is_never_read(chunks):
 async def test_missing_project_or_document_is_refused(project_id, args, error):
     out = await _call(project_id, args)
     assert out == {"name": NAME, "ok": False, "result": {"status": "error", "error": error}}
+    assert out == _error(error)
+
+
+@pytest.mark.parametrize("message", ["no project in scope", "provide document_id"])
+def test_error_is_a_failed_result_carrying_its_message(message):
+    assert _error(message) == {"name": NAME, "ok": False,
+                               "result": {"status": "error", "error": message}}
 
 
 @pytest.mark.asyncio
@@ -109,13 +117,14 @@ async def test_an_unknown_document_is_refused():
     assert out["ok"] is False
 
 
-def test_the_tool_is_offered_on_the_driver_path_and_listed_in_the_catalogue():
+@pytest.mark.parametrize("hat", [None, "qaqc"])
+def test_the_tool_is_offered_on_the_driver_path_and_listed_in_the_catalogue(hat):
     from app.agents.driver import catalogue, tools
     from tests.test_driver_mode import _agent
 
     tool_registry.load()
     assert NAME in tool_registry.tools_of("base")
-    offered = tools.offered(_agent(), "synthetic-proj", None, ["design"])
+    offered = tools.offered(_agent(), "synthetic-proj", hat, ["design", "qaqc"])
     names = [(t.get("function") or {}).get("name") for t in offered]
     assert NAME in names
     entry = {e["id"]: e for e in catalogue.entries()}[f"tool:{NAME}"]
