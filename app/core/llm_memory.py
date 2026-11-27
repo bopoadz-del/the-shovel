@@ -11,8 +11,9 @@ This store is separate from ``agent_memory``'s facts on purpose: a fact is a
 key/value the app may hand to a prompt once verified; a note is the model's
 own JSON on how to work, handed back only when it asks for it.
 
-Limits are settings (environment): ``LLM_MEMORY_MAX_BYTES`` per document and
-``LLM_MEMORY_MAX_DOCS`` per project.
+Limits are settings (environment): ``LLM_MEMORY_MAX_BYTES`` per document,
+``LLM_MEMORY_MAX_DOCS`` per project and ``LLM_MEMORY_MAX_DEPTH`` levels of
+nesting in a document.
 """
 from __future__ import annotations
 
@@ -32,6 +33,12 @@ from app.core.models import LlmMemory
 
 DEFAULT_MAX_BYTES = 16384
 DEFAULT_MAX_DOCS = 50
+DEFAULT_MAX_DEPTH = 32
+#: No setting raises the nesting limit above this. A document nested much
+#: deeper can be parsed and stored and then not written out again from inside
+#: a turn (the JSON writer runs out of stack), so every later read of it
+#: would end the turn.
+DEPTH_CEILING = 100
 #: Letters, digits, hyphen and underscore, 1-64 characters; ``.json`` optional.
 _NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -57,6 +64,30 @@ def max_bytes() -> int:
 
 def max_docs() -> int:
     return _setting("LLM_MEMORY_MAX_DOCS", DEFAULT_MAX_DOCS)
+
+
+def max_depth() -> int:
+    return min(_setting("LLM_MEMORY_MAX_DEPTH", DEFAULT_MAX_DEPTH), DEPTH_CEILING)
+
+
+def nested_deeper_than(value: Any, limit: int) -> bool:
+    """True when ``value`` holds objects or arrays more than ``limit`` deep.
+    Counted from a list of what is left to visit, so the count cannot itself
+    run out of stack on the document it measures."""
+    left = [(value, 1)]
+    while left:
+        node, level = left.pop()
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        if level > limit:
+            return True
+        left.extend((child, level + 1) for child in (node.values() if isinstance(node, dict) else node))
+    return False
+
+
+def _too_deep(limit: int) -> MemoryRefused:
+    return MemoryRefused(f"data is nested more than {limit} levels deep (the limit is {limit}); "
+                         "write the document with less nesting")
 
 
 def init_db() -> None:
@@ -110,6 +141,9 @@ def parse_data(data: Any) -> Tuple[str, Any]:
     if isinstance(data, str):
         try:
             value = json.loads(data, parse_constant=_not_json_constant)
+        except RecursionError:
+            # Nested past what the JSON reader itself can follow.
+            raise _too_deep(max_depth()) from None
         except ValueError as exc:
             msg = getattr(exc, "msg", str(exc))
             where = f" at character {exc.pos}" if getattr(exc, "pos", None) is not None else ""
@@ -117,6 +151,10 @@ def parse_data(data: Any) -> Tuple[str, Any]:
                                "send the whole document as a JSON object") from None
     if not isinstance(value, (dict, list)):
         raise MemoryRefused("data must be a JSON object or array (the whole document)")
+    if nested_deeper_than(value, max_depth()):
+        # Before it is written out: a document this deep is refused, never
+        # stored as a note no later turn could read back.
+        raise _too_deep(max_depth())
     try:
         # Strict JSON only: NaN and Infinity are not JSON and would be stored
         # as text no JSON reader accepts.

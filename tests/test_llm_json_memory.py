@@ -893,3 +893,148 @@ def test_replace_reports_whether_there_was_a_note_to_replace(first, second):
     with SessionLocal() as s, s.begin():
         assert llm_memory._replace(s, pid, "n", row) == 1
     assert llm_memory.read(pid, "n")["data"] == second
+
+
+def _nested(depth, kind="list"):
+    """JSON text of a document ``depth`` levels deep, written without
+    building it (the test's own JSON writer would run out of stack)."""
+    return "[" * depth + "]" * depth if kind == "list" else '{"k":' * depth + "1" + "}" * depth
+
+
+@pytest.mark.parametrize("depth,kind", [(1000, "list"), (1500, "list"), (3000, "dict"), (40, "dict")])
+def test_a_document_nested_too_deep_is_an_error_the_model_receives(client, monkeypatch, depth, kind):
+    """Sent as JSON text. Past what the JSON reader follows, or only past the
+    limit: the model is told it is the nesting, the turn ends as an answer
+    and nothing is stored."""
+    h = _user(client, "deep")
+    pid = _project(client, h, "Memory deep")
+    got, _ = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "deep", "data": _nested(depth, kind)})
+    assert got["ok"] is False
+    assert f"nested more than {llm_memory.DEFAULT_MAX_DEPTH} levels deep" in got["result"]["error"]
+    assert llm_memory.listing(pid) == []
+
+
+@pytest.mark.parametrize("depth,by_whom", [(40, "the notes"), (199, "the notes"), (200, "the turn"), (3000, "the turn")])
+def test_a_document_given_as_a_value_nested_too_deep_is_refused_before_any_tool_runs_out_of_stack(
+        client, monkeypatch, depth, by_whom):
+    """Sent as a JSON value inside the call's arguments. Up to the turn's own
+    limit the notes refuse it with their limit; past it the call's arguments
+    are not read at all and the tool is not run. Either way the model gets
+    an error it can act on and the turn ends as an answer."""
+    h = _user(client, "deepv")
+    pid = _project(client, h, "Memory deep value")
+    arguments = '{"name":"deep","data":' + _nested(depth) + "}"
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call("write_memory", arguments, "m1")]},
+                          {"content": "Done."}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    got = _tool_results(seen)["m1"]
+    assert got["ok"] is False
+    said = (got.get("result") or {}).get("error") or got.get("error")
+    assert ("arguments of this call are nested too deeply" in said) == (by_whom == "the turn")
+    assert ("nested more than" in said) == (by_whom == "the notes")
+    assert "Done." in _streamed_text(r) and "temporarily unavailable" not in r.text
+    assert llm_memory.listing(pid) == []
+
+
+@pytest.mark.parametrize("limit,kind", [(3, "list"), (5, "dict")])
+def test_the_nesting_limit_is_a_setting_and_a_note_at_the_limit_reads_back_in_a_later_turn(
+        client, monkeypatch, limit, kind):
+    monkeypatch.setenv("LLM_MEMORY_MAX_DEPTH", str(limit))
+    h = _user(client, "lvl")
+    pid = _project(client, h, "Memory levels")
+    over, _ = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "over", "data": _nested(limit + 1, kind)})
+    assert over["ok"] is False and f"the limit is {limit}" in over["result"]["error"]
+    fits, _ = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "fits", "data": _nested(limit, kind)})
+    assert fits["ok"] is True
+    back, _ = _run_one(client, monkeypatch, h, pid, "read_memory", {"name": "fits"})
+    assert back["ok"] is True and back["result"]["data"] == json.loads(_nested(limit, kind))
+    assert [n["name"] for n in llm_memory.listing(pid)] == ["fits"]
+
+
+@pytest.mark.parametrize("kind", ["list", "dict"])
+def test_a_note_at_the_highest_limit_a_setting_can_give_is_written_and_read_in_a_later_turn(client, monkeypatch, kind):
+    """The setting cannot be raised past the ceiling, and a note as deep as
+    the ceiling still goes out to the model and into the trace whole."""
+    monkeypatch.setenv("LLM_MEMORY_MAX_DEPTH", "100000")
+    assert llm_memory.max_depth() == llm_memory.DEPTH_CEILING
+    h = _user(client, "ceil")
+    pid = _project(client, h, "Memory ceiling")
+    deepest = _nested(llm_memory.DEPTH_CEILING, kind)
+    assert _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "top", "data": deepest})[0]["ok"] is True
+    back, _ = _run_one(client, monkeypatch, h, pid, "read_memory", {"name": "top"})
+    assert back["ok"] is True and back["result"]["data"] == json.loads(deepest)
+    over, _ = _run_one(client, monkeypatch, h, pid, "write_memory",
+                       {"name": "over", "data": _nested(llm_memory.DEPTH_CEILING + 1, kind)})
+    assert over["ok"] is False and f"the limit is {llm_memory.DEPTH_CEILING}" in over["result"]["error"]
+
+
+@pytest.mark.parametrize("setting,expected", [("0", llm_memory.DEFAULT_MAX_DEPTH), ("-2", llm_memory.DEFAULT_MAX_DEPTH),
+                                              ("7", 7), ("100", 100), ("101", llm_memory.DEPTH_CEILING)])
+def test_the_nesting_limit_falls_back_to_the_default_and_stops_at_the_ceiling(monkeypatch, setting, expected):
+    monkeypatch.setenv("LLM_MEMORY_MAX_DEPTH", setting)
+    assert llm_memory.max_depth() == expected
+
+
+@pytest.mark.parametrize("value,limit,deeper", [
+    ({}, 1, False), ([], 1, False), ({"a": 1, "b": "x"}, 1, False), ({"a": [1]}, 1, True),
+    ({"a": [1]}, 2, False), ([[["x"]]], 2, True), ([[["x"]]], 3, False),
+    ({"a": 1, "b": [{"c": [0]}]}, 3, True), ({"a": 1, "b": [{"c": [0]}]}, 4, False),
+    ([1, 2, (3, [4])], 2, True), ("text", 0, False), (7, 0, False), ([], 0, True),
+])
+def test_nesting_is_counted_through_objects_and_arrays_alike(value, limit, deeper):
+    assert llm_memory.nested_deeper_than(value, limit) is deeper
+
+
+@pytest.mark.parametrize("depth", [3000, 5000])
+def test_text_nested_past_what_the_json_reader_follows_is_refused_as_too_deep(depth):
+    with pytest.raises(llm_memory.MemoryRefused) as refused:
+        llm_memory.parse_data(_nested(depth))
+    assert f"nested more than {llm_memory.DEFAULT_MAX_DEPTH} levels deep" in str(refused.value)
+
+
+_ROW_NOTES = {
+    "steps": [{"step": "rates", "rows": 12, "weeks": 3}, {"step": "totals", "rows": 40, "weeks": 5}],
+    "prices": [{"item": "kerb", "rate": 45, "qty": 120}, {"item": "sub-base", "rate": 18, "qty": 300}],
+}
+
+
+@pytest.mark.parametrize("call,answer,note_words", [
+    (("read_memory", {"name": "steps"}), "Check the 12 rate rows first.", ("totals", "| Step")),
+    (("read_memory", {"name": "prices"}), "Start from the kerb rate of 45.", ("sub-base", "| Item")),
+    (("list_memory", {}), "The steps note is 76 bytes long.", ("written_at", "| Name")),
+])
+def test_a_note_kept_as_rows_is_never_added_to_the_users_answer_as_a_table(client, monkeypatch, call, answer,
+                                                                           note_words):
+    """A note that is a list of records, and the list of notes itself, are
+    lists of rows like a tool's. Naming one of their figures in the answer
+    does not put them on screen."""
+    h = _user(client, "rows")
+    pid = _project(client, h, "Memory rows")
+    for name, rows in _ROW_NOTES.items():
+        llm_memory.write(pid, name, json.dumps(rows), "c#1")
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call(call[0], call[1], "m1")]},
+                          {"content": answer}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert _tool_results(seen)["m1"]["ok"] is True
+    text = _streamed_text(r)
+    assert text.strip() == answer
+    assert "| ---" not in text
+    for words in note_words:
+        assert words not in text
+
+
+@pytest.mark.parametrize("pid_tag,name", [("a", "first"), ("b", "second.json")])
+def test_write_takes_the_new_note_lock_for_a_new_note_and_not_for_a_replace(monkeypatch, pid_tag, name):
+    pid = f"mem-lock-{pid_tag}-{uuid.uuid4().hex[:8]}"
+    taken = []
+    real = llm_memory._one_new_note_at_a_time
+    monkeypatch.setattr(llm_memory, "_one_new_note_at_a_time",
+                        lambda session, project_id: (taken.append(project_id), real(session, project_id))[1])
+    assert llm_memory.write(pid, name, '{"v": 1}', "t#1")["created"] is True
+    assert taken == [pid]
+    assert llm_memory.write(pid, name, '{"v": 2}', "t#2")["created"] is False
+    assert taken == [pid]
