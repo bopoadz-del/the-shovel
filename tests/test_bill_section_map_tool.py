@@ -326,3 +326,12 @@ def test_an_answer_naming_section_numbers_gets_no_table_added(monkeypatch, chunk
     shown = _turn(monkeypatch, project_id, (NAME, {"document_id": doc_id}), answer)
     assert answer in shown
     assert "|" not in shown and "chunk" not in shown.lower()
+
+
+@pytest.mark.parametrize("raise_errors", [False, True])
+@pytest.mark.parametrize("project_id, doc_ids", [(None, ["d-x"]), ("", ["d-x"]), ("p-x", None), ("p-x", [])])
+def test_the_store_reads_nothing_for_no_project_or_no_documents(project_id, doc_ids, raise_errors):
+    # The empty-input guard answers before any read, with or without
+    # raise_errors: nothing to read is not a failure.
+    store = get_store()
+    assert store.chunks_for_docs(project_id, doc_ids, all_rows=True, raise_errors=raise_errors) == []
