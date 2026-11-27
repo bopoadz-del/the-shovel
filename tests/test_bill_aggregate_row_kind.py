@@ -17,6 +17,18 @@ def _r(page, desc, amount="", qty="", rate="", unit="", ref="", path=("Bill A",)
                         pages=[page] if page is not None else [])
 
 
+def _spans(rows):
+    """The page range of each bill the fixture rows' paths name: the ranges
+    a derived copy stores from the document's own summary pages."""
+    out = {}
+    for row in rows:
+        for bill in agg.row_bills(row):
+            if row.pages:
+                lo, hi = out.get(bill, (row.pages[0], row.pages[0]))
+                out[bill] = (min(lo, row.pages[0]), max(hi, row.pages[0]))
+    return out
+
+
 def _kinds(rows):
     return agg.row_kinds(rows)
 
@@ -159,7 +171,7 @@ def _bill(n, p1, p2, total, *, first=10, extra=()):
 ])
 def test_bill_whose_items_add_to_its_printed_total_reconciles(n, p1, p2, total):
     rows = _bill(n, p1, p2, total)
-    [check] = agg.bill_checks(rows, {n})
+    [check] = agg.bill_checks(rows, {n}, _spans(rows))
     assert check["state"] == "RECONCILED"
     assert check["printed_total"] == agg.g.parse_number(total)
     assert check["printed_page"] == 12
@@ -176,7 +188,7 @@ def test_bill_whose_items_do_not_add_up_fails(n, p1, p2, total):
     items no longer reach the printed bill total."""
     rows = _bill(n, p1, p2, total)
     rows[0] = _r(10, "a", "1.00", "1", "1", path=rows[0].path)
-    [check] = agg.bill_checks(rows, {n})
+    [check] = agg.bill_checks(rows, {n}, _spans(rows))
     assert check["state"] == "FAILED"
     assert check["printed_total"] == agg.g.parse_number(total)
 
@@ -202,7 +214,7 @@ def test_bill_tolerance_is_one_unit_of_the_printed_totals_last_place(b2, state, 
         _r(3, "r1", fig(30000), path=path), _r(3, "r2", fig(70000), path=path),
         _r(3, "bill total", fig(100000), path=path),
     ]
-    [check] = agg.bill_checks(rows, {"4"})
+    [check] = agg.bill_checks(rows, {"4"}, _spans(rows))
     assert check["printed_total"] == 1000.0
     assert check["rows_summed"] == 4
     assert check["state"] == state
@@ -223,7 +235,7 @@ def test_the_bills_last_total_by_page_is_its_printed_total(p1, p2, p3):
         _r(13, "c", p3, "1", p3, path=path), _r(13, "pt", p3, path=path),
         _r(14, "part", part, path=path), _r(14, "r3", p3, path=path), _r(14, "bill", whole, path=path),
     ]
-    [check] = agg.bill_checks(rows, {"6"})
+    [check] = agg.bill_checks(rows, {"6"}, _spans(rows))
     assert (check["printed_page"], check["printed_total"]) == (14, f(whole))
     assert check["state"] == "RECONCILED"
 
@@ -237,7 +249,7 @@ def test_a_page_total_over_items_is_not_the_bill_total(p1, p2):
         _r(1, "a", p1, "1", p1, path=path), _r(1, "b", p2, "1", p2, path=path),
         _r(1, "page total", str(agg.g.parse_number(p1) + agg.g.parse_number(p2)), path=path),
     ]
-    [check] = agg.bill_checks(rows, {"3"})
+    [check] = agg.bill_checks(rows, {"3"}, _spans(rows))
     assert check["state"] == "UNCHECKED"
     assert check["printed_total"] is None
     assert check["rows_summed"] == 2
@@ -251,17 +263,17 @@ def test_a_collection_mixing_a_repeat_and_an_item_is_not_the_bill_total(p1, p2):
         _r(2, "bf", p1, path=path), _r(2, "b", p2, "1", p2, path=path),
         _r(2, "pt", str(agg.g.parse_number(p1) + agg.g.parse_number(p2)), path=path),
     ]
-    [check] = agg.bill_checks(rows, {"5"})
+    [check] = agg.bill_checks(rows, {"5"}, _spans(rows))
     assert check["state"] == "UNCHECKED"
 
 
 @pytest.mark.parametrize("n, other", [("7", "8"), ("12", "2")])
 def test_rows_of_another_bill_are_not_in_the_check(n, other):
     rows = _bill(n, "300.00", "700.00", "1,000.00") + _bill(other, "50.00", "25.00", "75.00", first=20)
-    checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other})}
+    checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other}, _spans(rows))}
     assert checks[n]["items_sum"] == 1000.0 and checks[n]["state"] == "RECONCILED"
     assert checks[other]["items_sum"] == 75.0 and checks[other]["printed_page"] == 22
-    [only] = agg.bill_checks(rows, {other})
+    [only] = agg.bill_checks(rows, {other}, _spans(rows))
     assert only["bill"] == other
 
 
@@ -270,7 +282,7 @@ def test_item_rows_without_an_amount_are_counted_not_summed(desc):
     path = ("Bill No. 9 - Works",)
     extra = (_r(11, desc, "", "4", "", path=path), _r(11, desc + " too", "", "", "", path=path))
     rows = _bill("9", "300.00", "700.00", "1,000.00", extra=extra)
-    [check] = agg.bill_checks(rows, {"9"})
+    [check] = agg.bill_checks(rows, {"9"}, _spans(rows))
     assert check["rows_without_amount"] == 2
     assert check["rows_summed"] == 2
     assert check["state"] == "RECONCILED"
@@ -278,12 +290,12 @@ def test_item_rows_without_an_amount_are_counted_not_summed(desc):
 
 @pytest.mark.parametrize("bills", [set(), frozenset()])
 def test_no_bill_asked_gives_no_checks(bills):
-    assert agg.bill_checks(_bill("7", "1", "2", "3"), bills) == []
+    assert agg.bill_checks(_bill("7", "1", "2", "3"), bills, _spans(_bill("7", "1", "2", "3"))) == []
 
 
 @pytest.mark.parametrize("n", ["7", "1,313"])
 def test_bill_with_no_rows_is_unchecked_with_nothing_summed(n):
-    [check] = agg.bill_checks(_bill("2", "1", "2", "3"), {n})
+    [check] = agg.bill_checks(_bill("2", "1", "2", "3"), {n}, {n.replace(",", ""): (50, 60)})
     assert check["bill"] == n.replace(",", "")
     assert (check["rows_summed"], check["items_sum"], check["state"]) == (0, 0, "UNCHECKED")
 
@@ -294,10 +306,14 @@ def test_bill_with_no_rows_is_unchecked_with_nothing_summed(n):
 ])
 def test_aggregate_returns_the_asked_bills_check_with_the_sum(n, p1, p2, total):
     rows = _bill(n, p1, p2, total) + _bill("99", "5", "6", "11", first=40)
-    res = agg.aggregate(rows, terms="", measure="amount", ask=f"What is the total amount of Bill No. {n}?")
+    ask = f"What is the total amount of Bill No. {n}?"
+    res = agg.aggregate(rows, terms="", measure="amount", ask=ask, ranges=_spans(rows))
     assert res["sum"] == agg.g.parse_number(total)
     assert [c["bill"] for c in res["bill_checks"]] == [n]
     assert res["bill_checks"][0]["state"] == "RECONCILED"
+    # no stored page ranges: the check says membership was not read, no verdict
+    [bare] = agg.aggregate(rows, terms="", measure="amount", ask=ask)["bill_checks"]
+    assert (bare["membership"], bare["state"], bare["items_sum"]) == ("not_read", "UNCHECKED", None)
 
 
 @pytest.mark.parametrize("terms", ["a", "b"])
@@ -324,7 +340,7 @@ def test_a_page_total_is_not_joined_to_the_next_pages_figureless_line(p1, p2):
     ]
     items = agg.join_page_continuations(rows)
     assert [r.pages for r in items if r.description == "carried" and r.amount] == [[1], [2]]
-    [check] = agg.bill_checks(items, {"19"})
+    [check] = agg.bill_checks(items, {"19"}, _spans(items))
     assert (check["rows_summed"], check["state"]) == (2, "RECONCILED")
     assert check["items_sum"] == f(total)
 
@@ -352,7 +368,7 @@ def _unpriced(n, qtys, *, total=None):
 
 @pytest.mark.parametrize("n, qtys", [("1", ["1", "1", ""]), ("14", ["", "250"])])
 def test_bill_with_no_rate_or_amount_on_any_item_is_not_priced(n, qtys):
-    [check] = agg.bill_checks(_unpriced(n, qtys), {n})
+    [check] = agg.bill_checks(_unpriced(n, qtys), {n}, _spans(_unpriced(n, qtys)))
     assert check["state"] == "NOT_PRICED"
     assert (check["rows_summed"], check["rows_without_amount"]) == (0, len(qtys))
     assert check["items_sum"] == 0
@@ -362,7 +378,7 @@ def test_bill_with_no_rate_or_amount_on_any_item_is_not_priced(n, qtys):
 def test_an_amount_only_line_prices_the_bill(total):
     """A line that prints only an amount, with nothing above it to collect, is
     an item (a lump sum): the bill prints a price, so it is never NOT_PRICED."""
-    [check] = agg.bill_checks(_unpriced("2", ["1", "1"], total=total), {"2"})
+    [check] = agg.bill_checks(_unpriced("2", ["1", "1"], total=total), {"2"}, _spans(_unpriced("2", ["1", "1"], total=total)))
     assert check["state"] == "UNCHECKED"
     assert check["items_sum"] == agg.g.parse_number(total)
 
@@ -373,14 +389,14 @@ def test_one_priced_item_makes_the_bill_priced(cell):
     bill, so the blanks are counted as rows without an amount, never NOT_PRICED."""
     rows = _unpriced("3", ["1", "2", "3"])
     rows[1] = agg.SheetRow(**{**rows[1].__dict__, cell[0]: cell[1]})
-    [check] = agg.bill_checks(rows, {"3"})
+    [check] = agg.bill_checks(rows, {"3"}, _spans(rows))
     assert check["state"] == "UNCHECKED"
 
 
 @pytest.mark.parametrize("n, other", [("1", "7"), ("20", "4")])
 def test_not_priced_is_per_bill(n, other):
     rows = _unpriced(n, ["1", "1"]) + _bill(other, "300.00", "700.00", "1,000.00", first=50)
-    checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other})}
+    checks = {c["bill"]: c for c in agg.bill_checks(rows, {n, other}, _spans(rows))}
     assert checks[n]["state"] == "NOT_PRICED"
     assert checks[other]["state"] == "RECONCILED"
 
@@ -434,7 +450,7 @@ def test_equal_page_totals_on_the_collection_page_add_to_the_bill_total(pages, p
     kinds = _kinds(rows)
     assert kinds[-1] == "collection"
     assert kinds[-1 - pages:-1] == ["repeat"] * pages
-    [check] = agg.bill_checks(rows, {"5"})
+    [check] = agg.bill_checks(rows, {"5"}, _spans(rows))
     assert check["state"] == "RECONCILED"
     assert check["items_sum"] == pytest.approx(each * pages)
     assert check["printed_total"] == pytest.approx(each * pages)
@@ -531,3 +547,42 @@ def test_the_restatement_must_be_in_the_same_bill(later_bill, want):
     rows = [_r(3, "priced", "1,000", "10", "100", path=five), _r(3, "line", "1,000", path=five),
             _r(4, "later line", "1,000", path=(later_bill,))]
     assert _kinds(rows)[1] == want
+
+
+@pytest.mark.parametrize("n,carried", [("5", "4"), ("12", "11")])
+def test_a_carried_heading_naming_the_bill_before_does_not_move_rows(n, carried):
+    rows = _bill(n, "100", "50", "150")
+    # the first item page's heading is carried down from the bill before
+    rows[0] = _r(10, "a", "100", "1", "100", path=(f"Bill No. {carried} - Works",))
+    [check] = agg.bill_checks(rows, {n}, {n: (10, 12)})
+    assert (check["items_sum"], check["state"], check["membership"]) == (150.0, agg.STATE_RECONCILED, "page_range")
+    [before] = agg.bill_checks(rows, {carried}, {carried: (1, 9), n: (10, 12)})
+    assert (before["rows_summed"], before["state"]) == (0, agg.STATE_UNCHECKED)
+
+
+@pytest.mark.parametrize("ranges", [None, {}, {"8": (1, 30)}])
+def test_a_bill_with_no_page_range_states_no_sum_and_no_verdict(ranges):
+    rows = _bill("3", "100", "50", "150")
+    [check] = agg.bill_checks(rows, {"3"}, ranges)
+    assert check["membership"] == agg.MEMBERSHIP_NOT_READ
+    assert (check["items_sum"], check["rows_summed"], check["state"]) == (None, 0, agg.STATE_UNCHECKED)
+
+
+@pytest.mark.parametrize("meta,expected", [
+    ({"bill_states": {"bills": [{"label": "5", "pages": [101, 113]},
+                                {"label": "D/6/23", "pages": [137, 115]}]}},
+     {"5": (101, 113), "6": (115, 137)}),
+    ({"bill_states": {"bills": [{"label": "Bill No. 1,313", "pages": [2, 4]},
+                                {"label": "7", "pages": [1]},
+                                {"label": "8", "pages": [True, 3]},
+                                {"label": "", "pages": [5, 6]}]}},
+     {"1313": (2, 4)}),
+])
+def test_bill_page_ranges_reads_the_stored_ranges(meta, expected):
+    assert agg.bill_page_ranges(meta) == expected
+
+
+@pytest.mark.parametrize("meta", [None, {}, {"bill_states": None}, {"bill_states": {"bills": "x"}},
+                                  {"bill_states": {"bills": [{"label": "3", "pages": None}]}}])
+def test_bill_page_ranges_is_none_when_nothing_usable_is_stored(meta):
+    assert agg.bill_page_ranges(meta) is None

@@ -316,11 +316,49 @@ STATE_UNCHECKED = "UNCHECKED"
 STATE_NOT_PRICED = "NOT_PRICED"
 
 
-def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[str, Any]]:
+MEMBERSHIP_PAGE_RANGE = "page_range"
+MEMBERSHIP_NOT_READ = "not_read"
+
+
+def bill_page_ranges(meta: dict[str, Any] | None) -> dict[str, tuple[int, int]] | None:
+    """Each bill's inclusive page range as the derived copy stores it
+    (``bill_states.bills[].pages``, read from the document's own summary
+    pages); ``None`` when the copy stores none. A bill label that is a page
+    label (part/bill/page) is keyed by its bill part."""
+    states = (meta or {}).get("bill_states")
+    bills = states.get("bills") if isinstance(states, dict) else None
+    if not isinstance(bills, list):
+        return None
+    out: dict[str, tuple[int, int]] = {}
+    for bill in bills:
+        pages = bill.get("pages") if isinstance(bill, dict) else None
+        if not (isinstance(pages, list) and len(pages) == 2
+                and all(isinstance(p, int) and not isinstance(p, bool) for p in pages)):
+            continue
+        label = str(bill.get("label") or "")
+        named = _ASK_BILL_RE.search(label)
+        page_label = _PAGE_LABEL_RE.search(label)
+        key = (_bill_number(named.group(1)) if named
+               else page_label.group(2).upper() if page_label else _bill_number(label))
+        if key:
+            out[key] = (min(pages), max(pages))
+    return out or None
+
+
+def bill_checks(
+    items: Sequence[SheetRow],
+    bills: Iterable[str],
+    ranges: dict[str, tuple[int, int]] | None = None,
+) -> list[dict[str, Any]]:
     """The arithmetic check of each bill in ``bills`` over its own rows.
 
     ``items`` are the rows after :func:`join_page_continuations`. A row is in a
-    bill when its own path names the bill (:func:`row_bills`). Per bill:
+    bill when its first page lies in the bill's page range (``ranges``, from
+    :func:`bill_page_ranges`). A heading path is never trusted for this: a
+    heading carried down from the bill before names the wrong bill. A bill
+    with no range has ``membership`` ``not_read``: nothing is summed and the
+    state is ``UNCHECKED``, never a verdict on rows that may not be its own.
+    Per bill with a range (``membership`` ``page_range``):
 
     * ``rows_summed`` -- the bill's item rows that carry an amount, and
       ``items_sum`` their sum; ``rows_without_amount`` -- its item rows that
@@ -343,7 +381,14 @@ def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[st
     kinds, summaries = _classify(items)
     out: list[dict[str, Any]] = []
     for bill in sorted({_bill_number(b) for b in bills}):
-        mine = [i for i, row in enumerate(items) if bill in row_bills(row)]
+        span = (ranges or {}).get(bill)
+        if span is None:
+            out.append({"bill": bill, "membership": MEMBERSHIP_NOT_READ, "rows_summed": 0,
+                        "rows_without_amount": 0, "items_sum": None, "printed_total": None,
+                        "printed_page": None, "state": STATE_UNCHECKED})
+            continue
+        mine = [i for i, row in enumerate(items)
+                if row.pages and span[0] <= row.pages[0] <= span[1]]
         item_rows = [items[i] for i in mine if kinds[i] == ROW_ITEM]
         amounts = [g.parse_number(row.amount) for row in item_rows]
         priced = any(g.parse_number(row.rate) is not None or a is not None
@@ -353,6 +398,7 @@ def bill_checks(items: Sequence[SheetRow], bills: Iterable[str]) -> list[dict[st
         lines = sorted((i for i in mine if i in summaries), key=lambda i: items[i].pages[-1])
         check: dict[str, Any] = {
             "bill": bill,
+            "membership": MEMBERSHIP_PAGE_RANGE,
             "rows_summed": len(summed),
             "rows_without_amount": len(amounts) - len(summed),
             "items_sum": total,
@@ -869,8 +915,12 @@ def aggregate(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     ask: str | None = None,
+    ranges: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
+
+    ``ranges`` are the bills' page ranges (:func:`bill_page_ranges`); the
+    ``bill_checks`` of the result place rows by them.
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
@@ -956,7 +1006,7 @@ def aggregate(
         } if scope is not None else None),
         "rows_scanned": len(items) + len(others),
         "not_items": not_items,
-        "bill_checks": bill_checks(joined, scope.bills if scope is not None else ()),
+        "bill_checks": bill_checks(joined, scope.bills if scope is not None else (), ranges),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
         "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
@@ -1038,7 +1088,8 @@ def aggregate_project_bills(
             _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
             bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
             continue
-        result = aggregate(rows, terms=terms, section=section, measure=measure, ask=ask)
+        result = aggregate(rows, terms=terms, section=section, measure=measure, ask=ask,
+                           ranges=bill_page_ranges(meta))
         bills.append({**head, "status": "success", **result})
     out = {"status": "success", "bills": bills}
     _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
