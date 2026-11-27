@@ -373,13 +373,21 @@ def _cap_names(result: Dict[str, Any], keys: Any, limit: int) -> None:
             del result[more_key]
 
 
-def read_ids(ids: Any) -> Dict[str, Any]:
-    """What a lookup call read, for the turn's trace: the asked ids the
-    catalogue holds, and only a count of those it does not hold. An id the
-    catalogue does not hold is the model's own text, so it is never kept."""
-    held = {e["id"] for e in entries()}
-    asked = asked_ids(ids)
-    return {"ids": [i for i in asked if i in held], "unknown": sum(1 for i in asked if i not in held)}
+def read_ids(result: Any) -> Dict[str, Any]:
+    """What a lookup call gave the model, for the turn's trace, read from the
+    lookup's own result: the ids of the entries it returned (what the model
+    read), how many held ids it named or counted without returning, and how
+    many asked ids the catalogue does not hold. An id the catalogue does not
+    hold is the model's own text, so it is only ever counted. Nothing is
+    read from the catalogue again: this is the result, re-told."""
+    result = result if isinstance(result, dict) else {}
+    returned = [e for e in result.get("entries") or [] if isinstance(e, dict)]
+
+    def count(key: str) -> int:
+        return len(result.get(key) or []) + int(result.get(f"{key}_more") or 0)
+
+    return {"ids": [str(e.get("id") or "") for e in returned],
+            "not_returned": count("not_returned"), "unknown": count("unknown")}
 
 
 def lookup(ids: Any, limit: Optional[int] = None) -> Dict[str, Any]:

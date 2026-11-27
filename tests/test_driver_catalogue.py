@@ -836,7 +836,7 @@ def test_the_turn_trace_records_held_ids_as_read(monkeypatch, _stream_through_ca
     first, second = held[pick[0]], held[pick[1]]
     line = _driver_turn_line(monkeypatch, caplog, [f" {first} ", first, second])
     [call] = _looked_up(line)
-    assert (call["ids"], call["unknown"]) == ([first, second], 0)
+    assert (call["ids"], call["not_returned"], call["unknown"]) == ([first, second], 0, 0)
 
 
 @pytest.mark.parametrize("words", ["my card is 4111 1111 1111 1111",
@@ -848,7 +848,7 @@ def test_the_turn_trace_never_keeps_an_id_the_catalogue_does_not_hold(monkeypatc
     held = catalogue.entries()[0]["id"]
     line = _driver_turn_line(monkeypatch, caplog, [words, held, words + " again"], user_message=words)
     [call] = _looked_up(line)
-    assert (call["ids"], call["unknown"]) == ([held], 2)
+    assert (call["ids"], call["not_returned"], call["unknown"]) == ([held], 0, 2)
     assert words.split()[-1] not in line.split("DRIVER_TURN ", 1)[1]
 
 
@@ -858,15 +858,69 @@ def test_the_turn_trace_stays_small_for_many_long_unknown_ids(monkeypatch, _stre
     asked = [f"{i:06d}" + "x" * (chars - 6) for i in range(count)]
     line = _driver_turn_line(monkeypatch, caplog, asked)
     [call] = _looked_up(line)
-    assert (call["ids"], call["unknown"]) == ([], count)
+    assert (call["ids"], call["not_returned"], call["unknown"]) == ([], 0, count)
     assert len(line) < 5_000
 
 
-@pytest.mark.parametrize("ids, want", [(None, {"ids": [], "unknown": 0}), ([], {"ids": [], "unknown": 0}),
-                                       (["", "  "], {"ids": [], "unknown": 0}),
-                                       (["zz:none", "zz:none"], {"ids": [], "unknown": 1})])
+_NOTHING_READ = {"ids": [], "not_returned": 0, "unknown": 0}
+
+
+@pytest.mark.parametrize("ids, want", [(None, _NOTHING_READ), ([], _NOTHING_READ), (["", "  "], _NOTHING_READ),
+                                       (["zz:none", "zz:none"], {**_NOTHING_READ, "unknown": 1})])
 def test_read_ids_of_nothing_or_one_unknown(ids, want):
-    assert catalogue.read_ids(ids) == want
+    assert catalogue.read_ids(catalogue.lookup(ids)) == want
+
+
+@pytest.mark.parametrize("result", [None, [], 7, "", True, {}, {"entries": None}, {"entries": ["x", 3]},
+                                    {"ok": False, "error": "Name the entry ids"}])
+def test_read_ids_of_something_that_is_no_lookup_result_is_nothing_read(result):
+    assert catalogue.read_ids(result) == _NOTHING_READ
+
+
+@pytest.mark.parametrize("asked_count", [13, 40])
+def test_the_turn_trace_records_only_the_ids_the_model_was_given(monkeypatch, _stream_through_call, caplog,
+                                                                 asked_count):
+    """More held ids than one lookup returns: the model receives some entries
+    and the rest by name or by count. The trace says the same, id for id."""
+    asked = [e["id"] for e in catalogue.entries()][:asked_count]
+    given = catalogue.lookup(asked)
+    received = [e["id"] for e in given["entries"]]
+    assert 0 < len(received) <= catalogue.MAX_LOOKUP < asked_count
+    line = _driver_turn_line(monkeypatch, caplog, asked)
+    [call] = _looked_up(line)
+    assert call["ids"] == received
+    assert (call["not_returned"], call["unknown"]) == (asked_count - len(received), 0)
+
+
+@pytest.mark.parametrize("asked_count, unknown_count", [(3, 2), (20, 400)])
+def test_read_ids_retells_the_lookup_result_without_reading_the_catalogue_again(monkeypatch, asked_count,
+                                                                                unknown_count):
+    """The trace is written on the event loop: it reads the result it is
+    given and never the catalogue (which is built off the loop)."""
+    asked = [e["id"] for e in catalogue.entries()][:asked_count] + [f"zz:none-{i}" * 9 for i in range(unknown_count)]
+    result = catalogue.lookup(asked)
+
+    def no_second_pass():
+        raise AssertionError("the trace read the catalogue again")
+
+    monkeypatch.setattr(catalogue, "entries", no_second_pass)
+    monkeypatch.setattr(catalogue, "_state_key", no_second_pass)
+    read = catalogue.read_ids(result)
+    assert read["ids"] == [e["id"] for e in result["entries"]]
+    assert read["not_returned"] == asked_count - len(result["entries"])
+    assert read["unknown"] == unknown_count
+
+
+@pytest.mark.parametrize("names", [["a" * 50, "b" * 5, "c" * 5], ["x" * 40, "y", "z"]])
+def test_the_names_kept_are_a_prefix_nothing_after_the_first_that_does_not_fit(names):
+    """A long name that does not fit ends the list: a shorter one after it is
+    counted, not kept, so the kept names are always the first ones asked."""
+    base = len(json.dumps({"unknown": [], "unknown_more": len(names)}))
+    limit = base + len(json.dumps(names[1])) + len(json.dumps(names[2])) + 4   # room for both short names
+    assert limit < base + len(json.dumps(names[0]))                           # and not for the long one
+    result = {"unknown": list(names)}
+    catalogue._cap_names(result, "unknown", limit)
+    assert result == {"unknown": [], "unknown_more": len(names)}
 
 
 @pytest.mark.parametrize("param,want", [

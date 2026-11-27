@@ -504,9 +504,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 "given": _given_inputs(args) if name == "construction_calc" else None,
             })
             if name == catalogue.LOOKUP:
-                # The entry ids the model read, on the lookup's own call only:
-                # ids the catalogue holds, and a count of any it does not.
-                trace[-1]["calls"][-1].update(catalogue.read_ids(args.get("ids")))
+                # The entry ids the model was given, on the lookup's own call
+                # only, with counts of the ids it was not given: read from the
+                # lookup's result, with no second pass over the catalogue.
+                trace[-1]["calls"][-1].update(catalogue.read_ids(result_of_call))
             if name not in (tools.SELECT_HAT, catalogue.LOOKUP):
                 if ok:
                     succeeded = True
