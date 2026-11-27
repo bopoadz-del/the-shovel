@@ -70,10 +70,21 @@ def turn_of(call: ToolCall) -> str:
     return f"{call.conversation_id or ''}#{asked + 1}"
 
 
+def _traced_name(name: Any) -> Any:
+    """The note name as the trace may keep it: the stored name when the name
+    is a valid one, else None. A refused name is free text from the model
+    (it can hold the user's words), and the trace goes to the turn's log
+    line, which keeps ids and never text."""
+    try:
+        return llm_memory.clean_name(name)
+    except llm_memory.MemoryRefused:
+        return None
+
+
 def _refused(call: ToolCall, op: str, error: str, name: Any = None) -> dict:
     return {"name": call.name, "ok": False,
             "result": {"status": "error", "error": error},
-            "trace": {"memory": op, "name": name if isinstance(name, str) else None,
+            "trace": {"memory": op, "name": _traced_name(name),
                       "bytes": 0, "turn": turn_of(call), "ok": False}}
 
 

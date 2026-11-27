@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select, update
+from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionLocal, engine, get_database_url
@@ -141,6 +142,7 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                              .where(LlmMemory.project_id == project_id, LlmMemory.name == stem)
                              .values(**row)).rowcount
             if not done:
+                _one_new_note_at_a_time(s, project_id)
                 count = s.scalar(select(func.count()).select_from(LlmMemory)
                                  .where(LlmMemory.project_id == project_id)) or 0
                 if count >= max_docs():
@@ -149,6 +151,17 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                 s.add(LlmMemory(project_id=project_id, name=stem, **row))
         created = not done
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
+
+
+def _one_new_note_at_a_time(session: Any, project_id: str) -> None:
+    """Hold this project's new-note lock until the transaction ends, so the
+    count that follows is the count the insert is made against. Without it,
+    two turns creating two different notes on Postgres (READ COMMITTED) both
+    read the same count and both insert, one past the limit. SQLite has one
+    writer at a time, so its count is already the insert's count."""
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:project, 0))"),
+                        {"project": f"llm_memory:{project_id}"})
 
 
 def write_retrying(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, Any]:

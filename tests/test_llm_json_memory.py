@@ -718,3 +718,73 @@ def test_a_notes_call_does_not_back_a_figure_when_the_tool_failed(client, monkey
 def test_data_that_is_not_json_says_where_it_breaks(data, where):
     with pytest.raises(llm_memory.MemoryRefused, match=where):
         llm_memory.parse_data(data)
+
+
+@pytest.mark.parametrize("words", ["my card is 4111 1111 1111 1111", "ring Ahmed on 050 123 4567 about the bill"])
+@pytest.mark.parametrize("op", ["write_memory", "read_memory"])
+def test_a_refused_name_never_puts_its_words_in_the_turns_log(client, monkeypatch, caplog, words, op):
+    """A refused name is free text from the model and can hold the user's
+    words: the turn's log line keeps no part of it."""
+    h = _user(client, "leak")
+    pid = _project(client, h, "Memory refused name")
+    args = {"name": words, "data": "{}"} if op == "write_memory" else {"name": words}
+    with caplog.at_level(logging.INFO, logger="app.agents.driver.loop"):
+        got, _ = _run_one(client, monkeypatch, h, pid, op, args)
+    assert got["ok"] is False
+    lines = [line for line in caplog.messages if line.startswith("DRIVER_TURN ")]
+    assert lines and all(words not in line for line in lines)
+    traces = [c["trace"] for line in lines
+              for step in json.loads(line[len("DRIVER_TURN "):])["steps"] if isinstance(step, dict)
+              for c in step.get("calls") or [] if c.get("trace")]
+    assert [(t["name"], t["ok"]) for t in traces] == [(None, False)]
+
+
+@pytest.mark.parametrize("name,kept", [("paths", "paths"), ("how-to.json", "how-to"),
+                                       ("with space", None), ("../etc/passwd", None), (42, None)])
+def test_the_trace_keeps_a_name_only_when_it_is_a_valid_one(name, kept):
+    from app.agents.base import memory
+
+    assert memory._traced_name(name) == kept
+
+
+@pytest.mark.parametrize("limit,already", [(3, 2), (2, 1)])
+def test_new_notes_written_at_once_never_pass_the_projects_limit(monkeypatch, limit, already):
+    """Several turns each create a different new note with one place left:
+    exactly one gets it."""
+    monkeypatch.setenv("LLM_MEMORY_MAX_DOCS", str(limit))
+    pid = f"mem-limit-{uuid.uuid4().hex[:8]}"
+    for i in range(already):
+        llm_memory.write(pid, f"held{i}", "{}", "t#0")
+    barrier = threading.Barrier(6)
+    refused, errors = [], []
+
+    def create(i):
+        try:
+            barrier.wait()
+            llm_memory.write_retrying(pid, f"new{i}", json.dumps({"i": i}), "t#1")
+        except llm_memory.MemoryRefused:
+            refused.append(i)
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=create, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(llm_memory.listing(pid)) == limit and len(refused) == 5
+
+
+@pytest.mark.parametrize("dialect,locks", [("postgresql", 1), ("sqlite", 0)])
+def test_the_new_note_lock_is_taken_where_two_writers_can_count_at_once(dialect, locks):
+    import types
+
+    ran = []
+    session = types.SimpleNamespace(
+        get_bind=lambda: types.SimpleNamespace(dialect=types.SimpleNamespace(name=dialect)),
+        execute=lambda statement, params: ran.append((str(statement), params)))
+    llm_memory._one_new_note_at_a_time(session, "proj-7")
+    assert len(ran) == locks
+    if locks:
+        assert "pg_advisory_xact_lock" in ran[0][0] and ran[0][1] == {"project": "llm_memory:proj-7"}
