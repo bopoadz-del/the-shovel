@@ -749,6 +749,29 @@ def test_title_words_are_dropped_only_for_a_ranged_named_bill(ranges):
     assert ("external" in scope.level) is ("5" not in ranges)
 
 
+class _UnreadRow:
+    """A row whose heading path fails the test if anything reads it."""
+
+    @property
+    def path(self):
+        raise AssertionError("a row was read with no bill named")
+
+
+@pytest.mark.parametrize("bills, n_rows", [(set(), 1), ((), 3)])
+def test_title_words_read_no_row_when_no_bill_is_named(bills, n_rows):
+    # with no named ranged bill there is no title to find: the rows are not walked
+    assert agg._title_words([_UnreadRow() for _ in range(n_rows)], bills) == set()
+
+
+@pytest.mark.parametrize("bill, title", [("5", "external"), ("4", "substructure")])
+def test_title_words_of_a_named_bill_are_its_heading_words(bill, title):
+    rows = [_r(1, "dig", "1", "1", "1", path=("Bill No. 4 - Substructure",)),
+            _r(5, "kerb", "1", "1", "1", path=("Bill No. 5 - External Works",))]
+    words = agg._title_words(rows, {bill})
+    assert title in words
+    assert ({"external", "substructure"} - {title}) & words == set()
+
+
 @pytest.mark.parametrize("asked, want", [("4", 100_000), ("5", 31_000)])
 def test_two_named_bills_each_select_by_their_own_range(asked, want):
     rows = _two_ranged("1,000")
