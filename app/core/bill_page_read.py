@@ -23,7 +23,7 @@ It decides nothing about the figures; it only states facts about them:
   amount;
 * each row carries its check: ``""`` when accepted, otherwise what failed
   (a figure that is not a number, quantity x rate != amount, or a sum line
-  that is not the sum of the lines above it on its page,
+  that is not the sum of the lines it closes - its section, page or bill,
   :func:`check_sum_lines`). A figure that fails is kept as read and flagged;
   it is never repaired;
 * a page whose read is missing or is not a list of lines is NOT READ, never
@@ -58,7 +58,7 @@ REF_LABEL = "Item"
 #: placed by its own line's bill, not only by the page it sits on.
 BILL_LABEL = "Bill"
 CHECK_NOT_A_NUMBER = "figure not a number"
-CHECK_SUM_LINE = "sum line is not the sum of the lines above it on its page"
+CHECK_SUM_LINE = "sum line is not the sum of the lines it closes"
 #: Line types the read prompt defines as a sum of other lines of the page.
 #: ``brought_forward`` restates an earlier page: it is added, never checked.
 SUM_LINE_TYPES = frozenset({"carried", "subtotal", "total"})
@@ -159,15 +159,30 @@ def rows_from_page_reads(
 
 
 def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
-    """Flag every sum line that is not the sum of the lines above it on its page.
+    """Flag every sum line that adds up to none of the runs it can close.
 
-    Rows are walked page by page, in their order on the page. Every row that
-    prints an amount is added to the run of its page; a line the model typed
-    as a sum of other lines (:data:`SUM_LINE_TYPES`) closes the run. When the
-    run holds at least one ``item`` line, the sum line's amount must equal the
-    run's sum within one unit of the amount's own last printed place (the
-    same arithmetic ``bill_aggregate.row_kinds`` decides a collection by);
-    otherwise its check is :data:`CHECK_SUM_LINE`. A run with no item line (a
+    Rows are walked page by page in page order, in their order on the page.
+    A line the model typed as a sum of other lines (:data:`SUM_LINE_TYPES`)
+    can close one of three nested runs, and it agrees when its amount equals
+    the sum of any one of them:
+
+    ====================  ==================================================
+    run                   lines summed
+    ====================  ==================================================
+    section               every non-sum line with an amount since the last
+                          sum line on its page (or the page top)
+    page                  every non-sum line with an amount above it on its
+                          page, whatever sum lines stand between
+    bill                  every ``item`` amount of its bill so far, across
+                          pages; its bill is the one the line names, else the
+                          one bill the items of its section name (none when
+                          they name no bill or more than one)
+    ====================  ==================================================
+
+    "Equals" is within one unit of the amount's own last printed place (the
+    same arithmetic ``bill_aggregate.row_kinds`` decides a collection by).
+    When the section holds at least one ``item`` line and no run agrees, the
+    line's check is :data:`CHECK_SUM_LINE`. A section with no item line (a
     collection page listing other pages' totals) is closed without a verdict:
     the page itself holds nothing to add up. A row that already carries a
     check keeps it. Returns the rows flagged here."""
@@ -175,24 +190,39 @@ def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
     by_page: dict[int, list[g.BillRow]] = {}
     for row in rows:
         by_page.setdefault(row.source_page, []).append(row)
-    for page_rows in by_page.values():
-        covered, items = 0.0, 0
-        for row in page_rows:
+    bill_items: dict[str, float] = {}
+    for page in sorted(by_page):
+        section = on_page = 0.0
+        items = 0
+        named: set[str] = set()
+        for row in by_page[page]:
             kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
             text = _text(row.fields.get("total"))
             amount = g.parse_number(text)
             if kind not in SUM_LINE_TYPES:
-                if amount is not None:
-                    covered += amount
-                    items += 1 if kind == ITEM else 0
+                if amount is None:
+                    continue
+                section += amount
+                on_page += amount
+                if kind == ITEM:
+                    items += 1
+                    bill = _row_bill(row)
+                    if bill:
+                        named.add(bill)
+                        bill_items[bill] = bill_items.get(bill, 0.0) + amount
                 continue
             if amount is None:
                 continue
-            if items and not row.check and not agg._same_figure(
-                    amount, covered, agg._last_place(text)):
+            bill = _row_bill(row) or (next(iter(named)) if len(named) == 1 else "")
+            runs = [section, on_page]
+            if bill in bill_items:
+                runs.append(bill_items[bill])
+            place = agg._last_place(text)
+            if items and not row.check and not any(
+                    agg._same_figure(amount, run, place) for run in runs):
                 row.check = CHECK_SUM_LINE
                 flagged.append(row)
-            covered, items = 0.0, 0
+            section, items, named = 0.0, 0, set()
     return flagged
 
 
@@ -549,8 +579,10 @@ def bill_states(
     column of its own): the document prints no item prices for that bill.
     ``FAILED`` when the item sum differs from the printed total by more than
     ``tolerance`` (the caller states it from the bill's own rounding) or any
-    row of the bill is flagged (a sum line that does not add up on a page of
-    the bill counts even when its line names no bill), else ``RECONCILED``. An item row whose line
+    row of the bill is flagged (a sum line that does not add up and names no
+    bill counts against the bills the items it closes name, or, when they name
+    none, every bill whose range holds or reaches its page), else
+    ``RECONCILED``. An item row whose line
     names no bill could belong to every bill whose range holds its page or
     that reaches it (``pages_unplaced_reach``): each such bill is ``NOT
     CHECKED`` with the count (``rows_unplaced``), never FAILED for them. Rows
@@ -560,6 +592,8 @@ def bill_states(
     placed: set[int] = set()
     missing = set(pages_not_read)
     own = [_row_bill(r) for r in rows]
+    closes = {i: _section_bills(rows, own, i) for i, r in enumerate(rows)
+              if not own[i] and r.check == CHECK_SUM_LINE}
     for span in spans:
         ranged = span.first_page is not None and span.last_page is not None
         key = _bill_key(span.label)
@@ -573,13 +607,14 @@ def bill_states(
         placed.update(members)
         items_sum = 0.0
         summed = without = items = priced = 0
-        # A sum line that names no bill still closes a page of this bill: when
-        # it does not add up, the bill on that page cannot reconcile.
+        # A sum line that names no bill and does not add up fails the bills
+        # the items it closes name; when those items name none, every bill
+        # whose range holds or reaches its page.
         flagged = sum(
-            1 for i, r in enumerate(rows)
-            if not own[i] and r.check == CHECK_SUM_LINE
-            and ((ranged and span.first_page <= r.source_page <= span.last_page)
-                 or r.source_page in reach))
+            1 for i, bills in closes.items()
+            if (key in bills if bills else
+                ((ranged and span.first_page <= rows[i].source_page <= span.last_page)
+                 or rows[i].source_page in reach)))
         for i in members:
             r = rows[i]
             flagged += 1 if r.check else 0
@@ -630,6 +665,22 @@ BILL_KEY = "bill"
 def _bill_key(value: Any) -> str:
     """A bill's identifier compared without case, spacing or punctuation."""
     return " ".join(re.findall(r"[^\W_]+", _text(value).casefold()))
+
+
+def _section_bills(rows: Sequence[g.BillRow], own: Sequence[str], at: int) -> frozenset[str]:
+    """The bills the ``item`` lines of the section a sum line closes name:
+    the rows above ``rows[at]`` on its page, back to the sum line before it."""
+    bills: set[str] = set()
+    for j in range(at - 1, -1, -1):
+        row = rows[j]
+        if row.source_page != rows[at].source_page:
+            break
+        kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
+        if kind in SUM_LINE_TYPES:
+            break
+        if kind == ITEM and own[j]:
+            bills.add(own[j])
+    return frozenset(bills)
 
 
 def _row_bill(row: g.BillRow) -> str:
