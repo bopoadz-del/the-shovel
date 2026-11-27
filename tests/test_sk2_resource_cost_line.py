@@ -228,7 +228,9 @@ def test_a_unit_that_is_not_a_counted_measure_is_still_refused(field, value):
     (1_000_000.0, 1.0, 1_000.0, 3.3333333),
     (1_000.0, 1.0, 7.0, 7.123456),
     (3_217.75, 0.0137, 412.9, 2.718281828459),
-    (1_234_567.891, 0.0137, 3.1, 4.4444),
+    # a net whose eleventh digit would move the printed gross by one
+    (1_234_567.891, 0.0137, 3.1, 3.3333333),
+    (987_654.321, 0.0137, 2.0, 9.87654),
 ])
 def test_a_waste_percent_with_many_decimals_still_reconciles(q, c, p, waste):
     from decimal import Decimal
