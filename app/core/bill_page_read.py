@@ -22,8 +22,10 @@ It decides nothing about the figures; it only states facts about them:
   column under the label the page gives it; nothing is forced into rate or
   amount;
 * each row carries its check: ``""`` when accepted, otherwise what failed
-  (a figure that is not a number, or quantity x rate != amount). A figure
-  that fails is kept as read and flagged; it is never repaired;
+  (a figure that is not a number, quantity x rate != amount, or a sum line
+  that is not the sum of the lines above it on its page,
+  :func:`check_sum_lines`). A figure that fails is kept as read and flagged;
+  it is never repaired;
 * a page whose read is missing or is not a list of lines is NOT READ, never
   "a page with no rows";
 * a key of the read that is not a page number (decimal digits only) is not dropped
@@ -46,6 +48,7 @@ from typing import Any
 
 import httpx
 
+from app.core import bill_aggregate as agg
 from app.core import bill_table_geometry as g
 
 HEADING = "heading"
@@ -55,6 +58,10 @@ REF_LABEL = "Item"
 #: placed by its own line's bill, not only by the page it sits on.
 BILL_LABEL = "Bill"
 CHECK_NOT_A_NUMBER = "figure not a number"
+CHECK_SUM_LINE = "sum line is not the sum of the lines above it on its page"
+#: Line types the read prompt defines as a sum of other lines of the page.
+#: ``brought_forward`` restates an earlier page: it is added, never checked.
+SUM_LINE_TYPES = frozenset({"carried", "subtotal", "total"})
 
 #: The model's figure keys, mapped to the sheet's canonical fields.
 _FIGURES = (("quantity", "quantity"), ("rate", "rate"), ("amount", "total"))
@@ -147,7 +154,46 @@ def rows_from_page_reads(
                 continue
             after_row = True
             out.rows.append(_row(line, page, top + tuple(headings), kind))
+    check_sum_lines(out.rows)
     return out
+
+
+def check_sum_lines(rows: Sequence[g.BillRow]) -> list[g.BillRow]:
+    """Flag every sum line that is not the sum of the lines above it on its page.
+
+    Rows are walked page by page, in their order on the page. Every row that
+    prints an amount is added to the run of its page; a line the model typed
+    as a sum of other lines (:data:`SUM_LINE_TYPES`) closes the run. When the
+    run holds at least one ``item`` line, the sum line's amount must equal the
+    run's sum within one unit of the amount's own last printed place (the
+    same arithmetic ``bill_aggregate.row_kinds`` decides a collection by);
+    otherwise its check is :data:`CHECK_SUM_LINE`. A run with no item line (a
+    collection page listing other pages' totals) is closed without a verdict:
+    the page itself holds nothing to add up. A row that already carries a
+    check keeps it. Returns the rows flagged here."""
+    flagged: list[g.BillRow] = []
+    by_page: dict[int, list[g.BillRow]] = {}
+    for row in rows:
+        by_page.setdefault(row.source_page, []).append(row)
+    for page_rows in by_page.values():
+        covered, items = 0.0, 0
+        for row in page_rows:
+            kind = _text(row.extra.get(LINE_TYPE_LABEL)).lower()
+            text = _text(row.fields.get("total"))
+            amount = g.parse_number(text)
+            if kind not in SUM_LINE_TYPES:
+                if amount is not None:
+                    covered += amount
+                    items += 1 if kind == ITEM else 0
+                continue
+            if amount is None:
+                continue
+            if items and not row.check and not agg._same_figure(
+                    amount, covered, agg._last_place(text)):
+                row.check = CHECK_SUM_LINE
+                flagged.append(row)
+            covered, items = 0.0, 0
+    return flagged
 
 
 def _row(line: Mapping[str, Any], page: int, path: tuple[str, ...], kind: str) -> g.BillRow:
@@ -503,7 +549,8 @@ def bill_states(
     column of its own): the document prints no item prices for that bill.
     ``FAILED`` when the item sum differs from the printed total by more than
     ``tolerance`` (the caller states it from the bill's own rounding) or any
-    row of the bill is flagged, else ``RECONCILED``. An item row whose line
+    row of the bill is flagged (a sum line that does not add up on a page of
+    the bill counts even when its line names no bill), else ``RECONCILED``. An item row whose line
     names no bill could belong to every bill whose range holds its page or
     that reaches it (``pages_unplaced_reach``): each such bill is ``NOT
     CHECKED`` with the count (``rows_unplaced``), never FAILED for them. Rows
@@ -525,7 +572,14 @@ def bill_states(
                  or r.source_page in reach))
         placed.update(members)
         items_sum = 0.0
-        summed = without = flagged = items = priced = 0
+        summed = without = items = priced = 0
+        # A sum line that names no bill still closes a page of this bill: when
+        # it does not add up, the bill on that page cannot reconcile.
+        flagged = sum(
+            1 for i, r in enumerate(rows)
+            if not own[i] and r.check == CHECK_SUM_LINE
+            and ((ranged and span.first_page <= r.source_page <= span.last_page)
+                 or r.source_page in reach))
         for i in members:
             r = rows[i]
             flagged += 1 if r.check else 0
