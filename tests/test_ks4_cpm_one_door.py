@@ -601,13 +601,19 @@ def test_a_refused_band_names_the_range_as_a_person_would(band, shown):
         assert raw not in env["error"] and raw not in str(env.get("question") or "")
 
 
-def test_the_models_input_line_for_the_band_says_more_than_zero():
+@pytest.mark.parametrize("name, part", [
+    ("near_critical_band_days", "working days, more than 0, up to 100000, optional"),
+    ("activities", "activities with durations and predecessors"),
+    ("project_start", "project start date"),
+])
+def test_the_models_input_lines_for_the_schedule_say_what_is_declared(name, part):
     from app.agents.driver import tools as driver_tools
     from app.lib import formula_registry as fr
 
     params = fr.parameters(fr.get("cpm_network"))
-    line = driver_tools._input_line("near_critical_band_days", params["near_critical_band_days"])
-    assert "working days, more than 0, up to 100000, optional" in line
+    line = driver_tools._input_line(name, params[name])
+    assert part in line
+    assert ("more than" in line) is (name == "near_critical_band_days")
     assert "e-324" not in line and "0 to 100000" not in line
 
 

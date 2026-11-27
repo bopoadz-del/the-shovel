@@ -38,9 +38,11 @@ def test_an_ordinary_range_still_includes_both_bounds(lo, hi):
     assert fr._in_range(spec, math.nextafter(hi, math.inf)) is False
 
 
-def test_a_range_is_inclusive_unless_declared_otherwise():
-    assert fr.Param("m", 0, 5).above_lo is False
-    assert _spec(0, 5, False).above_lo is False
+@pytest.mark.parametrize("lo, hi", [(0, 5), (2.5, 40)])
+def test_a_range_is_inclusive_unless_declared_otherwise(lo, hi):
+    assert fr.Param("m", lo, hi).above_lo is False
+    assert fr.ParamSpec(name="span", kind="number", unit="m", lo=lo, hi=hi, label="span",
+                        grade="", required=True).above_lo is False
 
 
 @pytest.mark.parametrize("lo, hi, above, words", [
@@ -77,17 +79,21 @@ def test_the_models_input_line_states_the_range_as_declared(lo, hi, above, part)
     assert part in driver_tools._input_line("span", _spec(lo, hi, above))
 
 
-def test_an_input_line_with_no_range_states_none():
-    line = driver_tools._input_line("span", _spec(None, None, False))
+@pytest.mark.parametrize("lo, hi", [(None, None), (0, None), (None, 50)])
+def test_an_input_line_with_no_whole_range_states_none(lo, hi):
+    line = driver_tools._input_line("span", _spec(lo, hi, lo is not None))
     assert "0 to" not in line and "more than" not in line and "up to" not in line
 
 
-def test_the_declared_bound_reaches_the_inputs_of_a_registered_calculator():
+@pytest.mark.parametrize("name, above", [("near_critical_band_days", True), ("activities", False),
+                                         ("project_start", False)])
+def test_the_declared_bound_reaches_the_inputs_of_a_registered_calculator(name, above):
     params = fr.parameters(fr.get("cpm_network"))
-    band = params["near_critical_band_days"]
-    assert (band.lo, band.hi, band.above_lo) == (0, 100000, True)
-    others = [p for name, spec in ((s.name, s) for s in fr.specs_for(None))
-              for p in fr.parameters(spec).values() if name != "cpm_network"]
+    assert params[name].above_lo is above
+    if above:
+        assert (params[name].lo, params[name].hi) == (0, 100000)
+    others = [p for calc, spec in ((s.name, s) for s in fr.specs_for(None))
+              for p in fr.parameters(spec).values() if calc != "cpm_network"]
     assert others and not any(p.above_lo for p in others)
 
 
