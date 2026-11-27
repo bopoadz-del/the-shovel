@@ -13,7 +13,7 @@ from app.agents import driver
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
 from app.agents.core.tool_registry import is_notes
-from app.agents.driver import context, llm, render, routes, sources, tools
+from app.agents.driver import catalogue, context, llm, render, routes, sources, tools
 from app.core import turn_progress
 from app.core.llm_memory import nested_deeper_than
 from app.core.offload import off_loop
@@ -480,6 +480,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 else:
                     result_of_call = {"ok": False,
                                       "error": f"No hat named {chosen!r}; choose one of {sorted(disciplines)}."}
+            elif name == catalogue.LOOKUP:
+                # The full entries for the ids the model names from the index.
+                result_of_call = await off_loop(catalogue.lookup, args.get("ids"))
             elif name == routes.RUN_WORKFLOW:
                 used.append(f"{name}:{args.get('workflow')}")
                 result_of_call = await routes.run(args, user_message, project_id, user_id, conversation_id)
@@ -524,7 +527,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             if isinstance(result_of_call.get("trace"), dict):
                 call_record["trace"] = result_of_call["trace"]
             trace[-1]["calls"].append(call_record)
-            if name != tools.SELECT_HAT:
+            if name == catalogue.LOOKUP:
+                # The entry ids the model was given, on the lookup's own call
+                # only, with counts of the ids it was not given: read from the
+                # lookup's result, with no second pass over the catalogue.
+                call_record.update(catalogue.read_ids(result_of_call))
+            if name not in (tools.SELECT_HAT, catalogue.LOOKUP):
                 if ok:
                     # The model's own notes back no figure: a note that was
                     # read or written does not stand in for a tool that ran.
