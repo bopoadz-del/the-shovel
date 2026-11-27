@@ -253,7 +253,10 @@ _SHEET_RULES = (
     "any input still missing, with sheet_update. Run each step with run_step: code runs the formula "
     "and writes the result here. Every arithmetic step, even one division, is a step "
     "(formula:arithmetic_step); never work a figure in your own text. Ask the user for a missing input "
-    "only when no document or tool gives it.")
+    "only when no document or tool gives it. A figure given for one thing is a given for that thing "
+    "only: when the question needs a rate, a quantity or a price that nobody gave for the very thing "
+    "asked about, write it under missing and ask for it; never borrow a figure that was given for "
+    "something else.")
 
 
 def _sheet_note(work: Dict[str, Any]) -> str:

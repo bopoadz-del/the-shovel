@@ -1728,8 +1728,6 @@ def figure_provenance(
         # answer carries (an EVM's CV and EAC, a cash flow's month rows) were
         # produced by the run, not by the model.
         sheets: list[dict[str, Any]] = []
-        credited_sizes: set[float] = set()
-        uncredited_sizes: set[float] = set()
         # What the calculators returned, before the workflows are added: the
         # given check below reads a workflow's answer itself, with its signs.
         calculator_numbers = [set(nums) for nums, _meta in calc_entries]
@@ -1779,17 +1777,19 @@ def figure_provenance(
                             "source": pt.SOURCE_CALCULATOR, "formula": row["entry"], "inputs": {},
                             "step": row["step"], "unit": row["unit"],
                             _RESULT_SIGN: row["value"] < 0}))
-                        credited_sizes.add(abs(row["value"]))
-                    else:
-                        uncredited_sizes.add(abs(row["value"]))
-        # A step that ran on a quantity nobody gave produced the model's own
-        # number. It is not let back in as "working" on the turn's other
-        # figures (43 + 10 = 53 when the level given was -43).
-        uncredited_sizes -= credited_sizes
         calc_pool: set[float] = set()
         for nums, _meta in calc_entries:
             calc_pool |= nums
-        working = _working(_rescaled(calc_pool | user_vals)) if calc_entries else set()
+        # "Working" lets a substitution line through: a pairwise sum, product,
+        # difference or quotient of the sizes of grounded numbers. A turn that
+        # carries a working sheet has none: there every arithmetic step is a
+        # step code ran, so a figure is a tool's result, a passage's figure,
+        # the user's own, or a step's result written with the sign code
+        # wrote. A figure that is none of these is the model's own -- a step
+        # result with its sign turned, or the result of a step that ran on a
+        # quantity nobody gave -- and sizes worked pairwise would let exactly
+        # those back in (43 and 10 make 33 and 53 whatever the signs were).
+        working = _working(_rescaled(calc_pool | user_vals)) if calc_entries and not sheets else set()
 
         entries: list[dict[str, Any]] = []
         bad: list[re.Match] = []
@@ -1854,8 +1854,7 @@ def figure_provenance(
                         break
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
-            if (entry is None and working and _match(value, working)
-                    and not _match(value, uncredited_sizes)):
+            if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:
                 bad.append(m)

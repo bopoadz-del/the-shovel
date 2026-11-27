@@ -406,10 +406,25 @@ def rests_quantities(sheet: Dict[str, Any], step_id: str) -> List[Tuple[float, s
                 # A literal the reader below finds no number in, while the
                 # formula ran on one, is taken as the formula ran it: the
                 # check never reads less than the step did.
+                inputs = (plan.get(sid) or {}).get("inputs") or {}
                 ran = ((_step(sheet, sid) or {}).get("inputs") or {}).get(name)
                 read = written_quantities(ref) if written_numbers(ref) else []
-                found.extend(read or [(n, "") for n in _ran_numbers(ran)])
+                # A number written bare, with its unit written beside it in
+                # the plan (``<input>_unit``), is that quantity: the step
+                # runs it in that unit, so the check reads it in that unit.
+                beside = _unit_beside(inputs, name)
+                found.extend([(n, unit or beside) for n, unit in read]
+                             or [(n, beside) for n in _ran_numbers(ran)])
     return found
+
+
+def _unit_beside(inputs: Dict[str, Any], name: str) -> str:
+    """The unit a plan step writes beside its input ``name`` as the literal
+    ``<name>_unit`` ("" when it writes none, or writes "-" for a pure
+    number)."""
+    beside = inputs.get(f"{name}_unit")
+    unit = beside.strip() if isinstance(beside, str) else ""
+    return "" if unit == "-" else unit
 
 
 def _ran_numbers(value: Any) -> List[float]:
@@ -490,11 +505,18 @@ def _formula_values(spec: Any, values: Dict[str, Any]) -> Dict[str, Any]:
     """Resolved sheet values as a formula takes them. A value with a unit goes
     to an input that declares a companion ``<input>_unit`` as the bare number
     plus that unit; otherwise it is written with its unit, so the registry's
-    declared units convert it (or refuse a unit of another kind)."""
+    declared units convert it (or refuse a unit of another kind).
+
+    A value read from the sheet (a given, an earlier step's result) keeps
+    the unit it carries there: a ``<input>_unit`` the plan writes beside it
+    does not replace that unit, in whatever order the plan lists the two.
+    The plan's own ``<input>_unit`` is the unit of a number the plan itself
+    wrote bare."""
     from app.lib import formula_registry
 
     params = formula_registry.parameters(spec)
     out: Dict[str, Any] = {}
+    carried: Dict[str, Any] = {}
     for name, value in values.items():
         if not (isinstance(value, dict) and "value" in value):
             out[name] = value
@@ -502,11 +524,12 @@ def _formula_values(spec: Any, values: Dict[str, Any]) -> Dict[str, Any]:
         number, unit = value["value"], str(value.get("unit") or "-").strip() or "-"
         if f"{name}_unit" in params:
             out[name] = number
-            out.setdefault(f"{name}_unit", unit)
+            carried[f"{name}_unit"] = unit
         elif unit == "-":
             out[name] = number
         else:
             out[name] = f"{number:g} {unit}"
+    out.update(carried)
     return out
 
 

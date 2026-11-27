@@ -706,3 +706,110 @@ def test_the_check_a_given_is_marked_with_receives_its_unit(unit):
     marked = ws.mark_given(s, check)
     assert asked == [(12.0, unit)]
     assert [g.get("checked") for g in marked["givens"]] == (["user"] if unit == "m" else [None])
+
+
+# --- a value read from the sheet keeps its own unit ----------------------------
+
+@pytest.mark.parametrize("given_unit,beside,unit_first", [
+    ("mm", "m", False), ("mm", "m", True),      # the plan writes the unit after / before the value
+    ("kg", "t", False), ("kg", "t", True),
+    ("-", "m", False), ("-", "m", True),         # a pure number is not given a unit by the plan
+    ("m", "m", False),
+])
+def test_formula_values_keep_the_unit_of_a_value_read_from_the_sheet(given_unit, beside, unit_first):
+    from app.lib import formula_registry
+
+    pair = [("b", {"value": 250, "unit": given_unit}), ("b_unit", beside)]
+    values = dict([("operator", "add"), ("a", {"value": -43, "unit": "m"})] + (pair[::-1] if unit_first else pair))
+    out = ws._formula_values(formula_registry.get("arithmetic_step"), values)
+    assert out == {"operator": "add", "a": -43, "a_unit": "m", "b": 250, "b_unit": given_unit}
+
+
+@pytest.mark.parametrize("number,beside", [(10, "m"), (250, "mm"), (2.5, "kg")])
+def test_formula_values_take_the_plans_unit_for_a_number_the_plan_wrote_bare(number, beside):
+    from app.lib import formula_registry
+
+    values = {"operator": "add", "a": {"value": -43, "unit": "m"}, "b": number, "b_unit": beside}
+    out = ws._formula_values(formula_registry.get("arithmetic_step"), values)
+    assert out == {"operator": "add", "a": -43, "a_unit": "m", "b": number, "b_unit": beside}
+
+
+@pytest.mark.parametrize("level,level_unit,rise,rise_unit,unit_first", [
+    (-43, "m", 250, "mm", False), (-43, "m", 250, "mm", True),
+    (12, "m", 500, "mm", False), (12, "m", 500, "mm", True),
+    (900, "kg", 2, "t", False), (900, "kg", 2, "t", True),
+])
+def test_run_step_never_runs_a_given_in_a_unit_the_plan_wrote_beside_it(level, level_unit, rise, rise_unit,
+                                                                        unit_first):
+    """The plan says the second value is in the first one's unit; the given
+    says otherwise. The given's unit stands, so the two are not added."""
+    inputs = {"operator": "add", "a": "g1"}
+    inputs.update([("b_unit", level_unit), ("b", "g2")] if unit_first else [("b", "g2"), ("b_unit", level_unit)])
+    s = _sheet_with([{"id": "g1", "value": level, "unit": level_unit},
+                     {"id": "g2", "value": rise, "unit": rise_unit}],
+                    [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}])
+    step = ws.run_step(s, "s1", "c1")["steps"][0]
+    assert step["status"] == "failed" and "result" not in step
+    assert step["error"] == f"cannot add {level_unit} and {rise_unit}: convert one to the other's unit first"
+
+
+@pytest.mark.parametrize("first,second,beside,expected", [
+    (12.0, 4.0, "m", 16.0), (3.5, 8.0, "kg", 11.5),
+])
+def test_run_step_keeps_an_earlier_steps_unit_over_one_written_beside_it(first, second, beside, expected):
+    """s1's result is in m2 (code wrote it). s2 reads it and the plan writes
+    another unit beside it: the step's own unit stands."""
+    s = _sheet_with([{"id": "g1", "value": first, "unit": "m2"}, {"id": "g2", "value": second, "unit": "m2"}],
+                    [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}},
+                     {"id": "s2", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "multiply", "a": "s1", "a_unit": beside, "b": 2}}])
+    s = ws.run_step(ws.run_step(s, "s1", "c1"), "s2", "c2")
+    final = [st for st in s["steps"] if st["id"] == "s2"][0]
+    assert final["result"] == {"name": "result", "value": pytest.approx(expected * 2), "unit": "m2"}
+    assert final["inputs"]["a_unit"] == "m2"
+
+
+@pytest.mark.parametrize("level,rise,beside,total", [(-43, 10, "m", -33.0), (12, 0.5, "m", 12.5), (7, 3, "kg", 10.0)])
+def test_run_step_runs_a_bare_number_of_the_plan_in_the_unit_written_beside_it(level, rise, beside, total):
+    s = _sheet_with([{"id": "g1", "value": level, "unit": beside}],
+                    [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": {"operator": "add", "a": "g1", "b": rise, "b_unit": beside}}])
+    step = ws.run_step(s, "s1", "c1")["steps"][0]
+    assert step["status"] == "done"
+    assert step["result"] == {"name": "result", "value": pytest.approx(total), "unit": beside}
+
+
+# --- the plan's bare number is checked in the unit the plan runs it in ----------
+
+@pytest.mark.parametrize("inputs,name,expected", [
+    ({"b": 250, "b_unit": "m"}, "b", "m"),
+    ({"b": 250, "b_unit": " mm "}, "b", "mm"),
+    ({"b": 250, "b_unit": "-"}, "b", ""),          # "-" is a pure number: no unit
+    ({"b": 250}, "b", ""),
+    ({"b": 250, "b_unit": 7}, "b", ""),            # not text: no unit
+    ({"a": 1, "a_unit": "kg", "b": 250}, "b", ""),  # another input's unit is not this one's
+])
+def test_unit_beside_reads_the_unit_a_plan_writes_next_to_an_input(inputs, name, expected):
+    assert ws._unit_beside(inputs, name) == expected
+
+
+@pytest.mark.parametrize("b,beside,expected", [
+    (250, "m", [(250.0, "m")]),
+    ("250", "mm", [(250.0, "mm")]),
+    (250, "-", [(250.0, "")]),
+    (250, None, [(250.0, "")]),
+    ("250 mm", "m", [(250.0, "mm")]),              # a unit written on the number itself stands
+    ({"value": 250, "unit": "mm"}, "m", [(250.0, "mm")]),
+])
+def test_a_bare_number_of_the_plan_rests_on_the_unit_written_beside_it(b, beside, expected):
+    inputs = {"operator": "add", "a": "g1", "b": b}
+    if beside is not None:
+        inputs["b_unit"] = beside
+    work, problems = ws.apply_update(ws.new_sheet("t1", "q"), {
+        "givens": [{"id": "g1", "value": -43, "unit": "m"}],
+        "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}]})
+    assert problems == []
+    work = ws.mark_given(work, lambda number, unit: "user")
+    assert ws.rests_quantities(work, "s1") == expected
+    assert ws.rests_on(work, "s1") == [number for number, _unit in expected]

@@ -676,3 +676,124 @@ def test_workflow_answers_are_read_from_tool_runs_only(answer):
     ]
     assert _workflow_answers(build_evidence(None, ran, tool_passages=True)) == [answer]
 
+
+# --- a turn that carries a working sheet: no pairwise "working" ----------------
+
+def _sheet_step_turn(user, givens, inputs, extra=None):
+    """The messages of a turn in which one arithmetic step ran on a working
+    sheet, as the catalogue path leaves them: the user's message, the
+    model's run_step call, and the tool's result carrying the sheet."""
+    import json
+
+    from app.agents.citation_provenance import given_check
+    from app.agents.driver import sheet as ws
+
+    messages = [{"role": "user", "content": user}]
+    work, problems = ws.apply_update(ws.new_sheet("t1", user), {
+        "givens": givens, "plan": [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}]})
+    assert problems == []
+    work = ws.run_step(ws.mark_given(work, given_check(messages)), "s1", "c1")
+    payload = {"ok": True, "step": work["steps"][0], "sheet": work}
+    payload.update(extra or {})
+    messages += [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "run_step", "arguments": "{\"step\": \"s1\"}"}}]},
+        {"role": "tool", "name": "run_step", "tool_call_id": "c1", "content": json.dumps(payload)},
+    ]
+    return messages, work
+
+
+def _level_turn(level, rise):
+    messages, work = _sheet_step_turn(
+        f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+        [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+        {"operator": "add", "a": "g1", "b": "g2"})
+    assert work["steps"][0]["result"]["value"] == pytest.approx(level + rise)
+    return messages
+
+
+@pytest.mark.parametrize("level,rise,said", [
+    (-43, 10, "33 m"), (-7, 2.5, "4.5 m"),        # the minus dropped in the reply
+    (43, 10, "-53 m"), (7, 2.5, "-9.5 m"),        # a minus code never wrote
+    (-43, 10, "53 m"), (43, 10, "33 m"),          # the sizes of the givens worked another way
+])
+def test_on_a_sheet_turn_a_step_result_with_its_sign_turned_is_withheld(level, rise, said):
+    from app.agents.citation_provenance import figure_provenance
+
+    messages = _level_turn(level, rise)
+    out, entries = figure_provenance(f"The new level is {said}.", None, messages, tool_passages=True)
+    assert said not in out and said.lstrip("-") not in out
+    assert entries == []
+    _same, record = figure_provenance(f"The new level is {said}.", None, messages, enforce=False,
+                                      tool_passages=True)
+    assert [e["source"] for e in record] == [None]
+
+
+@pytest.mark.parametrize("level,rise,said", [
+    (-43, 10, "-33 m"), (-7, 2.5, "-4.5 m"), (43, 10, "53 m"), (7, 2.5, "9.5 m"),
+    (-43, 10, "\u221233 m"),                       # the typographic minus
+])
+def test_on_a_sheet_turn_a_step_result_with_the_sign_code_wrote_is_shown(level, rise, said):
+    from app.agents.citation_provenance import figure_provenance
+
+    answer = f"The new level is {said}."
+    out, entries = figure_provenance(answer, None, _level_turn(level, rise), tool_passages=True)
+    assert out == answer
+    assert [(e["source"], e.get("step"), e.get("working")) for e in entries] == [("calculator", "s1", None)]
+
+
+@pytest.mark.parametrize("level,rise,answer", [
+    (-43, 10, "The new level is -33 m (\u221243 m + 10 m = \u221233 m)."),
+    (-7, 2.5, "The new level is -4.5 m (\u22127 m + 2.5 m = \u22124.5 m)."),
+    (43, 10, "The new level is 53 m (43 m + 10 m = 53 m)."),
+])
+def test_on_a_sheet_turn_a_result_restated_with_its_givens_is_shown_whole(level, rise, answer):
+    from app.agents.citation_provenance import figure_provenance
+
+    out, entries = figure_provenance(answer, None, _level_turn(level, rise), tool_passages=True)
+    assert out == answer
+    assert [(e["source"], e.get("step")) for e in entries] == [
+        ("calculator", "s1"), ("user_input", None), ("user_input", None), ("calculator", "s1")]
+    assert all(not e.get("working") for e in entries)
+
+
+@pytest.mark.parametrize("a,b", [(-5, 5), (12.5, -12.5), (0, 0)])
+def test_on_a_sheet_turn_a_step_result_of_zero_is_credited_to_its_step(a, b):
+    """Zero is not a negative result: "0 m" carries no minus and is the
+    step's own figure."""
+    from app.agents.citation_provenance import figure_provenance
+
+    messages = _level_turn(a, b)
+    out, entries = figure_provenance("The new level is 0 m.", None, messages, tool_passages=True)
+    assert out == "The new level is 0 m."
+    assert [(e["figure"], e["source"], e.get("step")) for e in entries] == [("0 m", "calculator", "s1")]
+
+
+@pytest.mark.parametrize("level,rise,worked", [(43, 10, "430 m"), (7, 2.5, "17.5 m")])
+def test_pairwise_working_is_allowed_only_on_a_turn_without_a_working_sheet(level, rise, worked):
+    """The same workflow result and the same reply, twice: a turn with no
+    sheet credits a product of the user's own numbers as the calculator's
+    working, as it always did; the turn that carries a sheet withholds it,
+    because there the product would have been a step."""
+    import json
+
+    from app.agents.citation_provenance import figure_provenance
+
+    user = f"The formation level is {level} m. Raise it by {rise} m: what is the new level?"
+    ran = {"ok": True, "workflow": "survey_levels", "answer": f"The new level is {level + rise} m."}
+    plain = [
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function", "function": {"name": "run_workflow", "arguments": "{}"}}]},
+        {"role": "tool", "name": "run_workflow", "tool_call_id": "w1", "content": json.dumps(ran)},
+    ]
+    on_sheet, _work = _sheet_step_turn(
+        user, [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
+        {"operator": "add", "a": "g1", "b": "g2"}, extra=ran)
+    answer = f"The new level is {level + rise} m. The two multiplied give {worked}."
+    out, entries = figure_provenance(answer, None, plain, tool_passages=True)
+    assert out == answer
+    assert [(e["figure"], e.get("working")) for e in entries] == [(f"{level + rise} m", None), (worked, True)]
+    out, entries = figure_provenance(answer, None, on_sheet, tool_passages=True)
+    assert worked not in out and f"{level + rise} m" in out
+    assert [e["figure"] for e in entries] == [f"{level + rise} m"]

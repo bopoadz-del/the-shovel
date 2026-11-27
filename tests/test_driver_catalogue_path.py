@@ -1285,25 +1285,127 @@ def test_a_given_written_before_its_passage_is_marked_when_the_step_runs(monkeyp
     assert f"{total} m" in shown
 
 
+def _level_script(monkeypatch, level, rise, reply, inputs=None, rise_unit="m"):
+    """The model writes two givens, plans one arithmetic step on them, runs
+    it and replies ``reply``."""
+    return _scripted(monkeypatch, [
+        {"content": "", "tool_calls": [_call("sheet_update", {
+            "givens": [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": rise_unit}],
+            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                      "inputs": inputs or {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
+        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
+        {"content": reply},
+        {"content": reply},      # asked again when the step stayed open: the same reply
+    ])
+
+
 @pytest.mark.parametrize("level,rise,said,credited", [
     (-43, 10, "-33 m", True),      # as code wrote it
     (-43, 10, "33 m", False),      # the minus dropped in the reply
     (43, 10, "53 m", True),
     (43, 10, "-53 m", False),      # a minus code never wrote
+    (-7, 2.5, "-4.5 m", True),
+    (-7, 2.5, "4.5 m", False),
+    (7, 2.5, "9.5 m", True),
+    (7, 2.5, "-9.5 m", False),
 ])
 def test_a_step_result_is_credited_to_its_step_only_with_the_sign_code_wrote(monkeypatch, level, rise, said, credited):
     conv = f"sign-{level}-{said}"
-    _scripted(monkeypatch, [
-        {"content": "", "tool_calls": [_call("sheet_update", {
-            "givens": [{"id": "g1", "value": level, "unit": "m"}, {"id": "g2", "value": rise, "unit": "m"}],
-            "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
-                      "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]}, "c1")]},
-        {"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, "c2")]},
-        {"content": f"The new level is {said}."},
-    ])
-    _run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
-         conversation_id=conv, sheet_mode=True)
+    _level_script(monkeypatch, level, rise, f"The new level is {said}.")
+    shown = _text(_run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
     row = trace_store.records(_today(), conv)[0]
     assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(level + rise)]
     assert bool([f for f in row["figures"] if f.get("step") == "s1"]) is credited
+    # The figure with the wrong sign is not on the screen at all, under any
+    # credit: not as the step's, not as "working" on the givens' sizes.
+    assert (said in shown) is credited
+    assert (said.lstrip("-") in shown) is credited
+    assert [f for f in row["figures"] if f.get("working")] == []
+    assert len(row["figures"]) == (1 if credited else 0)
+
+
+@pytest.mark.parametrize("level,rise,reply", [
+    (-43, 10, "The new level is -33 m (\u221243 m + 10 m = \u221233 m)."),
+    (-7, 2.5, "The new level is -4.5 m (\u22127 m + 2.5 m = \u22124.5 m)."),
+    (43, 10, "The new level is 53 m (43 m + 10 m = 53 m)."),
+])
+def test_a_step_result_restated_with_its_givens_is_shown_whole(monkeypatch, level, rise, reply):
+    """The shape a real model writes: the result, then the step restated
+    with the givens, the minus typographic. Every figure on it is the
+    step's or the user's, so nothing is cut."""
+    conv = f"restated-{level}-{rise}"
+    _level_script(monkeypatch, level, rise, reply)
+    shown = _text(_run(user_message=f"The formation level is {level} m. Raise it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert shown.strip() == reply
+    assert [f.get("step") for f in row["figures"]] == ["s1", None, None, "s1"]
+    assert [f["source"] for f in row["figures"]] == ["calculator", "user_input", "user_input", "calculator"]
+
+
+@pytest.mark.parametrize("level,rise", [(-5, 5), (12.5, -12.5)])
+def test_a_step_result_of_zero_is_credited_to_its_step_and_shown(monkeypatch, level, rise):
+    conv = f"zero-{level}"
+    _level_script(monkeypatch, level, rise, "The new level is 0 m.")
+    shown = _text(_run(user_message=f"The formation level is {level} m. Change it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [0.0]
+    assert "0 m" in shown
+    assert [(f["figure"], f.get("step")) for f in row["figures"]] == [("0 m", "s1")]
+
+
+@pytest.mark.parametrize("level,rise,rise_unit,wrong,unit_first", [
+    (-43, 250, "mm", "207 m", False), (-43, 250, "mm", "207 m", True),
+    (12, 500, "mm", "512 m", False), (12, 500, "mm", "512 m", True),
+    (40, 3, "km", "43 m", False), (40, 3, "km", "43 m", True),
+])
+def test_a_unit_the_plan_writes_beside_a_given_does_not_change_the_givens_unit(monkeypatch, level, rise, rise_unit,
+                                                                               wrong, unit_first):
+    """The user gave the rise in mm (or km). The plan names the given and
+    writes "m" beside it. The step is not run as metres plus metres, and
+    the sum of the two bare numbers is not shown."""
+    conv = f"beside-{level}-{rise_unit}-{unit_first}"
+    inputs = {"operator": "add", "a": "g1"}
+    inputs.update([("b_unit", "m"), ("b", "g2")] if unit_first else [("b", "g2"), ("b_unit", "m")])
+    _level_script(monkeypatch, level, rise, f"The new level is {wrong}.", inputs=inputs, rise_unit=rise_unit)
+    shown = _text(_run(
+        user_message=f"The level is {level} m. Raise it by {rise} {rise_unit}: what is the new level?",
+        conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    step = row["sheet"]["steps"][0]
+    assert step["status"] == "failed" and "result" not in step
+    assert step["error"] == f"cannot add m and {rise_unit}: convert one to the other's unit first"
+    assert wrong not in shown
+    assert [f for f in row["figures"] if f["figure"] == wrong] == []
+
+
+@pytest.mark.parametrize("level,rise,rise_unit,wrong", [(-43, 250, "mm", "207 m"), (12, 500, "mm", "512 m")])
+def test_a_bare_number_of_the_plan_is_held_to_the_unit_written_beside_it(monkeypatch, level, rise, rise_unit, wrong):
+    """The plan writes the user's number itself, bare, with another unit
+    beside it (250 for the user's 250 mm, run as 250 m). The step runs, but
+    its result rests on a quantity nobody gave, so it is not shown."""
+    conv = f"bare-{level}-{rise}"
+    _level_script(monkeypatch, level, rise, f"The new level is {wrong}.",
+                  inputs={"operator": "add", "a": "g1", "b": rise, "b_unit": "m"}, rise_unit=rise_unit)
+    shown = _text(_run(
+        user_message=f"The level is {level} m. Raise it by {rise} {rise_unit}: what is the new level?",
+        conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert [st["result"]["value"] for st in row["sheet"]["steps"]] == [float(level + rise)]
+    assert wrong not in shown
+    assert [f for f in row["figures"] if f.get("step") == "s1"] == []
+
+
+@pytest.mark.parametrize("level,rise,total", [(-43, 10, "-33 m"), (12, 0.5, "12.5 m")])
+def test_a_bare_number_of_the_plan_in_the_unit_the_user_gave_it_in_is_credited(monkeypatch, level, rise, total):
+    conv = f"bare-ok-{level}"
+    _level_script(monkeypatch, level, rise, f"The new level is {total}.",
+                  inputs={"operator": "add", "a": "g1", "b": rise, "b_unit": "m"})
+    shown = _text(_run(user_message=f"The level is {level} m. Raise it by {rise} m: what is the new level?",
+                       conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert total in shown
+    assert [f.get("step") for f in row["figures"]] == ["s1"]
 
