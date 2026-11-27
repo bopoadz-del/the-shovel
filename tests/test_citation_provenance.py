@@ -874,7 +874,14 @@ def test_unit_written_with_reads_the_unit_a_figure_is_written_with(text, number,
     (207.0, "kg", 207.0, "m", False, False),                # another kind
     (207.0, "m2", 207.0, "m", False, False),
     (207.0, "", 207.0, "m", False, False),                  # no unit written for a result in m
-    (12.0, "tons", 12.0, "t", False, False),                # a unit the converter does not know
+    (12.0, "tons", 12.0, "t", False, True),                 # "tons" is the tonne, as a bill writes it
+    (5.0, "TON", 5.0, "t", False, True),
+    (11.0, "tons", 12.0, "t", False, False),
+    (12.0, "tons", 12.0, "kg", False, False),
+    (12.0, "nos", 12.0, "-", True, True),                   # a count written as a bill writes it
+    (30.0, "No.", 30.0, "-", True, True),
+    (13.0, "nos", 12.0, "-", True, False),
+    (12.0, "kN.m.foo", 12.0, "-", True, False),              # a unit the converter does not know
     (207.0, "m", 207.0, "-", True, False),                  # a pure number given a unit
     (207.0, "currency", 207.0, "-", True, False),
     (207.0, "", 207.0, "-", True, True),                    # ... and written with none
@@ -1019,6 +1026,8 @@ def test_parse_compound_unit_multiplies_out_a_product_or_quotient_of_units(unit,
 
 @pytest.mark.parametrize("unit", [
     "", None, "m*", "*m", "m*(m", "m*m)", "(m*m", "m*long", "m*working days", "°F*m", "m//m", "m**m",
+    "(m m", "(m(",                                       # a bracket opened and never closed
+    "man-day*m", "m*md",                                 # a part that needs the hours in a day
 ])
 def test_parse_compound_unit_is_none_for_what_does_not_multiply_out(unit):
     """A part that is no unit, a family that does not multiply (an offset

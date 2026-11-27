@@ -48,7 +48,7 @@ _FAMILIES: Dict[str, Dict[str, Any]] = {
     },
     "volume": {
         "m3": 1.0, "cum": 1.0, "mm3": 1e-9, "cm3": 1e-6, "cc": 1e-6,
-        "l": 1e-3, "lit": 1e-3, "litre": 1e-3, "liter": 1e-3, "litres": 1e-3, "liters": 1e-3,
+        "l": 1e-3, "lit": 1e-3, "ltr": 1e-3, "ltrs": 1e-3, "litre": 1e-3, "liter": 1e-3, "litres": 1e-3, "liters": 1e-3,
         "in3": 1.6387064e-5, "ft3": 0.028316846592, "cuft": 0.028316846592, "cf": 0.028316846592,
         "yd3": 0.764554857984, "cuyd": 0.764554857984,
     },
@@ -74,7 +74,9 @@ _FAMILIES: Dict[str, Dict[str, Any]] = {
         "ksi": 6894.757293168361, "kip/in2": 6894.757293168361,
     },
     "mass": {
-        "kg": 1.0, "g": 1e-3, "t": 1e3, "tonne": 1e3, "tonnes": 1e3,
+        # "ton" on a bill or a site sheet is the metric tonne; the US short
+        # ton has its own name and is not read here.
+        "kg": 1.0, "g": 1e-3, "t": 1e3, "tonne": 1e3, "tonnes": 1e3, "ton": 1e3, "tons": 1e3,
         "lb": 0.45359237, "lbs": 0.45359237,
     },
     "time": {
@@ -98,8 +100,9 @@ _FAMILIES: Dict[str, Dict[str, Any]] = {
         "fraction": 1.0, "%": 0.01, "percent": 0.01, "pct": 0.01, "‰": 0.001,
     },
     # A count of things. "nr" is the mark on a quantity that is not a length,
-    # an area or a mass; "count" is the same unit written as a word.
-    "count": {"nr": 1.0, "count": 1.0},
+    # an area or a mass; "count" is the same unit written as a word, and
+    # "no" / "nos" (also written "No." and "Nos") is how a bill writes it.
+    "count": {"nr": 1.0, "count": 1.0, "no": 1.0, "nos": 1.0},
     # A pure number whose dimension is named by another input.
     "ratio": {"ratio": 1.0},
     "labour effort": {

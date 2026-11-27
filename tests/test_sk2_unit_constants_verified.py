@@ -85,9 +85,9 @@ _SAME_AS = {
     "inch": "in", "inches": "in", "feet": "ft", "foot": "ft",
     "yard": "yd", "yards": "yd", "mile": "mi", "miles": "mi",
     "sqm": "m2", "hectare": "ha", "hectares": "ha", "sqft": "ft2", "sf": "ft2", "acres": "acre",
-    "cum": "m3", "cc": "cm3", "lit": "l", "litre": "l", "liter": "l", "litres": "l", "liters": "l",
+    "cum": "m3", "cc": "cm3", "lit": "l", "ltr": "l", "ltrs": "l", "litre": "l", "liter": "l", "litres": "l", "liters": "l",
     "cuft": "ft3", "cf": "ft3", "cuyd": "yd3", "kips": "kip",
-    "tonne": "t", "tonnes": "t", "lbs": "lb",
+    "tonne": "t", "tonnes": "t", "ton": "t", "tons": "t", "lbs": "lb",
     "hr": "h", "hrs": "h", "hour": "h", "hours": "h",
     "sec": "s", "second": "s", "seconds": "s", "mins": "min", "minute": "min", "minutes": "min",
     "day": "d", "days": "d", "calendar day": "d", "calendar days": "d",
@@ -102,7 +102,7 @@ _DEFINED = {
     "second moment of area": {"m4": M ** 4, "mm4": MM ** 4, "cm4": CM ** 4, "in4": INCH ** 4},
     "force": _FORCE, "pressure": _PRESSURE, "mass": _MASS, "time": _TIME,
     "calendar period": _CALENDAR, "angle": _ANGLE, "fraction": _FRACTION,
-    "count": {"nr": 1.0, "count": 1.0}, "ratio": {"ratio": 1.0},
+    "count": {"nr": 1.0, "count": 1.0, "no": 1.0, "nos": 1.0}, "ratio": {"ratio": 1.0},
 }
 
 # Labour effort and working time carry their hours from the context, so

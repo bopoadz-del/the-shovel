@@ -1909,6 +1909,8 @@ _RESULT_MARKS = (_RESULT_SIGN, _RESULT_PURE)
 
 #: The converter's name for the kind of every currency ("AED", "currency").
 _MONEY = "currency"
+#: The converter's name for the kind of a count of things ("nr", "nos").
+_COUNT = "count"
 #: What money is per, written straight after its figure: "/m2", "per m2".
 _PER_AFTER_MONEY = re.compile(r"\s?(?:/\s?|per\s+)([^\s,;:()\[\]]+)", re.IGNORECASE)
 #: The whole unit token written after a figure: "m3", "kN/m2", "m*m", "%".
@@ -1968,7 +1970,8 @@ def _states_result(value: float, written: str, size: float, unit: str, pure: boo
       written by its currency alone also states a money rate (what it is
       per is then in the words, which this check does not read).
     * The result is a pure number (``pure``): only a figure written with no
-      unit states it -- "207 m" for a result of 207 does not.
+      unit, or with a unit that only counts things ("12 nos", "12 No."),
+      states it -- "207 m" for a result of 207 does not.
     * The result has a unit the converter cannot compare: only a figure
       written with that very unit states it, never its number alone.
     * The result has no unit (an output the registry declares none for,
@@ -1981,7 +1984,8 @@ def _states_result(value: float, written: str, size: float, unit: str, pure: boo
     if ours is None and unit_key(unit):
         return unit_key(written) == unit_key(unit) and _close(value, size)
     if ours is None:
-        return (not pure or not written) and _match(value, _rescaled([size]))
+        bare = not written or (theirs is not None and theirs[0] == _COUNT)
+        return (not pure or bare) and _match(value, _rescaled([size]))
     if theirs is None:
         return False
     if theirs[0] == _MONEY and ours[0].startswith(_MONEY + "/"):

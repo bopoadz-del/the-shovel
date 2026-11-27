@@ -1633,6 +1633,44 @@ def test_a_quotient_by_a_rate_is_not_read_as_another_quantity(monkeypatch, area,
     assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
 
 
+@pytest.mark.parametrize("first,second,said,credited", [
+    (2, 3, "5 tons", True),             # a mass written as a bill writes the tonne
+    (4, 7, "11 Tons", True),
+    (2, 3, "5 TON", True),              # three capitals that are a unit, not a currency
+    (2, 3, "6 tons", False),
+    (4, 7, "11 kg", False),
+])
+def test_a_sum_of_tonnes_is_stated_in_tons(monkeypatch, first, second, said, credited):
+    shown, row = _sheet_turn(
+        monkeypatch, f"tons-{first}-{said}", f"Footing steel is {first} t and beam steel is {second} t. Total?",
+        {"givens": [{"id": "g1", "value": first, "unit": "t"}, {"id": "g2", "value": second, "unit": "t"}],
+         "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                   "inputs": {"operator": "add", "a": "g1", "b": "g2"}}]},
+        f"Total steel is {said}.")
+    assert row["sheet"]["steps"][0]["result"]["value"] == first + second
+    assert (said in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
+@pytest.mark.parametrize("first,second,said,credited", [
+    (3, 4, "12 nos", True),             # a count written as a bill writes it
+    (5, 6, "30 Nos", True),
+    (3, 4, "12 No.", True),
+    (3, 4, "13 nos", False),
+    (5, 6, "30 m", False),              # a count is not a length
+])
+def test_a_product_of_counts_is_stated_in_nos(monkeypatch, first, second, said, credited):
+    shown, row = _sheet_turn(
+        monkeypatch, f"nos-{first}-{said}", f"There are {first} floors with {second} doors on each. How many doors?",
+        {"givens": [{"id": "g1", "value": first, "unit": "-"}, {"id": "g2", "value": second, "unit": "-"}],
+         "plan": [{"id": "s1", "entry": "formula:arithmetic_step",
+                   "inputs": {"operator": "multiply", "a": "g1", "b": "g2"}}]},
+        f"Doors required: {said}")
+    assert row["sheet"]["steps"][0]["result"]["value"] == first * second
+    assert (said in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
 def _two_runs(first, second, unit):
     """Two lengths added in one step, and the sum fed to a volume formula
     as its length (an input the formula declares in m)."""
