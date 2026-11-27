@@ -121,14 +121,17 @@ def test_the_chain_does_not_fire_without_two_stated_units_of_different_scale(val
     assert all(c["from_unit"] == c["to_unit"] for c in conversions)
 
 
-def test_the_chain_skips_an_input_already_refused():
+@pytest.mark.parametrize("values,refused", [
     # the consumption itself is refused: no second row for the price's chain
-    out, _, rejected = _chain({"quantity": "640 m2", "consumption_per_unit": "5 kN/m2",
-                               "price_per_resource_unit": "310 AED/kg"})
-    assert [r["parameter"] for r in rejected] == ["consumption_per_unit"]
-    out, _, rejected = _chain({"quantity": "640 kN", "consumption_per_unit": "0.022 m3/kg",
-                               "price_per_resource_unit": "310 AED/L"})
-    assert [r["parameter"] for r in rejected] == ["quantity"]
+    ({"quantity": "640 m2", "consumption_per_unit": "5 kN/m2", "price_per_resource_unit": "310 AED/kg"},
+     ["consumption_per_unit"]),
+    # the quantity is refused: the consumption's chain to it is not checked
+    ({"quantity": "640 kN", "consumption_per_unit": "0.022 m3/kg", "price_per_resource_unit": "310 AED/L"},
+     ["quantity"]),
+])
+def test_the_chain_skips_an_input_already_refused(values, refused):
+    _, _, rejected = _chain(values)
+    assert [r["parameter"] for r in rejected] == refused
 
 
 @pytest.mark.parametrize("value,parts", [
@@ -139,10 +142,10 @@ def test_stated_parts_split_what_is_measured_from_what_it_is_per(value, parts):
     assert fr._stated_parts(value) == parts
 
 
-def test_stated_parts_reads_an_implied_currency():
-    head, tail = fr._stated_parts("310 per m3")
-    assert tail == "m3" and head
-    assert fr._stated_parts("9 per t")[1] == "t"
+@pytest.mark.parametrize("value,tail", [("310 per m3", "m3"), ("9 per t", "t")])
+def test_stated_parts_reads_an_implied_currency(value, tail):
+    head, per = fr._stated_parts(value)
+    assert per == tail and head
 
 
 @pytest.mark.parametrize("declared,written,chained,fills", [
@@ -164,27 +167,41 @@ def test_a_measure_fills_a_count_place_only_where_it_may(declared, written, chai
     assert fr._measure_fills_count(None, parse_unit(written), chained) is False
 
 
-def test_an_undeclared_input_keeps_refusing_a_price_per_measure():
+@pytest.mark.parametrize("rate,reason", [("45 AED/kg", "wrong_unit"), ("45 per m3", "unknown_unit")])
+def test_an_undeclared_input_keeps_refusing_a_price_per_measure(rate, reason):
     # resource_line_cost's material rate declares no per: a price per kg or
     # per m3 is still refused, whatever the quantity's unit
-    for rate, reason in (("45 AED/kg", "wrong_unit"), ("45 per m3", "unknown_unit")):
-        _, _, rejected = fr.convert_written_units(
-            "resource_line_cost", {"quantity": "500 m2", "daily_output": "20 m2/d",
-                                   "day_rate": 800, "material_rate_per_unit": rate})
-        assert [(r["parameter"], r["reason"]) for r in rejected] == [("material_rate_per_unit", reason)]
+    _, _, rejected = fr.convert_written_units(
+        "resource_line_cost", {"quantity": "500 m2", "daily_output": "20 m2/d",
+                               "day_rate": 800, "material_rate_per_unit": rate})
+    assert [(r["parameter"], r["reason"]) for r in rejected] == [("material_rate_per_unit", reason)]
 
 
-def test_a_per_that_names_no_input_is_a_schema_gap(monkeypatch):
-    def calc(a: float, b: float) -> dict:
-        return {}
+@pytest.mark.parametrize("name,values", [
+    ("no_such_calculator", {"quantity": "640 m3"}),
+    ("no_such_calculator_either", {"a": "5 kN", "b": 2}),
+])
+def test_an_unknown_calculator_has_its_values_returned_unconverted(name, values):
+    assert fr.convert_written_units(name, dict(values)) == (values, [], [])
 
-    good = fr.FormulaSpec(name="chain_ok", fn=calc, owner="base", description="x", display_name="X",
-                          params={"a": fr.Param("count", 0, 1, label="a"),
-                                  "b": fr.Param("count/count", 0, 1, label="b", per="a")})
-    bad = fr.FormulaSpec(name="chain_bad", fn=calc, owner="base", description="x", display_name="X",
-                         params={"a": fr.Param("count", 0, 1, label="a", per="a"),
-                                 "b": fr.Param("count/count", 0, 1, label="b", per="c")})
-    monkeypatch.setattr(fr, "all_specs", lambda: [good, bad])
-    gaps = [g for g in fr.schema_gaps() if g.startswith("formula:")]
-    assert gaps == ["formula:chain_bad.a:per", "formula:chain_bad.b:per"]
-    assert fr.parameters(good)["b"].per == "a" and fr.parameters(good)["a"].per == ""
+
+def _calc(a: float, b: float) -> dict:
+    return {}
+
+
+@pytest.mark.parametrize("display,per_a,per_b,gaps", [
+    ("X", "", "a", []),
+    ("X", "a", "c", ["formula:chain.a:per", "formula:chain.b:per"]),   # itself; no such input
+    ("", "", "zz", ["formula:chain.b:per", "formula:chain:display_name"]),
+])
+def test_a_per_that_names_no_input_is_a_schema_gap(monkeypatch, display, per_a, per_b, gaps):
+    spec = fr.FormulaSpec(name="chain", fn=_calc, owner="base", description="x", display_name=display,
+                          params={"a": fr.Param("count", 0, 1, label="a", per=per_a),
+                                  "b": fr.Param("count/count", 0, 1, label="b", per=per_b),
+                                  # declared but not in the signature: not an input
+                                  "z": fr.Param("count", 0, 1, label="z", per="a")})
+    monkeypatch.setattr(fr, "all_specs", lambda: [spec])
+    assert [g for g in fr.schema_gaps() if g.startswith("formula:")] == gaps
+    params = fr.parameters(spec)
+    assert sorted(params) == ["a", "b"]
+    assert (params["a"].per, params["b"].per) == (per_a, per_b)
