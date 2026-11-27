@@ -372,3 +372,16 @@
   color: var(--text-primary);
   border-color: var(--border-soft);
 }
+
+/* The model's notes (MemoryNotes.tsx) */
+.memory-note { display: block; padding: 0.5rem 0; }
+.memory-note__data {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  margin: 0.4rem 0;
+}
+.memory-note[data-review='discarded'] .memory-note__data { opacity: 0.55; }
+.memory-note__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }

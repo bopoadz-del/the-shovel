@@ -271,6 +271,13 @@ CASES: Dict[str, Case] = {
         ({"worker_mass_kg": 80, "free_fall_m": 1.8,
           "deceleration_distance_m": "120 cm"},
          {"max_arrest_force_kn": 1.96})),
+    # Contribution per unit = 50 - 30 = 20; break-even = 12,000 / 20 = 600
+    # units; revenue = 600 x 50 = 30,000. Money and counts carry no physical
+    # unit, so there is no unit case.
+    "break_even_point": Case(
+        {"fixed_costs": 12_000, "price_per_unit": 50, "variable_cost_per_unit": 30},
+        {"contribution_per_unit": 20.0, "break_even_units": 600.0,
+         "break_even_revenue": 30_000.0}, "fixed_costs", None),
 }
 
 

@@ -36,6 +36,7 @@ _AUDIT_A_TO_F = [
     "beam_shear_simple",
     "bim_clash_tolerance",
     "bolt_shear_capacity",
+    "break_even_point",
     "calculate_evm",
     "calculate_interim_payment",
     "calculate_payment",
