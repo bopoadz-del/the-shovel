@@ -133,6 +133,11 @@ class ToolSpec:
     #: The reason codes the tool's failures carry; the only error words of
     #: the tool a user may be shown.
     reason_codes: Tuple[str, ...] = ()
+    #: Catalogue declarations, as on a formula (app.lib.formula_registry):
+    #: optional; a missing one is listed in the catalogue entry's ``gaps``.
+    when_to_use: str = ""
+    when_not: str = ""
+    examples: Tuple[Dict[str, Any], ...] = ()
 
 
 _TOOLS: Dict[str, ToolSpec] = {}
@@ -142,7 +147,11 @@ def tool(name: str, *, owner: str, display_name: str,
          schema: Optional[Dict[str, Any]] = None,
          params: Optional[Dict[str, Any]] = None, kind: str = "",
          statement: Optional[Stater] = None,
-         reason_codes: Tuple[str, ...] = ()) -> Callable[[Handler], Handler]:
+         reason_codes: Tuple[str, ...] = (),
+         when_to_use: str = "", when_not: str = "",
+         examples: Tuple[Dict[str, Any], ...] = ()) -> Callable[[Handler], Handler]:
+    from app.lib.formula_registry import declared_examples
+
     if owner not in OWNERS:
         raise ValueError(f"unknown tool owner {owner!r}; one of {OWNERS}")
     if not (display_name or "").strip():
@@ -152,6 +161,7 @@ def tool(name: str, *, owner: str, display_name: str,
     if (kind == "computed") != (statement is not None):
         raise ValueError(f"tool {name!r}: a computed tool, and only a computed tool, declares a statement")
     codes = _reason_codes("tool", name, reason_codes)
+    shown = declared_examples("tool", name, examples)
 
     def register(fn: Handler) -> Handler:
         existing = _TOOLS.get(name)
@@ -159,7 +169,8 @@ def tool(name: str, *, owner: str, display_name: str,
             raise ValueError(f"tool {name!r} is registered twice")
         _TOOLS[name] = ToolSpec(name, owner, fn, display_name.strip(), schema,
                                 dict(params) if params is not None else None,
-                                kind, statement, codes)
+                                kind, statement, codes,
+                                (when_to_use or "").strip(), (when_not or "").strip(), shown)
         return fn
     return register
 
