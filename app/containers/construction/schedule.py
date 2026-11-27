@@ -24,6 +24,35 @@ _LOOKAHEAD_WEEKS_RE = re.compile(
 _LOOKAHEAD_WEEK_WORDS = {"two": 2, "three": 3, "four": 4}
 
 
+def _progress_spi(planned_pct: float, actual_pct: float) -> Tuple[Optional[float], Optional[str]]:
+    """Progress-based SPI (actual / planned) from the registered kernel.
+
+    Returns ``(spi, None)`` on a success envelope, where ``spi`` is ``None``
+    when the kernel says the ratio is undefined (nothing planned yet), and
+    ``(None, error)`` when the envelope refuses the inputs. No ratio is
+    computed here, so no value can be reported that the kernel would not give.
+
+    The two figures are the tracker's own, already read from its inputs, so
+    the kernel runs with no turn ask: the envelope's repairs that read the
+    user's words (an unwritten zero dropped, a written sign restored) are for
+    a model's call to a calculator, and would otherwise turn the tracker's
+    stated 0 % into a "missing" input.
+    """
+    from app.lib import construction_formulas as calc
+
+    ask_token = calc.set_current_ask("")
+    try:
+        env = calc.run_calculation(
+            "progress_kpi", {"planned_cum": planned_pct, "actual_cum": actual_pct},
+        )
+    finally:
+        calc._CURRENT_ASK.reset(ask_token)
+    if not isinstance(env, dict) or env.get("status") != "success":
+        err = (env or {}).get("error") if isinstance(env, dict) else None
+        return None, str(err or "progress_kpi did not return a result")
+    return (env.get("result") or {}).get("spi_progress"), None
+
+
 def _look_ahead_window_from_text(text: str) -> Tuple[Optional[int], Optional[int]]:
     """Parse an N-day / N-week window from a look-ahead ask.
 
@@ -944,7 +973,10 @@ class ConstructionScheduleMixin:
 
         variance = round(actual_pct - planned_pct, 2)
         # Progress-proxy SPI (actual % / planned %) — NOT classic EV/PV SPI.
-        spi_proxy = round(actual_pct / planned_pct, 3) if planned_pct else 1.0
+        # One copy: the ratio is the registered ``progress_kpi`` kernel's,
+        # run through the ``run_calculation`` envelope, so its validation and
+        # its "undefined when nothing was planned" rule apply here too.
+        spi_proxy, spi_error = _progress_spi(planned_pct, actual_pct)
         earned_value = round(contract_value * actual_pct / 100, 2) if contract_value else None
         planned_value = round(contract_value * planned_pct / 100, 2) if contract_value else None
         # EV − PV is schedule variance (SV), not cost variance.
@@ -1006,6 +1038,7 @@ class ConstructionScheduleMixin:
                 # Kept for callers; clearly labeled as a % proxy, not EV/PV SPI.
                 "schedule_performance_index": spi_proxy,
                 "schedule_performance_index_kind": "progress_proxy_actual_over_planned_pct",
+                **({"schedule_performance_index_error": spi_error} if spi_error else {}),
                 "status": status,
                 "estimated_delay_days": delay_days,
             },

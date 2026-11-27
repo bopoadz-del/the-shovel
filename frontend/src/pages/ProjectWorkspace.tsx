@@ -36,12 +36,14 @@ import {
   belongsToProjectList,
   readSessionDocuments,
   sessionDocumentsView,
+  uploadNotice,
+  uploadSessionFor,
   withSessionId,
   type SessionDocumentsState,
 } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
-import { readCitations, readCoverage } from '../chat/citationMarkers'
+import { readCitations, readCoverage, readDetails } from '../chat/citationMarkers'
 import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
@@ -181,6 +183,8 @@ interface ChatMessage {
   citations?: AnswerCitation[]
   /** Coverage from the SSE 'end' event (a Sources panel line, never answer text). */
   coverage?: AnswerCoverage
+  /** Supporting text the answer contract moved out of the lead (rule 5). */
+  details?: string
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -364,8 +368,9 @@ function friendlyErrorMessage(raw: string): string {
 
 interface DocumentsPanelProps {
   projectId: string
-  /** The open chat session (W2): an upload is recorded on it and listed
-   *  under "This session" only, never in the project's documents. */
+  /** The open chat session (W2): "+ Upload file" records an upload on it,
+   *  listed under "This session" only, never in the project's documents;
+   *  "+ Add to project" files the upload as a project document. */
   sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
@@ -402,7 +407,10 @@ export function DocumentsPanel({
   const replaceInputRef = useRef<HTMLInputElement>(null)
   const replaceTarget = useRef<string | null>(null)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'project' | 'session',
+  ) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploadError(null)
@@ -410,24 +418,24 @@ export function DocumentsPanel({
     try {
       const form = new FormData()
       form.append('file', file)
-      withSessionId(form, sessionId)
+      withSessionId(form, uploadSessionFor(target, sessionId))
       const resp = await apiPostForm<{ document: DocumentRecord }>(
         `/v1/projects/${projectId}/documents`,
         form,
       )
       onDocumentAdded(resp.document)
-      // Tell a non-admin AT upload time that the file was stored but not
-      // indexed, instead of leaving it to the sidebar label only.
-      const notIndexed = resp.document.panel_status?.detail
-      if (notIndexed) {
-        setUploadError(notIndexed)
+      // Say AT upload time what the server says about a file it stored but
+      // search does not hold, instead of leaving it to the sidebar label only.
+      const notice = uploadNotice(resp.document)
+      if (notice) {
+        setUploadError(notice)
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
     } finally {
       setUploading(false)
       // Reset the input so the same file can be re-uploaded if needed
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      e.target.value = ''
     }
   }
 
@@ -596,9 +604,17 @@ export function DocumentsPanel({
           type="file"
           id="doc-file-input"
           className="docs-upload__input"
-          onChange={(e) => void handleFileChange(e)}
+          onChange={(e) => void handleFileChange(e, 'session')}
           disabled={uploading}
           aria-label="Choose file to upload"
+        />
+        <input
+          type="file"
+          id="doc-project-file-input"
+          className="docs-upload__input"
+          onChange={(e) => void handleFileChange(e, 'project')}
+          disabled={uploading}
+          aria-label="Choose file to add to the project"
         />
         <label
           htmlFor="doc-file-input"
@@ -606,6 +622,14 @@ export function DocumentsPanel({
           aria-busy={uploading}
         >
           {uploading ? 'Uploading…' : '+ Upload file'}
+        </label>
+        <label
+          htmlFor="doc-project-file-input"
+          className={`docs-upload__btn btn btn--ghost${uploading ? ' btn--disabled' : ''}`}
+          aria-busy={uploading}
+          title="Add a document to the project's files (not only this chat)"
+        >
+          + Add to project
         </label>
         {uploadError && (
           <p className="docs-upload__error" role="alert">{uploadError}</p>
@@ -941,10 +965,18 @@ export default function ProjectWorkspace() {
   return <ProjectWorkspaceInner key={id ?? 'none'} id={id} />
 }
 
-/** The browser's local storage, or null where it is unavailable. */
+/** How long the workspace waits for the project read before it says so. */
+const PROJECT_READ_DEADLINE_MS = 60_000
+
+/**
+ * This tab's session storage, or null where it is unavailable. The open
+ * thread is remembered per tab: a reload or a return to the workspace in
+ * the same tab reopens it, and a tab opened fresh starts its own thread
+ * instead of the one another tab left open.
+ */
 function browserStorage(): Storage | null {
   try {
-    return typeof window !== 'undefined' ? window.localStorage : null
+    return typeof window !== 'undefined' ? window.sessionStorage : null
   } catch {
     return null
   }
@@ -1001,7 +1033,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     return () => { cancelled = true }
   }, [])
 
-  // The open session is remembered per project in this browser: a reload,
+  // The open session is remembered per project in this tab: a reload,
   // or leaving the workspace and coming back, reopens the same thread with
   // its stored history. With nothing remembered, opening a project and
   // "New chat" each mint a new id; the legacy stable id is never the
@@ -1103,13 +1135,22 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   // ── Load project ──────────────────────────────────────────────────────────
 
+  // A project read that never answers would hold the page on "Loading
+  // project…" with no composer; past this deadline it ends in the error
+  // state, whose retry reads the project again.
+  const [projectReadAttempt, setProjectReadAttempt] = useState(0)
+  const retryProjectRead = useCallback(() => {
+    setWsState({ tag: 'loading' })
+    setProjectReadAttempt((n) => n + 1)
+  }, [])
+
   useEffect(() => {
     if (!id) return
     refreshConversations()
     let cancelled = false
     void (async () => {
       try {
-        const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`)
+        const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`, { timeoutMs: PROJECT_READ_DEADLINE_MS })
         if (cancelled) return
         setWsState({ tag: 'ready', project })
         setDocuments((project.documents ?? []).filter(belongsToProjectList))
@@ -1130,7 +1171,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       }
     })()
     return () => { cancelled = true }
-  }, [id, refreshConversations])
+  }, [id, refreshConversations, projectReadAttempt])
 
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
@@ -1520,10 +1561,11 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
               const rawCitations = readCitations(evt['citations']) ?? []
               const rawCoverage = readCoverage(evt['coverage'])
+              const rawDetails = readDetails(evt['details'])
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage, details: rawDetails }
                     : m
                 )
               )
@@ -1672,6 +1714,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           <span className="workspace-notfound__code">Error</span>
           <h2>Could not load project</h2>
           <p className="workspace-notfound__message">{wsState.message}</p>
+          <button type="button" className="btn btn--primary" onClick={retryProjectRead}>
+            Try again
+          </button>
           <Link to="/" className="btn btn--ghost" style={{ textDecoration: 'none' }}>
             ← Back to projects
           </Link>
