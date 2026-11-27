@@ -10,7 +10,8 @@ an entry's registry does not carry yet is listed in that entry's ``gaps``.
 
 Entry fields: ``id`` (``<kind>:<registry name>``), ``kind``, ``name``,
 ``for`` (one line; also the index line), ``inputs`` (name, label, type,
-unit, range, required, basis), ``outputs`` (name, unit, main),
+unit, range ``[lo, hi]`` with either bound null when not declared, required,
+basis), ``outputs`` (name, unit, main),
 ``when_to_use``, ``when_not``, ``standard``, ``examples`` (invented figures
 only), ``feeds`` / ``fed_by`` (formulas: an output that is another formula's
 input of the same name and unit), ``code`` (how the entry is called),
@@ -43,8 +44,10 @@ LOOKUP = "catalogue_lookup"
 #: catalogue.
 MAX_LOOKUP = 12
 
-#: ... and at most this many characters of entries, so a lookup result is
-#: never cut by the loop's tool-result limit (app.agents.driver.loop).
+#: ... and at most this many characters of entries. The whole result (the
+#: entries and the ``not_returned`` / ``unknown`` names on top of them) is
+#: then held to the loop's tool-result limit by ``lookup`` itself, so the
+#: loop never cuts it (app.agents.driver.loop._TOOL_RESULT_CHARS).
 LOOKUP_CHARS = 16000
 
 #: An index line's ``for`` text is cut to this many characters.
@@ -76,7 +79,7 @@ def _input(name: str, p: Any) -> Dict[str, Any]:
     return {"name": name, "label": getattr(p, "label", "") or name.replace("_", " "),
             "type": getattr(p, "kind", "") or "",
             "unit": "" if unit == "-" else unit,
-            "range": [lo, hi] if lo is not None and hi is not None else None,
+            "range": [lo, hi] if lo is not None or hi is not None else None,
             "required": bool(getattr(p, "required", False)),
             "basis": getattr(p, "basis", "") or ""}
 
@@ -258,13 +261,32 @@ _BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries,
 _CACHE: Dict[Any, List[Dict[str, Any]]] = {}
 
 
+def _knowledge_state() -> Tuple[Tuple[str, int, int], ...]:
+    root = knowledge_dir()
+    if not os.path.isdir(root):
+        return ()
+    state = []
+    for name in sorted(f for f in os.listdir(root) if f.endswith(".md")):
+        st = os.stat(os.path.join(root, name))
+        state.append((name, st.st_mtime_ns, st.st_size))
+    return tuple(state)
+
+
 def _state_key() -> Any:
+    """What every builder reads: the formula and tool registries, the
+    workflows and their cards, the hats' procedures and the knowledge
+    files. A change in any of them is a new key, so no kind is stale."""
+    from app.agents import catalog
     from app.agents.core import tool_registry
+    from app.agents.driver import routes
     from app.lib import formula_registry
 
     tool_registry.load()
     return (tuple((s.name, id(s)) for s in formula_registry.all_specs()),
-            tuple((n, id(s)) for n, s in sorted(tool_registry._TOOLS.items())))
+            tuple((n, id(s)) for n, s in sorted(tool_registry._TOOLS.items())),
+            tuple(routes.catalogue()), id(routes.cards()),
+            tuple(id(h) for h in catalog.list_hats()),
+            _knowledge_state())
 
 
 def order(entry: Dict[str, Any]) -> Tuple[int, str]:
@@ -273,9 +295,10 @@ def order(entry: Dict[str, Any]) -> Tuple[int, str]:
 
 
 def entries() -> List[Dict[str, Any]]:
-    """Every entry, in the fixed order. Built once per registry state (a
-    registered, replaced or removed formula or tool is never stale); each
-    caller gets its own copy."""
+    """Every entry, in the fixed order. Built once per state of what the
+    builders read (``_state_key``: a registered, replaced or removed
+    formula, tool, workflow, card, skill or knowledge file is never
+    stale); each caller gets its own copy."""
     key = _state_key()
     if key not in _CACHE:
         _CACHE.clear()
@@ -303,13 +326,58 @@ def asked_ids(ids: Any) -> List[str]:
     return list(dict.fromkeys(i.strip() for i in ids if isinstance(i, str) and i.strip()))
 
 
-def lookup(ids: Any) -> Dict[str, Any]:
+def _result_limit() -> int:
+    from app.agents.driver.loop import _TOOL_RESULT_CHARS
+
+    return _TOOL_RESULT_CHARS
+
+
+def _size(result: Dict[str, Any]) -> int:
+    import json
+
+    return len(json.dumps(result, default=str))
+
+
+def _cap_names(result: Dict[str, Any], key: str, limit: int) -> None:
+    """Keep as many of ``result[key]``'s names, in order, as fit the
+    result in ``limit`` characters; the rest are counted under
+    ``<key>_more``."""
+    import json
+
+    names = result.get(key) or []
+    if not names:
+        return
+    more_key = f"{key}_more"
+    result[key] = []
+    result[more_key] = len(names)  # sized at its largest; shrinks below
+    size = _size(result)
+    kept: List[str] = []
+    for name in names:
+        add = len(json.dumps(name)) + (2 if kept else 0)
+        if size + add > limit:
+            break
+        kept.append(name)
+        size += add
+    result[key] = kept
+    if len(kept) < len(names):
+        result[more_key] = len(names) - len(kept)
+    else:
+        del result[more_key]
+
+
+def lookup(ids: Any, limit: Optional[int] = None) -> Dict[str, Any]:
     """The full entries for ``ids`` (entry ids from the index), in the order
     asked: at most ``MAX_LOOKUP`` entries and ``LOOKUP_CHARS`` characters of
     them; the rest are named under ``not_returned`` and ids the catalogue
-    does not hold under ``unknown``. Never the whole catalogue."""
+    does not hold under ``unknown``. Never the whole catalogue.
+
+    The whole result, as JSON, is at most ``limit`` characters (the loop's
+    tool-result limit by default), so the loop never cuts it: names under
+    ``not_returned`` and then ``unknown`` that do not fit are counted under
+    ``not_returned_more`` / ``unknown_more`` instead of named."""
     import json
 
+    limit = _result_limit() if limit is None else limit
     asked = asked_ids(ids)
     if not asked:
         return {"ok": False, "error": "Name the entry ids to look up, as a list (ids from the catalogue index)."}
@@ -323,12 +391,16 @@ def lookup(ids: Any) -> Dict[str, Any]:
         if returned and size > LOOKUP_CHARS:
             break
         returned.append(entry)
-    result: Dict[str, Any] = {"ok": bool(found), "entries": returned, "unknown": unknown}
+    result: Dict[str, Any] = {"ok": bool(found), "entries": returned, "unknown": []}
     rest = [e["id"] for e in found[len(returned):]]
     if rest:
         result["not_returned"] = rest
     if not found:
         result["error"] = "None of these ids is in the catalogue index."
+    # The found ids still to ask for come first; then the unknown ones.
+    _cap_names(result, "not_returned", limit)
+    result["unknown"] = unknown
+    _cap_names(result, "unknown", limit)
     return result
 
 
@@ -338,7 +410,9 @@ LOOKUP_SCHEMA: Dict[str, Any] = {
         "name": LOOKUP,
         "description": "Read the full catalogue entries for ids from the catalogue index: inputs with "
                        "units and ranges, outputs, when to use and when not, examples, what each feeds "
-                       f"and how to call it. At most {MAX_LOOKUP} ids per call.",
+                       f"and how to call it. At most {MAX_LOOKUP} ids per call; found ids past that come "
+                       "back under not_returned (counted under not_returned_more when too many to "
+                       "list): ask for them in another call.",
         "parameters": {
             "type": "object",
             "properties": {"ids": {"type": "array", "items": {"type": "string"},
