@@ -280,3 +280,59 @@ def test_a_negative_zero_through_the_registry_is_zero(zero_field):
     body = res.get("result", res)
     assert math.copysign(1.0, body["line_total"]) == 1.0, res
     assert "-0" not in " ".join(body["working"])
+
+
+# ── the question a refused unit gets (app.lib.source_labels.input_question) ──
+# A counted input has no unit of its own to name, so the sentence names its
+# kind; every other input still names its unit. Through the registry.
+
+@pytest.mark.parametrize("calculation,inputs,question", [
+    # counted: a count per count, a price per count
+    ("resource_cost_line", {"quantity": 100, "consumption_per_unit": "3 kg", "price_per_resource_unit": 40},
+     "The resource consumed per unit of work is a count per count, and 3 kg is a mass, so it does not convert. "
+     "What resource consumed per unit of work should I use?"),
+    ("resource_cost_line", {"quantity": 100, "consumption_per_unit": 0.5, "price_per_resource_unit": "40 zz"},
+     "I do not recognise the unit in 40 zz; the cited price per resource unit is a price per count. "
+     "What cited price per resource unit should I use?"),
+    # not counted: the unit is still named
+    ("wind_pressure", {"wind_speed": "40 kg"},
+     "The wind speed is a length per time in m/s, and 40 kg is a mass, so it does not convert. "
+     "What wind speed should I use?"),
+    ("wind_pressure", {"wind_speed": "40 zz"},
+     "I do not recognise the unit in 40 zz; the wind speed is in m/s. What wind speed should I use?"),
+    ("excavation_volume", {"length_m": "40 kg", "width_m": 2, "depth_m": 1},
+     "The length is a length in m, and 40 kg is a mass, so it does not convert. What length should I use?"),
+])
+def test_a_refused_unit_is_asked_for_in_the_words_of_its_kind(calculation, inputs, question):
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation(calculation, dict(inputs))
+    assert env["status"] == "error" and env["question"] == question
+
+
+@pytest.mark.parametrize("unit,dimension,in_unit", [
+    ("count", "count", ""), ("count/count", "count/count", ""), ("currency/count", "currency/count", ""),
+    ("m", "", " in m"), ("m/s", "", " in m/s"), ("%", "", " in %"), ("zz", "", " in zz"), ("", "", " in "),
+])
+def test_only_a_unit_that_counts_something_is_named_by_its_kind(unit, dimension, in_unit):
+    from app.lib import source_labels
+
+    assert source_labels._counted_dimension(unit) == dimension
+    assert source_labels._in_unit(unit) == in_unit
+
+
+@pytest.mark.parametrize("rejected,missing,question", [
+    ([], ["quantity"],
+     "The Resource cost line calculator needs the quantity of work. What quantity of work should I use?"),
+    ([{"parameter": "quantity", "value": "x", "reason": "not_a_number"}], ["price_per_resource_unit"],
+     "The quantity of work needs a number, not “x”. The Resource cost line calculator also needs the cited "
+     "price per resource unit. What values should I use for the quantity of work and cited price per resource unit?"),
+    ([], ["quantity", "price_per_resource_unit"],
+     "The Resource cost line calculator needs the quantity of work and cited price per resource unit. "
+     "What values should I use for the quantity of work and cited price per resource unit?"),
+])
+def test_an_input_the_calculator_still_needs_is_named_in_the_question(rejected, missing, question):
+    from app.lib import source_labels
+
+    assert source_labels.input_question("resource_cost_line", rejected, missing=missing) == question
+
