@@ -1,0 +1,374 @@
+{
+  "schema": "kernel-pack/1",
+  "kernel": "kernel:planning",
+  "formulas": [
+    {
+      "id": "formula:cash_flow",
+      "fingerprint": "sha256:4022c09934d1bd54",
+      "approved": false,
+      "purpose": "Contractor cash flow over a monthly value and cost series: the advance paid at the start and recovered pro rata, retention held monthly and released at the last month, payments lagged by whole months, net cash and the peak funding requirement.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:calculate_payment",
+          "difference": "calculate_payment works out one period's certificate; cash_flow runs the whole monthly series and gives the funding peak."
+        }
+      ]
+    },
+    {
+      "id": "formula:cpm_network",
+      "fingerprint": "sha256:3d19777989a72c57",
+      "approved": false,
+      "purpose": "Forward and backward pass over a whole activity network with its links and lags: early and late dates, total and free float of every activity, the project duration and the critical path.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:critical_path_float",
+          "difference": "critical_path_float works on one activity whose early and late dates are already known; cpm_network computes those dates from the network."
+        }
+      ]
+    },
+    {
+      "id": "formula:crew_sizing",
+      "fingerprint": "sha256:e987a1e38c97fab7",
+      "approved": false,
+      "purpose": "Crews needed to put a quantity in place within a stated duration at a rate per crew-day, rounded up to whole crews, with crew-days, man-hours (crew-days times persons per crew times hours per day) and the duration the fielded crews give.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:productivity_manpower_duration",
+          "difference": "productivity_manpower_duration works out whichever of productivity, manpower, man-hours or duration its paired inputs allow, with no crew and no rounding up; crew_sizing counts whole crews at a rate per crew-day."
+        }
+      ]
+    },
+    {
+      "id": "formula:critical_path_float",
+      "fingerprint": "sha256:9eedac2ae956f3c4",
+      "approved": false,
+      "purpose": "Total float of one activity from its early and late start and finish, and whether it is critical (zero or negative float). Free float is not computed here.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:cpm_network",
+          "difference": "cpm_network computes the dates, floats and critical path of the whole network from activities and links; critical_path_float needs one activity's dates already known."
+        }
+      ]
+    },
+    {
+      "id": "formula:electrical_installation_sequence",
+      "fingerprint": "sha256:a954d439887fe810",
+      "approved": false,
+      "purpose": "Durations of the electrical installation stages, first fix to handover, from the floor area, the number of floors and the output rate the caller gives for each stage.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:plumbing_flow_programme",
+          "difference": "plumbing_flow_programme takes no rates from the caller: its stage rates and fixed stage days are set in code; electrical_installation_sequence needs the caller's rate for every stage."
+        }
+      ]
+    },
+    {
+      "id": "formula:floor_cycle_progress",
+      "fingerprint": "sha256:27f2178728bf3840",
+      "approved": false,
+      "purpose": "Weighted progress across floor or zone elements: completed over total units per element, and the sum of each element's progress times its weight over the sum of the weights.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_quantity",
+          "difference": "progress_quantity is one quantity's planned and actual percent and what remains; floor_cycle_progress weights many elements into one figure."
+        }
+      ]
+    },
+    {
+      "id": "formula:manhours_scurve",
+      "fingerprint": "sha256:2c8aafdec64f40e6",
+      "approved": false,
+      "purpose": "Planned and actual man-hours to date as percentages of the planned total, and a productivity index: the planned percentage divided by the actual percentage.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_kpi",
+          "difference": "progress_kpi compares quantities of work to date; manhours_scurve compares man-hours spent against man-hours planned."
+        }
+      ]
+    },
+    {
+      "id": "formula:monte_carlo_cost_percentiles",
+      "fingerprint": "sha256:9e2aa3f9e07bd91c",
+      "approved": false,
+      "purpose": "Seeded Monte Carlo of a total cost made of items with a three-point range each (low, most likely, high; triangular): the P50, P80 and P90 totals, the mean, and the chance of coming in within the most likely total.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:monte_carlo_percentiles",
+          "difference": "monte_carlo_percentiles runs the same simulation on durations in days; monte_carlo_cost_percentiles is in money."
+        }
+      ]
+    },
+    {
+      "id": "formula:monte_carlo_percentiles",
+      "fingerprint": "sha256:dda795dc48e9e10a",
+      "approved": false,
+      "purpose": "Seeded Monte Carlo of a total duration made of items with a three-point range each (low, most likely, high; triangular): the P50, P80 and P90 totals, the mean, and the chance of finishing within the most likely total.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:monte_carlo_cost_percentiles",
+          "difference": "monte_carlo_cost_percentiles runs the same simulation on money; monte_carlo_percentiles is in days."
+        }
+      ]
+    },
+    {
+      "id": "formula:plumbing_flow_programme",
+      "fingerprint": "sha256:066c780ecdf8b7db",
+      "approved": false,
+      "purpose": "Durations of the plumbing stages from material submittal to handover for a floor area and number of floors, with fixed days for submittal, procurement, water connection and handover and area-driven days for the fixing and testing stages.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:electrical_installation_sequence",
+          "difference": "electrical_installation_sequence needs the caller's output rate for every stage; plumbing_flow_programme takes only the area and floors."
+        }
+      ]
+    },
+    {
+      "id": "formula:productivity_benchmark",
+      "fingerprint": "sha256:a7323964a82eea93",
+      "approved": false,
+      "purpose": "Looks up an indicative rate per crew-day, its unit and crew for a finishing-trade work item in an owner-supplied planner template marked unverified; a work item not in the template gets no rate.",
+      "not_to_be_confused_with": [
+        {
+          "id": "knowledge:productivity_norms_planning_defaults",
+          "difference": "the planning norms give low, typical and high daily outputs per tradesman from published references; productivity_benchmark gives one rate per crew-day from the planner template."
+        }
+      ]
+    },
+    {
+      "id": "formula:productivity_manpower_duration",
+      "fingerprint": "sha256:46d2846e1b4200eb",
+      "approved": false,
+      "purpose": "Links quantity, productivity, manpower, man-hours and duration: works out every output whose paired inputs are given and refuses when no pair is given; it never supplies a rate itself.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:crew_sizing",
+          "difference": "crew_sizing works in whole crews at a rate per crew-day and rounds the crew count up; productivity_manpower_duration has no crew and does not round."
+        }
+      ]
+    },
+    {
+      "id": "formula:progress_kpi",
+      "fingerprint": "sha256:449d500750ca73c3",
+      "approved": false,
+      "purpose": "Planned and actual progress to date as percent of the planned total and their variance, with a progress-based SPI (actual over planned to date); without a planned total it gives the SPI only.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_quantity",
+          "difference": "progress_quantity also gives the quantity remaining but no SPI; progress_kpi gives the progress SPI."
+        }
+      ]
+    },
+    {
+      "id": "formula:progress_quantity",
+      "fingerprint": "sha256:27157b14884b32e4",
+      "approved": false,
+      "purpose": "Planned and actual percent complete of one quantity, the quantity remaining and the progress variance in percent.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_kpi",
+          "difference": "progress_kpi gives a progress-based SPI and does not give the quantity remaining."
+        }
+      ]
+    },
+    {
+      "id": "formula:supervision_ratio",
+      "fingerprint": "sha256:be3c18fade30a091",
+      "approved": false,
+      "purpose": "Supervisors per discipline and in total, HSE officers and document controllers for given quantities of concrete, steel, piping, cable and area, at the quantity per supervisor the caller gives.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:crew_sizing",
+          "difference": "crew_sizing counts working crews for a quantity and a duration; supervision_ratio counts supervision staff for quantities, with no duration."
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "knowledge:productivity_norms_planning_defaults",
+      "fingerprint": "sha256:e6a10a6d429c5071",
+      "approved": false,
+      "purpose": "Published low, typical and high daily outputs per tradesman for common building trades and material planning norms, to cite and state when the project's own outputs are not given; the contractor's measured outputs override them.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:productivity_benchmark",
+          "difference": "productivity_benchmark is one rate per crew-day from the planner template, not a range per tradesman."
+        }
+      ]
+    },
+    {
+      "id": "knowledge:evm_thresholds_and_traffic_lights",
+      "fingerprint": "sha256:b0631bbd43078f46",
+      "approved": false,
+      "purpose": "How to read CPI and SPI: their definitions, the traffic-light bands, TCPI and forecasting, to read after a performance index has been computed.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_kpi",
+          "difference": "progress_kpi's SPI is progress-based (quantities to date), not the earned-value SPI these bands are written for."
+        }
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "skill:planning.l1",
+      "fingerprint": "sha256:33fb9998e796108c",
+      "approved": false,
+      "purpose": "Lookahead constraint sweep: for each activity of the next weeks and each tracked constraint, cleared with evidence, open with an owner and date, or UNKNOWN; it never moves a date.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:planning.l2",
+      "fingerprint": "sha256:3fb9da1601676310",
+      "approved": false,
+      "purpose": "Critical path and delay impact: early and late dates, total and free float, the critical path and the days of a stated delay absorbed by float, from the activities and logic supplied; it assumes no durations or logic.",
+      "not_to_be_confused_with": [
+        {
+          "id": "skill:planning.l5",
+          "difference": "l5 finds the one constraint that bounds a work front's throughput from recorded waiting; l2 computes dates and float from the logic."
+        }
+      ]
+    },
+    {
+      "id": "skill:planning.l3",
+      "fingerprint": "sha256:274f9e0929deddfd",
+      "approved": false,
+      "purpose": "Schedule narrative for the owner: what moved and by how much from the programme comparison, and why with a record for each cause; no cause without a record.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:planning.l4",
+      "fingerprint": "sha256:658a6bd9bebd71bf",
+      "approved": false,
+      "purpose": "Meeting minutes to actions: recorded decisions, actions with owner and date or UNKNOWN and their source line, and previous actions carried forward; it invents no owner or date.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:planning.l5",
+      "fingerprint": "sha256:4b26e8de8c91e181",
+      "approved": false,
+      "purpose": "Binding-constraint analysis: where work waits most from the records, the one constraint that bounds the work front and the response class (exploit, elevate, subordinate); it estimates no rates.",
+      "not_to_be_confused_with": [
+        {
+          "id": "skill:planning.l2",
+          "difference": "l2 computes the critical path from the logic; l5 reads recorded waiting."
+        }
+      ]
+    }
+  ],
+  "chains": [
+    {
+      "id": "benchmark_rate_to_crews",
+      "fingerprint": "sha256:b97568efcdf7679b",
+      "approved": false,
+      "purpose": "Crews for a finishing quantity: take the template's rate per crew-day for the work item, then size the crews for the quantity and the stated duration.",
+      "steps": [
+        {
+          "formula": "formula:productivity_benchmark",
+          "inputs": {
+            "work_item": "internal wall plaster"
+          }
+        },
+        {
+          "formula": "formula:crew_sizing",
+          "inputs": {
+            "quantity": 5000,
+            "duration_days": 40,
+            "rate_per_crew_day": {
+              "from": {
+                "step": 0,
+                "output": "rate_per_crew_day"
+              }
+            },
+            "hours_per_day": 10,
+            "crew_size": 2
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "rate_per_crew_day",
+          "value": 20.0
+        },
+        {
+          "step": 1,
+          "output": "crews_required",
+          "value": 6.25
+        },
+        {
+          "step": 1,
+          "output": "crews_required_rounded_up",
+          "value": 7
+        },
+        {
+          "step": 1,
+          "output": "crew_days",
+          "value": 250.0
+        },
+        {
+          "step": 1,
+          "output": "man_hours",
+          "value": 5000.0
+        },
+        {
+          "step": 1,
+          "output": "duration_for_crews",
+          "value": 35.71
+        }
+      ]
+    },
+    {
+      "id": "crew_plan_to_productivity",
+      "fingerprint": "sha256:40aa9267f7da6206",
+      "approved": false,
+      "purpose": "The productivity per man-hour a crew plan implies: size the crews, then divide the quantity by the plan's man-hours.",
+      "steps": [
+        {
+          "formula": "formula:crew_sizing",
+          "inputs": {
+            "quantity": 1350,
+            "duration_days": 20,
+            "rate_per_crew_day": 16,
+            "hours_per_day": 9,
+            "crew_size": 4
+          }
+        },
+        {
+          "formula": "formula:productivity_manpower_duration",
+          "inputs": {
+            "quantity_executed": 1350,
+            "man_hours": {
+              "from": {
+                "step": 0,
+                "output": "man_hours"
+              }
+            }
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "crews_required_rounded_up",
+          "value": 5
+        },
+        {
+          "step": 0,
+          "output": "crew_days",
+          "value": 84.38
+        },
+        {
+          "step": 0,
+          "output": "man_hours",
+          "value": 3037.5
+        },
+        {
+          "step": 1,
+          "output": "productivity",
+          "value": 0.4444
+        }
+      ]
+    }
+  ]
+}

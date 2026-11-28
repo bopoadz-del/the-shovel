@@ -321,3 +321,59 @@ def test_load_refuses_a_broken_or_misplaced_pack(tmp_path, shipped, name, body):
     with pytest.raises(kp.KernelPackError) as err:
         kp.load(str(tmp_path))
     assert name in str(err.value)
+
+
+# -- the planning pack ---------------------------------------------------------------
+
+@pytest.fixture()
+def planning(shipped):
+    return copy.deepcopy(shipped["kernel:planning"])
+
+
+@pytest.mark.parametrize("chain_id", ["benchmark_rate_to_crews", "crew_plan_to_productivity"])
+def test_planning_example_figures_are_what_the_formulas_give(planning, entries, chain_id):
+    chain = _chain(planning, chain_id)
+    assert kp.example_problems(chain, entries) == []
+    last = chain["example"][-1]
+    last["value"] = round(last["value"] * 1.01, 4)            # one per cent off
+    found = kp.example_problems(chain, entries)
+    assert len(found) == 1 and f"{last['output']} is written" in found[0], found
+
+
+@pytest.mark.parametrize("work_item,rate,crews", [
+    ("internal wall plaster", 20.0, 6.25),      # the shipped example
+    ("ceramic tiles floors", 40.0, 3.125),      # another template rate halves the crews
+])
+def test_planning_benchmark_rate_feeds_the_crews(planning, entries, work_item, rate, crews):
+    chain = _chain(planning, "benchmark_rate_to_crews")
+    chain["steps"][0]["inputs"]["work_item"] = work_item
+    first, second = kp.run_chain(chain, entries)
+    assert first["rate_per_crew_day"] == rate
+    assert second["crews_required"] == pytest.approx(crews)
+
+
+@pytest.mark.parametrize("work_item,refused", [
+    ("no such trade in the template", "steps/1: formula:crew_sizing did not run"),
+    ("external render", "steps/1: formula:crew_sizing did not run"),
+    ("", "steps/0: formula:productivity_benchmark did not run"),     # degenerate: no work item
+])
+def test_planning_a_work_item_with_no_template_rate_stops_the_chain(planning, entries, work_item, refused):
+    # the template gives no rate, so the crew step is refused: no figure is made up
+    chain = _chain(planning, "benchmark_rate_to_crews")
+    chain["steps"][0]["inputs"]["work_item"] = work_item
+    found = kp.example_problems(chain, entries)
+    assert len(found) == 1 and refused in found[0], found
+
+
+@pytest.mark.parametrize("chain_id,step,name,output,unit_out", [
+    ("benchmark_rate_to_crews", 1, "rate_per_crew_day", "unit", ""),          # no declared unit
+    ("crew_plan_to_productivity", 1, "man_hours", "duration_for_crews", "days"),  # days into man-hours
+])
+def test_planning_a_link_of_another_unit_is_refused(planning, entries, chain_id, step, name, output, unit_out):
+    chain = _chain(planning, chain_id)
+    assert kp._chain_problems(chain, entries) == []
+    chain["steps"][step]["inputs"][name] = {"from": {"step": step - 1, "output": output}}
+    found = kp._chain_problems(chain, entries)
+    expect = (f"unit {unit_out!r} of {output} does not agree" if unit_out
+              else "not declared on both sides")
+    assert any(expect in p for p in found), found
