@@ -43,7 +43,7 @@ test('real chain end event: steps in plan order, results resolved, every typed g
   assert.deepEqual(v.steps.map((s) => s.status), ['done', 'done', 'done'])
   assert.deepEqual(v.steps.map((s) => s.result.value), [7.2, 50.4, 100.8])
   // step 2 reads step 1's result, resolved from the sheet and named by place
-  assert.deepEqual(v.steps[1].inputs[1], { name: 'a', from: 'step 1', value: 7.2, unit: 'm*m' })
+  assert.deepEqual(v.steps[1].inputs[1], { name: 'a', from: 'step 1', value: 7.2, unit: 'm2' })
   assert.deepEqual(v.steps[0].inputs[1], { name: 'a', from: 'wall length', value: 12, unit: 'm' })
   // the user typed every figure: code marked each "user", none is unchecked
   assert.deepEqual(v.givens.map((g) => g.source), ['your words', 'your words', 'your words', 'your words'])
