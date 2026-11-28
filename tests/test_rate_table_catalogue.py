@@ -344,3 +344,16 @@ def test_the_quantitys_lower_bound_is_zero_inclusive(item, qty, ok):
     else:
         assert out["status"] != "success", out
         assert "duration_crew_days" not in (out.get("result") or {})
+
+
+@pytest.mark.parametrize("param,gap", [
+    # A unit named by a sibling input is a declared unit; "-" alone is not.
+    (fr.Param("-", lo=0.0, hi=1.0, label="q", unit_from="q_unit"), False),
+    (fr.Param("", lo=0.0, hi=1.0, label="q", unit_from="size_unit"), False),
+    (fr.Param("-", lo=0.0, hi=1.0, label="q"), True),
+    (fr.Param("", lo=0.0, hi=1.0, label="q"), True),
+])
+def test_param_gaps_reads_a_unit_named_by_a_sibling_input(param, gap):
+    gaps = fr._param_gaps("formula:x.q", "number", param, True)
+    assert ("formula:x.q:unit" in gaps) is gap
+    assert "formula:x.q:range" not in gaps and "formula:x.q:label" not in gaps

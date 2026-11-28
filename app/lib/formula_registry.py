@@ -1084,7 +1084,8 @@ def _param_gaps(where: str, kind: str, p: Any, required: Optional[bool]) -> List
     if required is None:
         gaps.append(f"{where}:required")
     if kind in NUMERIC_KINDS:
-        if not p.unit or p.unit == "-":
+        # An input whose unit is its sibling input's value declares it there.
+        if (not p.unit or p.unit == "-") and not getattr(p, "unit_from", ""):
             gaps.append(f"{where}:unit")
         if p.lo is None or p.hi is None:
             gaps.append(f"{where}:range")
