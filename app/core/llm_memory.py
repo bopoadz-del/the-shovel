@@ -188,15 +188,17 @@ def figure_values(text: Any) -> Set[float]:
 
 
 def note_figures(data: Any) -> Set[float]:
-    """The figures a note's values hold, by value: a JSON number as it is,
+    """The figures a note's values hold, by value: a JSON number by its size,
     figures written inside text as ``figure_values`` reads them. Key names
     and true/false are not figures."""
     if isinstance(data, bool):
         return set()
     if isinstance(data, (int, float)):
-        # Through its text, so a number past what a float holds reads as a
-        # written one does (inf), never as an error.
-        return {float(str(data))}
+        # By its size, as a written figure is read (``FIGURE`` reads no
+        # sign): the number -2.35 is the 2.35 of "-2.35 m". Through its
+        # text, so a number past what a float holds reads as a written one
+        # does (inf), never as an error.
+        return {abs(float(str(data)))}
     if isinstance(data, str):
         return figure_values(data)
     if isinstance(data, dict):
@@ -207,13 +209,12 @@ def note_figures(data: Any) -> Set[float]:
 
 
 def untold_figures(value: Any, told_from: Iterable[str], before: Any = None) -> List[float]:
-    """The figures of a note marked as told by the user that the user did
-    not write: not in ``told_from`` (the user's own words in the writing
-    conversation) and not in ``before``, the note's earlier version when
-    that version was itself told (each of its figures was checked when it
-    was written). Empty for a note not marked as told."""
-    if not told_by_user(value):
-        return []
+    """The figures of the note ``value`` that the user did not write: not in
+    ``told_from`` (the user's own words in the writing conversation) and
+    not in ``before``, the note's earlier version when that version was
+    itself told (each of its figures was checked when it was written).
+    Whether ``value`` is marked as told is the caller's question
+    (``_check_told``); this only compares figures, by value."""
     backed = set().union(*(figure_values(t) for t in told_from))
     if told_by_user(before):
         backed |= note_figures(before)
@@ -319,7 +320,8 @@ def _check_told(session: Any, project_id: str, stem: str, value: Any, told_from:
     """Refuse a note marked as told by the user that holds a figure the user
     did not write. The mark is the model's word; this is the check on it,
     against the note's earlier version in the model's sight (read in the
-    write's own transaction) and the user's words."""
+    write's own session, before the replace) and the user's words. A note
+    not marked as told is not checked: it backs no figure when read."""
     if not told_by_user(value):
         return
     row = session.get(LlmMemory, (project_id, stem))

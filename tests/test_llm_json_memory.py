@@ -1259,6 +1259,8 @@ def test_every_sentence_about_notes_is_the_one_text(pid_tag):
 @pytest.mark.parametrize("told,shown,other", [
     ({"datum": "+2.35 m", "told_by_user": True}, "2.35 m", "3.10 m"),
     ({"slab_thickness_mm": 275, "working_week": "Sunday to Thursday", "told_by_user": True}, "275 mm", "300 mm"),
+    # A level below zero the model kept as a number.
+    ({"formation_level_m": -4.1, "told_by_user": True}, "4.1 m", "5.2 m"),
 ])
 def test_a_figure_the_user_told_comes_back_with_its_source_in_a_new_chat(client, monkeypatch, told, shown, other):
     h = _user(client, "told")
@@ -1442,11 +1444,44 @@ def test_a_figure_worked_out_from_what_the_user_said_is_refused_in_a_told_note(s
 @pytest.mark.parametrize("said,note", [
     ("The pile capacity is 1,850 kN.", {"pile_kN": 1850}),
     ("Groundwater is at 4.10 m.", {"gwl_m": 4.1}),
+    # A level below zero kept as a number: the user wrote it, sign and all.
+    ("The datum is -2.35 m.", {"datum_m": -2.35}),
+    ("Formation level is -3 m.", {"formation_m": -3}),
 ])
 def test_a_told_figure_the_user_wrote_another_way_is_accepted(said, note):
     pid = f"mem-way-{uuid.uuid4().hex[:8]}"
     llm_memory.write(pid, "site", json.dumps({**note, "told_by_user": True}), "c#1", told_from=[said])
     assert llm_memory.read(pid, "site")["data"] == {**note, "told_by_user": True}
+
+
+@pytest.mark.parametrize("said,docs", [
+    ("Groundwater is at 4.10 m and the datum is +2.35 m.",
+     ({"gwl_m": 4.1}, {"gwl_m": 4.1, "datum": "+2.35 m"})),
+    ("The pile capacity is 1,850 kN.", ({"pile_kN": 1850, "rows": ["x"] * 30}, {"pile": "1,850 kN"})),
+])
+def test_two_told_writes_at_once_are_both_checked_and_leave_one_whole_note(said, docs):
+    # The told check reads the note's earlier version before the replace:
+    # two such writes at once neither fail nor leave half a note.
+    pid = f"mem-told-race-{uuid.uuid4().hex[:8]}"
+    notes = [{**d, "told_by_user": True} for d in docs]
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def write(doc):
+        try:
+            barrier.wait()
+            llm_memory.write_retrying(pid, "race", json.dumps(doc), "t#1", [said])
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(n,)) for n in notes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert llm_memory.read(pid, "race")["data"] in notes
+    assert len(llm_memory.listing(pid)) == 1
 
 
 @pytest.mark.parametrize("note", [{"volume_m3": 10}, {"told_by_user": False, "rate": 412}])
@@ -1537,7 +1572,10 @@ def test_figure_values_reads_figures_by_value(text, values):
 @pytest.mark.parametrize("data,values", [
     ({"level_2": "basement", "ok": True, "told_by_user": True}, set()),
     ({"a": [4.1, "1,850 kN"], "b": {"c": 7}}, {4.1, 1850.0, 7.0}),
+    # A number below zero is read by its size, as the written "-2.35 m" is.
+    ({"datum_m": -2.35, "formation": [-3, "-4.10 m"]}, {2.35, 3.0, 4.1}),
     (10 ** 400, {float("inf")}),
+    (-(10 ** 400), {float("inf")}),
     (None, set()),
 ])
 def test_note_figures_reads_values_never_key_names(data, values):
@@ -1549,7 +1587,11 @@ def test_note_figures_reads_values_never_key_names(data, values):
     ({"a": 10, "told_by_user": True}, ["11"], None, [10.0]),
     ({"a": 10, "b": 3, "told_by_user": True}, ["3"], {"a": "10", "told_by_user": True}, []),
     ({"a": 10, "told_by_user": True}, [], {"a": 10}, [10.0]),
-    ({"a": 10}, [], None, []),
+    # The mark of the note being written is the caller's question: this
+    # compares figures whatever it is.
+    ({"a": 10}, [], None, [10.0]),
+    ({"a": -2.35, "b": -3, "told_by_user": True}, ["datum -2.35 m, formation -3 m"], None, []),
+    ({"a": -2.35, "told_by_user": True}, ["datum -2.40 m"], None, [2.35]),
 ])
 def test_untold_figures_names_what_the_user_did_not_write(value, said, before, untold):
     assert llm_memory.untold_figures(value, said, before) == untold
@@ -1572,6 +1614,7 @@ def test_a_figure_only_in_a_told_notes_key_name_is_still_withheld(client, monkey
 @pytest.mark.parametrize("stored,said,answer,other", [
     (4.1, "Groundwater is at 4.10 m.", "Your notes say the groundwater is at 4.10 m.", "5.20 m"),
     (1850, "The pile capacity is 1,850 kN.", "Your notes say the pile capacity is 1,850 kN.", "1,900 kN"),
+    (-2.35, "The datum is -2.35 m.", "Your notes say the datum is -2.35 m.", "-3.10 m"),
 ])
 def test_a_told_figure_is_kept_by_value_when_the_turns_only_tool_failed(client, monkeypatch, failing_tool,
                                                                         stored, said, answer, other):
