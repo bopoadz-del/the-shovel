@@ -90,7 +90,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Forward and backward pass over a whole activity network with its links and lags: early and late dates, total and free float of every activity, the project duration and the critical path.",
     "not_to_be_confused_with": [
       {

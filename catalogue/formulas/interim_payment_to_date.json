@@ -115,7 +115,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Amount due on an interim payment certificate measured to date: work done to date plus materials on site, less retention at the contract rate up to its limit, less what earlier certificates already paid.",
     "not_to_be_confused_with": [
       {

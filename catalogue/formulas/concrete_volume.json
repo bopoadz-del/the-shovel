@@ -202,7 +202,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Volume of concrete in a rectangular element, a cylinder or a trapezoidal section, times the number of elements, with an optional waste allowance on top of the net volume.",
     "not_to_be_confused_with": [
       {

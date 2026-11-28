@@ -81,7 +81,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Backfill needed around a structure: the excavated volume less the structure's volume, and the loose volume to bring in once swell is allowed for.",
     "not_to_be_confused_with": [
       {

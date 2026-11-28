@@ -109,7 +109,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Reinforcement mass for a slab or wall from its area, bar diameter and bar spacing, one way or both ways; gives bars per metre, total bar length and mass.",
     "not_to_be_confused_with": [
       {

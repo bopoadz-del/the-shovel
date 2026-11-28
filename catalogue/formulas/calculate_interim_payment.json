@@ -74,7 +74,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Net payment from one gross valuation less a retention percentage; gives the retention amount and the net.",
     "not_to_be_confused_with": [
       {
