@@ -357,3 +357,11 @@ def test_param_gaps_reads_a_unit_named_by_a_sibling_input(param, gap):
     gaps = fr._param_gaps("formula:x.q", "number", param, True)
     assert ("formula:x.q:unit" in gaps) is gap
     assert "formula:x.q:range" not in gaps and "formula:x.q:label" not in gaps
+
+
+@pytest.mark.parametrize("label,gap", [("", True), ("  ", True), ("quantity", False), ("q", False)])
+def test_param_gaps_names_a_missing_label_beside_a_sibling_unit(label, gap):
+    param = fr.Param("-", lo=0.0, hi=1.0, label=label, unit_from="q_unit")
+    gaps = fr._param_gaps("formula:x.q", "number", param, True)
+    assert ("formula:x.q:label" in gaps) is gap
+    assert "formula:x.q:unit" not in gaps
