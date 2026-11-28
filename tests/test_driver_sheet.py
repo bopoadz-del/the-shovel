@@ -255,7 +255,7 @@ def test_render_is_stable(ids):
     ("divide", 2059200, 3000, "currency", "m2", 686.4, "currency/m2"),
     ("divide", 900, 450, "m3", "m3", 2.0, "-"),
     ("multiply", 12, 450, "m", "-", 5400.0, "m"),
-    ("multiply", 2.5, 4, "m", "m", 10.0, "m*m"),
+    ("multiply", 2.5, 4, "m", "m", 10.0, "m2"),
     ("add", 1.5, 0.25, "m", "m", 1.75, "m"),
     ("subtract", 900, 945, "m3", "M3", -45.0, "m3"),
     ("divide", 10, 4, "-", "d", 2.5, "1/d"),
@@ -326,7 +326,7 @@ def test_run_step_chains_a_result_into_the_next_step(a, b):
     s = ws.run_step(ws.run_step(s, "s1", "c1"), "s2", "c2")
     assert ws.open_steps(s) == []
     final = [st for st in s["steps"] if st["id"] == "s2"][0]["result"]
-    assert final == {"name": "result", "value": pytest.approx(a * b / 2), "unit": "m*m"}
+    assert final == {"name": "result", "value": pytest.approx(a * b / 2), "unit": "m2"}
 
 
 @pytest.mark.parametrize("plan,fragment,status", [
@@ -564,7 +564,7 @@ def test_close_answered_reads_only_done_steps_with_a_result(value, unit):
     assert ws.close_answered(ws.new_sheet("t-4", "q"))["missing"] == []
 
 
-@pytest.mark.parametrize("a,b,op,expected,unit", [(55, 2, "add", 57, "m"), (12, 4, "multiply", 48, "m*m")])
+@pytest.mark.parametrize("a,b,op,expected,unit", [(55, 2, "add", 57, "m"), (12, 4, "multiply", 48, "m2")])
 def test_code_results_lists_every_result_code_wrote(a, b, op, expected, unit):
     s = _sheet_with([{"id": "g1", "value": a, "unit": "m"}, {"id": "g2", "value": b, "unit": "m"}],
                     [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": {"operator": op, "a": "g1", "b": "g2"}},

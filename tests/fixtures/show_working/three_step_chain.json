@@ -87,7 +87,7 @@
         "result": {
           "name": "result",
           "value": 7.2,
-          "unit": "m*m"
+          "unit": "m2"
         },
         "inputs": {
           "operator": "multiply",
@@ -96,7 +96,7 @@
           "a_unit": "m",
           "b_unit": "m"
         },
-        "method": "12 m * 0.6 m = 7.2 m*m"
+        "method": "12 m * 0.6 m = 7.2 m2"
       },
       {
         "id": "s2",
@@ -106,16 +106,16 @@
         "result": {
           "name": "result",
           "value": 50.4,
-          "unit": "m*m*nr"
+          "unit": "m2"
         },
         "inputs": {
           "operator": "multiply",
           "a": 7.2,
           "b": 7.0,
-          "a_unit": "m*m",
+          "a_unit": "m2",
           "b_unit": "nr"
         },
-        "method": "7.2 m*m * 7 nr = 50.4 m*m*nr"
+        "method": "7.2 m2 * 7 nr = 50.4 m2"
       },
       {
         "id": "s3",
@@ -125,16 +125,16 @@
         "result": {
           "name": "result",
           "value": 100.8,
-          "unit": "m*m*nr*nr"
+          "unit": "m2"
         },
         "inputs": {
           "operator": "multiply",
           "a": 50.4,
           "b": 2.0,
-          "a_unit": "m*m*nr",
+          "a_unit": "m2",
           "b_unit": "nr"
         },
-        "method": "50.4 m*m*nr * 2 nr = 100.8 m*m*nr*nr"
+        "method": "50.4 m2 * 2 nr = 100.8 m2"
       }
     ],
     "missing": [],

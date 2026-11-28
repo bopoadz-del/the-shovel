@@ -868,7 +868,7 @@ def test_the_public_route_takes_the_sheet_on_request_and_the_question_goes_back(
 @pytest.mark.parametrize("a,ua,op,b,ub,reply,figure", [
     (55, "m", "add", 2, "m", "The total is 57 m.", "57 m"),
     (550, "m", "add", 2.75, "m", "The total is 552.75 m.", "552.75 m"),
-    (12, "m", "multiply", 4, "m", "The area is 48 m*m.", "48 m*m"),
+    (12, "m", "multiply", 4, "m", "The area is 48 m2.", "48 m2"),
     (100, "m3", "divide", 4, "-", "The volume is 25 m3.", "25 m3"),
     (12.5, "m2", "multiply", 3, "-", "The area is 37.5 m2.", "37.5 m2"),
 ])
