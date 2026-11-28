@@ -275,3 +275,10 @@ def test_the_offer_names_no_fixed_unit_for_a_value_whose_unit_is_its_sibling(key
     assert line.startswith(f"{key} = {p.label} (") and "ratio" not in line
     # the range is still offered: only the fixed unit went
     assert f"{-1e15:g} to {1e15:g}" in line
+
+
+@pytest.mark.parametrize("operator,a,b", [("power", 2, 3), ("modulo", 9, 4), ("", 6, 2)])
+def test_an_unknown_operator_is_refused_never_computed(operator, a, b):
+    out = arithmetic_step(operator, a, b, "m", "m")
+    assert "result" not in out
+    assert out["error"].startswith("operator must be one of")
