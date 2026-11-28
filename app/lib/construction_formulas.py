@@ -13,7 +13,7 @@ the inputs do.
 """
 from __future__ import annotations
 
-from app.lib.formula_registry import SIGNED_FIGURE, formula
+from app.lib.formula_registry import SIGNED_FIGURE, SIGNED_NUMBER, formula
 
 import math
 
@@ -1335,11 +1335,16 @@ def bind_calculation_params(fn: Any, params: Optional[Dict[str, Any]] = None) ->
 
 _ASK_NUM = rf"({SIGNED_FIGURE})"
 
+# A figure as the registry reads one (``SIGNED_NUMBER``: "1,250", ".5",
+# "3e-4"), with a space allowed after its sign ("- 5"). The exponent is part
+# of the figure: "1.25e+06" is 1250000, not 1.25 followed by a unit "e".
+_COERCE_NUMBER = rf"[+\-]?\s*(?![+\-]){SIGNED_NUMBER}"
+
 _NUM_UNIT_VALUE_RE = re.compile(
-    r"^\s*([+\-]?\s*[\d,]+(?:\.\d+)?)\s*[A-Za-zµμ/%²³³°]+"
+    rf"^\s*({_COERCE_NUMBER})\s*[A-Za-zµμ/%²³³°]+"
 )
 
-_PLAIN_NUM_RE = re.compile(r"^[+\-]?\s*[\d,]+(?:\.\d+)?\s*$")
+_PLAIN_NUM_RE = re.compile(rf"^{_COERCE_NUMBER}\s*$")
 
 _LWD_WORDS_RE = re.compile(
     rf"{_ASK_NUM}\s*m?\s*long\b.*?{_ASK_NUM}\s*m?\s*wide\b.*?"
@@ -1671,13 +1676,18 @@ def _coerce_scalar(val: Any) -> Any:
     if not text:
         return val
     if _PLAIN_NUM_RE.match(text):
-        number = text.replace(",", "").replace(" ", "")
-        return float(number) if "." in number else int(number)
+        return _figure_number(text)
     match = _NUM_UNIT_VALUE_RE.match(text)
     if match:
-        number = match.group(1).replace(",", "").replace(" ", "")
-        return float(number) if "." in number else int(number)
+        return _figure_number(match.group(1))
     return val
+
+
+def _figure_number(text: str) -> Any:
+    """The number a matched figure writes: an int when it has neither a
+    decimal point nor an exponent, else a float."""
+    number = text.replace(",", "").replace(" ", "")
+    return float(number) if any(c in number for c in ".eE") else int(number)
 
 def _coerce_list(val: Any) -> Any:
     if isinstance(val, (list, tuple)):
