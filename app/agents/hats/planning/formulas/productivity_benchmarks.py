@@ -148,6 +148,29 @@ def _same_unit(a: Any, b: Any) -> bool:
     return (ua.dimension, ua.scale, ua.offset) == (ub.dimension, ub.scale, ub.offset)
 
 
+def _into_row_unit(quantity: float, quantity_unit: Any, row_unit: str) -> tuple:
+    """``quantity`` (in ``quantity_unit``) in the row's unit, and what was
+    converted (empty when the quantity is already in it). A unit of the same
+    kind as the row's is converted by the platform's unit converter; another
+    kind, or a unit the converter does not know, is refused naming both."""
+    from app.agents.base.formulas.construction_formulas_planning import convert_units, parse_unit
+
+    if _same_unit(quantity_unit, row_unit):
+        return float(quantity), ""
+    given = parse_unit(quantity_unit) if isinstance(quantity_unit, str) else None
+    row = parse_unit(row_unit)
+    if given is not None and row is not None and given.dimension == row.dimension:
+        out = convert_units(quantity, quantity_unit, row_unit)
+        if "value_out" in out:
+            value = float(out["value_out"])
+            return value, f"{float(quantity):.10g} {quantity_unit} = {value:.10g} {row_unit}"
+    kinds = (f" ({given.dimension} against the row's {row.dimension})"
+             if given is not None and row is not None and given.dimension != row.dimension else "")
+    raise ValueError(
+        f"is measured in {row_unit}; the quantity is in "
+        f"{quantity_unit or 'no unit'}{kinds}, so this row does not apply to it")
+
+
 @formula(
     owner="planning",
     display_name="Production duration from a planner template row",
@@ -158,9 +181,10 @@ def _same_unit(a: Any, b: Any) -> bool:
         "(see the productivity.* knowledge entries for each row's unit and "
         "crew). The quantity's unit goes in quantity_unit; a quantity written "
         "with a unit of its own is converted into quantity_unit when it is "
-        "the same kind and refused, naming both, when it is not. The "
-        "quantity's unit must be the row's "
-        "unit; a quantity in another unit is refused, naming both. Unverified "
+        "the same kind and refused, naming both, when it is not. A quantity "
+        "in another unit of the row's kind (sq ft for an m2 row) is "
+        "converted into the row's unit and the conversion reported in "
+        "unit_conversion; another kind is refused, naming both. Unverified "
         "owner-supplied template: never a project figure."
     ),
     inputs={
@@ -179,13 +203,15 @@ def _same_unit(a: Any, b: Any) -> bool:
         "crew": "-",
         "rate_per_crew_day": "count/d",
         "not_covered": "-",
+        "unit_conversion": "-",
         "provenance": "-",
     },
     main_output="duration_crew_days",
 )
 def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str) -> dict:
-    """Duration of one template row's work: the row the caller names, its
-    unit checked against the quantity's. No row is guessed from a
+    """Duration of one template row's work: the row the caller names, the
+    quantity put into that row's unit (converted when it is the same kind,
+    refused when it is not). No row is guessed from a
     description: a name that is not a row is refused with the rows listed."""
     if not isinstance(work_item, str):
         raise ValueError(f"the work item is the name of one planner template row, not {work_item!r}")
@@ -196,10 +222,10 @@ def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str)
         rows = ", ".join(item for item, *_ in template_rows())
         raise ValueError(f"{work_item!r} is not a planner template row; the rows are: {rows}")
     unit, crew, rate, _flag = _BENCHMARK_KEYS[key]
-    if not _same_unit(quantity_unit, unit):
-        raise ValueError(
-            f"row {key!r} is measured in {unit}; the quantity is in "
-            f"{quantity_unit or 'no unit'}, so this row does not apply to it")
+    try:
+        quantity, converted = _into_row_unit(quantity, quantity_unit, unit)
+    except ValueError as exc:
+        raise ValueError(f"row {key!r} {exc}") from None
     not_covered = next(nc for item, _u, _c, _r, _f, nc in template_rows()
                        if _normalise_work_item(item) == key)
     return {
@@ -211,5 +237,8 @@ def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str)
         # Only exclusions the source states; when it states none, that is
         # said, never an empty list a reader could take as "covers all".
         "not_covered": list(not_covered) or _EXCLUSIONS_NOT_STATED,
+        # The quantity is divided in the row's unit; a conversion into it
+        # is shown, never applied silently.
+        "unit_conversion": converted or f"none: the quantity is in the row's unit ({unit})",
         "provenance": _BENCHMARK_PROVENANCE,
     }

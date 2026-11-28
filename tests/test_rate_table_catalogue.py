@@ -144,7 +144,7 @@ def test_another_spelling_of_the_rows_unit_is_the_same_unit(item, qty, unit, wan
     (("ceiling plaster", float("-inf"), "m2"), "finite"),
     ((["blockwork walls"], 600, "m2"), "not ['blockwork walls']"),
     (("ceiling plaster", 600, ["m2"]), "['m2']"),
-    (("blockwork walls", 600, "ft2"), "ft2"),
+    (("blockwork walls", 600, "kg"), "kg"),
 ])
 def test_degenerate_inputs_are_refused_naming_the_input(args, named):
     with pytest.raises(ValueError) as err:
@@ -365,3 +365,61 @@ def test_param_gaps_names_a_missing_label_beside_a_sibling_unit(label, gap):
     gaps = fr._param_gaps("formula:x.q", "number", param, True)
     assert ("formula:x.q:label" in gaps) is gap
     assert "formula:x.q:unit" not in gaps
+
+
+def _sheet_step(given_value, given_unit, inputs):
+    from app.agents.driver import sheet as ws
+
+    s = ws.new_sheet("t-1", "q")
+    s, problems = ws.apply_update(s, {
+        "givens": [{"id": "g1", "value": given_value, "unit": given_unit}],
+        "plan": [{"id": "s1", "entry": "formula:crew_days_from_rate_row",
+                  "inputs": inputs, "output": "duration_crew_days"}]})
+    assert problems == [], problems
+    return ws.run_step(s, "s1", "c1")["steps"][0]
+
+
+@pytest.mark.parametrize("item,value,unit,want_days,shown", [
+    # A given keeps its own unit on the sheet, so the quantity reaches the
+    # row check in sq ft: it is put into the row's m2 there, not refused.
+    ("blockwork walls", 2000, "sq ft", 2000 * 0.09290304 / 12, "2000 sq ft = 185.80608 m2"),
+    ("ceiling plaster", 6.5, "sqft", 6.5 * 0.09290304 / 20, "6.5 sqft = 0.60386976 m2"),
+    ("internal wall plaster", 350, "m2", 17.5, "none"),
+])
+def test_a_given_in_another_unit_of_the_rows_kind_is_converted_on_the_sheet(item, value, unit, want_days, shown):
+    step = _sheet_step(value, unit, {"work_item": item, "quantity": "g1", "quantity_unit": "m2"})
+    assert step["status"] == "done", step
+    assert float(step["result"]["value"]) == pytest.approx(want_days)
+    out = _run(item, value, unit)
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+    assert out["result"]["unit_conversion"].startswith(shown)
+
+
+@pytest.mark.parametrize("item,value,unit,kind", [
+    ("blockwork walls", 30, "m3", "volume"),
+    ("ceiling plaster", 40, "m", "length"),
+])
+def test_a_given_of_another_kind_is_still_refused_on_the_sheet(item, value, unit, kind):
+    step = _sheet_step(value, unit, {"work_item": item, "quantity": "g1", "quantity_unit": "m2"})
+    assert step["status"] != "done", step
+    with pytest.raises(ValueError) as err:
+        pb.crew_days_from_rate_row(item, value, unit)
+    assert kind in str(err.value) and "area" in str(err.value)
+
+
+@pytest.mark.parametrize("qty,unit,want", [
+    (2000, "sq ft", (185.80608, "2000 sq ft = 185.80608 m2")),
+    (10, "ft2", (0.9290304, "10 ft2 = 0.9290304 m2")),
+    (600, "M2", (600.0, "")),
+])
+def test_into_row_unit_converts_only_within_the_rows_kind(qty, unit, want):
+    value, shown = pb._into_row_unit(qty, unit, "m2")
+    assert value == pytest.approx(want[0]) and shown == want[1]
+
+
+@pytest.mark.parametrize("qty,unit", [(30, "m3"), (5, "kg"), (5, "nr"), (5, ""), (5, None), (5, ["m2"])])
+def test_into_row_unit_refuses_another_kind_or_no_unit(qty, unit):
+    with pytest.raises(ValueError) as err:
+        pb._into_row_unit(qty, unit, "m2")
+    assert "measured in m2" in str(err.value)
