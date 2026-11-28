@@ -41,7 +41,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Returns the sections a bill of quantities prints, number and heading, in the order the document prints them, read from the document's own headings.",
+    "purpose": "Returns the sections one bill of quantities prints, each with its number and heading, in the document's own order, read from all of that document's indexed text in this project. One call covers the one document named by document_id. An empty list means the document prints no section heading. It returns no rows, quantities or amounts.",
     "not_to_be_confused_with": [
       {
         "id": "tool:bill_rows_aggregate",

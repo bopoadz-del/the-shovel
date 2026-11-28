@@ -51,7 +51,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Reads one document of this project whole, picked by its id or file name, when the question is about that document as a whole or names it.",
+    "purpose": "Reads the text of one document, picked by its id or file name, from this project or a library a search cites. One call returns the text up to a fixed length, with truncated saying whether the end was cut and partial_read when only part of a scan was read. A name that matches several documents returns an error naming them all, not a pick.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",
@@ -66,7 +66,7 @@
       {
         "kind": "single_passage",
         "role": "supports",
-        "how": "Use it when the question names the document; for a passage in an unnamed document search first."
+        "how": "Use it when the question names the document; for a passage in an unnamed document search first. A long document comes back cut at a fixed length, with truncated set."
       },
       {
         "kind": "totals_across_bill_rows",
