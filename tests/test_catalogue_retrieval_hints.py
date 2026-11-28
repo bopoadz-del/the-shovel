@@ -115,6 +115,31 @@ async def test_bill_rows_the_same_call_again_returns_the_same_rows(bills, args):
     assert first["result"]["bills"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held, refs_pages", [
+    ([(None, "", "7", "21"), (4, "", "3", "9")], [("", []), ("", [4])]),
+    ([(6, "C1", "2", "8"), (None, "C2", "5", "10"), (6, "", "1", "4")], [("C1", [6]), ("C2", []), ("", [6])]),
+], ids=["no-reference", "page-or-reference-missing"])
+async def test_bill_rows_a_row_without_reference_or_page_is_still_counted(tmp_path, monkeypatch, held, refs_pages):
+    """A row the sheet gives no reference or page for is counted and returned
+    with that field empty: the reference and page come only where the sheet
+    gives them."""
+    from app.core import bill_derived, projects
+    rows = [_row(("Works", "Drains"), page, ref, f"Pipe bedding {i}", "m3", qty, amount)
+            for i, (page, ref, qty, amount) in enumerate(held)]
+    path = str(tmp_path / "b.xlsx")
+    g.write_bill_workbook(rows, path)
+    docs = [{"id": "d1", "original_name": "b.bill.xlsx", "path": path,
+             "metadata": {"derivation": bill_derived.DERIVATION, "derived_from": "s1"}}]
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: docs)
+    monkeypatch.setattr(projects, "materialize_document_path", lambda d: d["path"])
+    out = await _aggregate({"terms": "pipe bedding"})
+    [bill] = out["result"]["bills"]
+    assert bill["count"] == len(held)
+    assert [(r["ref"], r["pages"]) for r in bill["rows"]] == refs_pages
+    assert bill["sum_by_unit"] == {"m3": float(sum(int(q) for _p, _r, q, _a in held))}
+
+
 # -- bill_section_map --------------------------------------------------------
 
 def _index(project_id, doc_id, chunks):
