@@ -126,8 +126,12 @@ def _index(project_id, doc_id, chunks):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chunks, sections", [
     (["BILL NO. 1 - EARTHWORKS\nA1 Excavate m3 40", "BILL NO. 2 - CONCRETE\nB1 Slab m3 9"], ["1", "2"]),
+    (["Bill Number 3 Drainage\nC1 Pipe m 20", "BILL # 4 - ROADS\nD1 Kerb m 80"], ["3", "4"]),
     (["A1 Excavate m3 40", "A2 Fill m3 12"], []),
-], ids=["two-sections", "no-heading"])
+    # a heading of another form is not read: the list is empty although the bill has sections
+    (["SECTION 1 EARTHWORKS\nA1 Excavate m3 40", "SECTION 2 CONCRETE\nB1 Slab m3 9"], []),
+    (["PART A - SITE WORKS\nA1 Clear m2 400", "PART B - ROADS\nB1 Kerb m 80"], []),
+], ids=["two-sections", "number-and-hash", "no-heading", "section-headings", "part-headings"])
 async def test_section_map_one_document_sections_in_order_and_no_rows(chunks, sections):
     from app.agents.base.bill_section_map import handle_bill_section_map
     tag = uuid.uuid4().hex[:8]
@@ -188,7 +192,8 @@ def fetchable(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cap, truncated, length", [(1000, False, 250), (40, True, 40)])
+@pytest.mark.parametrize("cap, truncated, length", [(1000, False, 250), (250, False, 250), (249, True, 249),
+                                                    (40, True, 40)])
 async def test_fetch_returns_text_up_to_a_fixed_length_and_says_when_cut(fetchable, monkeypatch,
                                                                          cap, truncated, length):
     from app.agents.base.tools import handle_fetch_document
@@ -209,6 +214,51 @@ async def test_fetch_a_name_matching_several_documents_names_them_all(fetchable,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("held, asked, picked", [
+    ([("a", "wall spec.docx"), ("b", "wall spec.docx")], "wall spec.docx", "b"),
+    ([("a", "Wall Spec.docx"), ("b", "wall spec.DOCX"), ("c", "roof plan.pdf")], "WALL SPEC.docx", "b"),
+    ([("a", "wall spec.docx"), ("b", "wall spec.docx.old")], "wall spec.docx", "a"),
+], ids=["same-name", "same-name-other-case", "exact-beside-partial"])
+async def test_fetch_a_name_equal_to_a_file_name_is_taken_without_asking(fetchable, monkeypatch, held, asked, picked):
+    from app.agents.base.tools import handle_fetch_document
+    from app.core import projects
+    docs = [{"id": i, "original_name": n, "file_path": i} for i, n in held]
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: docs)
+    out = await handle_fetch_document(_call("fetch_document", {"filename": asked}))
+    assert (out["ok"], out["result"]["document_id"]) == (True, picked)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("words, cap, windows", [(50, 2000, 1), (1500, 2000, 4), (3000, 4000, 4)])
+async def test_fetch_longer_than_one_tool_message_comes_in_windows_read_with_char_offset(
+        fetchable, monkeypatch, words, cap, windows):
+    """The public path: the handler's result as the tool message carries it.
+    Under the fetch length the result's own truncated stays False, and the
+    message alone is marked truncated, with next_char_offset for the rest."""
+    from app.agents.base.tools import handle_fetch_document
+    from app.core import doc_index
+    monkeypatch.setattr(doc_index, "extract_document_text", lambda path, name: "word " * words)
+    monkeypatch.setattr(fetchable, "_effective_fetch_document_max_chars", lambda: 100_000)
+    out = await handle_fetch_document(_call("fetch_document", {"document_id": "a"}))
+    assert out["result"]["truncated"] is False
+    whole = json.dumps(out["result"], default=str)
+    message = json.loads(fetchable._tool_result_content(out["result"], max_chars=cap))
+    if windows == 1:
+        assert message == out["result"]
+        return
+    seen, offset, count = "", 0, 0
+    while offset is not None:
+        message = json.loads(fetchable._tool_result_content(out["result"], offset=offset, max_chars=cap))
+        assert message["truncated"] is True and message["char_offset"] == offset
+        assert len(json.dumps(message)) <= cap
+        seen += message["preview"]
+        offset = message["next_char_offset"]
+        count += 1
+    assert seen == whole
+    assert count >= windows
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("note", [None, "pages 1-3 of 9 were read"])
 async def test_fetch_says_when_only_part_of_a_scan_was_read(fetchable, monkeypatch, note):
     from app.agents.base.tools import handle_fetch_document
@@ -221,7 +271,8 @@ async def test_fetch_says_when_only_part_of_a_scan_was_read(fetchable, monkeypat
 # -- search_project_documents -------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("args, asked", [({"query": "q"}, 5), ({"query": "q", "top_k": "3"}, 3)])
+@pytest.mark.parametrize("args, asked", [({"query": "q"}, 5), ({"query": "q", "top_k": "3"}, 3),
+                                         ({"query": "q", "top_k": "abc"}, 5)])
 async def test_search_asks_for_top_k_passages_default_five(monkeypatch, args, asked):
     from app.agents.base.tools import handle_search_project_documents
     from app.core import doc_index
@@ -247,6 +298,106 @@ def test_search_rows_over_one_message_are_left_out_whole_and_counted(cap, kept):
     assert len(payload["results"]) == kept
     assert payload.get("rows_withheld", 0) == 4 - kept
     assert all(r == rows[0] for r in payload["results"])
+
+
+@pytest.mark.parametrize("first_words, rows, cap", [(3000, 2, 800), (2000, 1, 500), (4000, 3, 1200)])
+def test_search_a_top_row_too_long_alone_is_kept_shortened_from_the_end(first_words, rows, cap):
+    from app.agents.base.tools import search_rows_within_cap
+    first = " ".join(f"w{i}" for i in range(first_words))
+    results = [{"document_id": "d0", "snippet": first}] + [
+        {"document_id": f"d{i}", "snippet": "short"} for i in range(1, rows)]
+    payload = search_rows_within_cap(results, cap)
+    assert len(json.dumps(payload)) <= cap
+    [kept] = payload["results"]
+    assert kept["document_id"] == "d0"
+    snippet = kept["snippet"]
+    assert snippet.endswith(" ...") and first.startswith(snippet[:-4]) and len(snippet) < len(first)
+    assert payload.get("rows_withheld", 0) == rows - 1
+    assert "shortened" in payload["note"] and "every row shown is complete" not in payload["note"]
+
+
+@pytest.mark.parametrize("cap, kept", [(10_000, 4), (260, 1)])
+def test_search_rows_that_fit_whole_are_not_said_to_be_shortened(cap, kept):
+    from app.agents.base.tools import search_rows_within_cap
+    rows = [{"document_id": "d", "snippet": "word " * 10} for _ in range(4)]
+    payload = search_rows_within_cap(rows, cap)
+    assert len(payload["results"]) == kept
+    assert "shortened" not in payload.get("note", "")
+
+
+# -- the numbers each hint states, read from the hint and run -----------------
+
+def _stated(name, word):
+    import re
+    found = re.search(word + r" (\d+)", _hints(name)["purpose"])
+    assert found, (name, word)
+    return int(found.group(1))
+
+
+async def _asked_search(monkeypatch, top_k):
+    from app.agents.base.tools import handle_search_project_documents
+    from app.core import doc_index
+    seen = []
+
+    async def fake(project_id, query, top_k, **_kw):
+        seen.append(top_k)
+        return []
+
+    monkeypatch.setattr(doc_index, "search_project_documents", fake)
+    args = {"query": "q"} if top_k is None else {"query": "q", "top_k": top_k}
+    await handle_search_project_documents(_call("search_project_documents", args))
+    return seen[0]
+
+
+async def _asked_general(monkeypatch, top_k):
+    from app.agents.base.knowledge import handle_search_general_knowledge
+    from app.core import doc_index
+    from app.core.rag import retriever
+
+    async def fake(project_id, query, k, **_kw):
+        return [{"score": 1.0 - i / 1000} for i in range(k)]
+
+    monkeypatch.setattr(retriever, "_general_knowledge_project_ids", lambda: ["gk1"])
+    monkeypatch.setattr(doc_index, "search_project_documents", fake)
+    args = {"query": "q"} if top_k is None else {"query": "q", "top_k": top_k}
+    out = await handle_search_general_knowledge(_call("search_general_knowledge", args, None))
+    return len(out["result"]["results"])
+
+
+async def _asked_list(monkeypatch, limit):
+    from app.agents.base.tools import handle_list_project_documents
+    from app.core import projects
+    docs = [{"id": f"i{n}", "original_name": f"f{n}.pdf", "doc_type": "pdf", "size": n} for n in range(500)]
+    monkeypatch.setattr(projects, "_master_corpus_source", lambda pid: None)
+    monkeypatch.setattr(projects, "list_documents", lambda pid, limit=100, **kw: docs[:limit])
+    monkeypatch.setattr(projects, "count_documents", lambda pid: len(docs))
+    args = {} if limit is None else {"limit": limit}
+    out = await handle_list_project_documents(_call("list_project_documents", args))
+    return out["result"]["returned"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, run", [("search_project_documents", _asked_search),
+                                       ("search_general_knowledge", _asked_general),
+                                       ("list_project_documents", _asked_list)])
+async def test_the_default_a_hint_states_is_what_a_call_without_it_gets(monkeypatch, name, run):
+    assert await run(monkeypatch, None) == _stated(name, "default")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, run", [("search_general_knowledge", _asked_general),
+                                       ("list_project_documents", _asked_list)])
+async def test_the_ceiling_a_hint_states_is_what_a_larger_ask_gets(monkeypatch, name, run):
+    ceiling = _stated(name, "at most")
+    assert await run(monkeypatch, ceiling + 1) == ceiling
+    assert await run(monkeypatch, 10 * ceiling) == ceiling
+    assert await run(monkeypatch, ceiling - 1) == ceiling - 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit, returned", [(-5, 1), (0, 100), ("abc", 100)])
+async def test_document_list_limit_below_one_or_not_a_number(monkeypatch, limit, returned):
+    assert await _asked_list(monkeypatch, limit) == returned
 
 
 # -- search_general_knowledge -------------------------------------------------

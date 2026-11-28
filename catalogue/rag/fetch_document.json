@@ -51,7 +51,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Reads the text of one document, picked by its id or file name. One call returns the text up to a fixed length, with truncated saying whether the end was cut and partial_read when only part of a scan was read. A name that matches several documents returns an error naming them all, not a pick.",
+    "purpose": "Reads the text of one document by id or file name, up to a fixed length: truncated says whether that length cut the end, partial_read whether only part of a scan was read. A name equal to a file name (ignoring case) is taken without asking, even when several share it; a name partly matching several returns an error naming them all. A result longer than one tool message comes in windows.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",
@@ -66,7 +66,7 @@
       {
         "kind": "single_passage",
         "role": "supports",
-        "how": "Use it when the question names the document; for a passage in an unnamed document search first. A long document comes back cut at a fixed length, with truncated set."
+        "how": "Use it when the question names the document; for a passage in an unnamed document search first. A result longer than one tool message comes one window at a time: the message is marked truncated and gives next_char_offset; call again with char_offset for the next window before saying something is not in the document."
       },
       {
         "kind": "totals_across_bill_rows",

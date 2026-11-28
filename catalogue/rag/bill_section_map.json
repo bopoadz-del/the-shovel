@@ -4,7 +4,7 @@
   "kind": "rag",
   "facts": {
     "name": "Bill section map",
-    "described_as": "The sections a bill of quantities prints, read from the document's own headings, in the order the document prints them: each section's number and its heading. An empty list means the document prints no section heading.",
+    "described_as": "The sections a bill of quantities prints, read from the document's own headings, in the order the document prints them: each section's number and its heading. Only headings printed as 'Bill No. <n>' (or 'Bill Number <n>', 'Bill # <n>') are read: an empty list means no heading of that form, not that the bill has no sections.",
     "inputs": [
       {
         "name": "document_id",
@@ -41,7 +41,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Returns the sections one bill of quantities prints, each with its number and heading, in the document's own order, read from all of that document's indexed text in this project. One call covers the one document named by document_id. An empty list means the document prints no section heading. It returns no rows, quantities or amounts.",
+    "purpose": "Returns the sections one bill of quantities prints, number and heading, in the document's order, for the one document named by document_id. Only headings printed as Bill No. <n> (or Bill Number, Bill #) are read: an empty list means none of that form, not no sections; a bill headed Section or Part also gives an empty list. It returns no rows, quantities or amounts.",
     "not_to_be_confused_with": [
       {
         "id": "tool:bill_rows_aggregate",
