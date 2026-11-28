@@ -1,0 +1,70 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:check_review_timeline",
+  "kind": "formula",
+  "facts": {
+    "name": "Design review timeline check",
+    "described_as": "Whether the period between a design review package distribution and the review workshop meets the design review procedure.",
+    "inputs": [
+      {
+        "name": "distribution_date",
+        "label": "distribution date (YYYY-MM-DD)",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "workshop_date",
+        "label": "workshop date (YYYY-MM-DD)",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "compliant",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "distribution_period_days",
+        "unit": "d",
+        "main": false
+      },
+      {
+        "name": "message",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "check_review_timeline"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Design review timeline check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/formulas/design_review_rules.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

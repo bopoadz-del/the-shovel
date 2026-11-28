@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.required_hourly_rate",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Required hourly output from quantity, days and hours per day",
+    "described_as": "Required hourly output = total quantity / (working days x working hours per day). Equal to each shift's quantity divided by its hours (see equipment.shift_quan…",
+    "inputs": [
+      {
+        "name": "total_quantity",
+        "label": "Total quantity to move or place",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "working_days",
+        "label": "Working days available",
+        "type": "number",
+        "unit": "day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_day",
+        "label": "Working hours per day, all shifts",
+        "type": "number",
+        "unit": "hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3/hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.required_hourly_rate"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Required hourly output from quantity, days and hours per day",
+      "entry": "equipment.required_hourly_rate",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.required_hourly_rate",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

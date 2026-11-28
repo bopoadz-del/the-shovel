@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.compaction_water",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Water to add for compaction per day",
+    "described_as": "Water to add (t/day) = daily fill quantity x material density x (optimum moisture - natural moisture) / 100, moisture in percent. Water per hour = daily water…",
+    "inputs": [
+      {
+        "name": "daily_quantity",
+        "label": "Fill quantity placed per day",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "density",
+        "label": "Material density the daily quantity is measured at",
+        "type": "number",
+        "unit": "tonne/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "optimum_moisture",
+        "label": "Optimum moisture content (laboratory)",
+        "type": "number",
+        "unit": "percent",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "natural_moisture",
+        "label": "Natural moisture content of the fill",
+        "type": "number",
+        "unit": "percent",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "tonne",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.compaction_water"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Water to add for compaction per day",
+      "entry": "earthworks.compaction_water",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.compaction_water",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

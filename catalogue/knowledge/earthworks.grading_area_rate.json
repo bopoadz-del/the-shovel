@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.grading_area_rate",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Area to grade and roll per working hour over the whole fill",
+    "described_as": "Area rate (m2/hr) = number of layers x fill area (m2) / (working days x working hours per day); dividing it by one grader's area rate gives the graders needed…",
+    "inputs": [
+      {
+        "name": "layer_count",
+        "label": "Number of compacted layers (earthworks.fill_layers)",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fill_area",
+        "label": "Plan area of the fill",
+        "type": "number",
+        "unit": "meter**2",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "working_days",
+        "label": "Working days in the programme",
+        "type": "number",
+        "unit": "day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_day",
+        "label": "Working hours per day, all shifts",
+        "type": "number",
+        "unit": "hour/day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**2/hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.grading_area_rate"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Area to grade and roll per working hour over the whole fill",
+      "entry": "earthworks.grading_area_rate",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.grading_area_rate",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

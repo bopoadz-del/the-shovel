@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:unit_weight_concrete",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete unit weight",
+    "described_as": "Unit weight of plain or reinforced concrete, flagged as an indicative default when not supplied.",
+    "inputs": [
+      {
+        "name": "reinforced",
+        "label": "reinforced concrete",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "unit_weight_kg_m3",
+        "unit": "kg/m3",
+        "main": false
+      },
+      {
+        "name": "type",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "range_kg_m3",
+        "unit": "kg/m3",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "unit_weight_concrete"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete unit weight"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

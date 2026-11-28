@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:facade.sealant_joint_rules",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Facade weatherseal joint design rules",
+    "described_as": "Rules for facade weatherseal (movement-joint) sealant. Minimum sealant depth 6 mm; minimum joint width 6 mm. Target width-to-depth ratio 2:1 (width twice the d…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "facade.sealant_joint_rules"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Facade weatherseal joint design rules",
+      "entry": "facade.sealant_joint_rules",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "facade.sealant_joint_rules",
+      "type": "rule",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

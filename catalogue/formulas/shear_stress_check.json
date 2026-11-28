@@ -1,0 +1,93 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:shear_stress_check",
+  "kind": "formula",
+  "facts": {
+    "name": "Shear stress check",
+    "described_as": "Nominal shear stress on a section from shear force, width and effective depth.",
+    "inputs": [
+      {
+        "name": "v_kn",
+        "label": "shear force",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "b_mm",
+        "label": "section width",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          20,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "d_mm",
+        "label": "effective depth",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          20,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shear_force_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "width_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "effective_depth_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "shear_stress_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "shear_stress_check"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Shear stress check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

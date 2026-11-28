@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:dewatering.method_selection",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Dewatering / groundwater-control method selection",
+    "described_as": "Select a dewatering method by soil type, required water-table lowering, and permeability. (1) Interceptor / drainage ditches: open ditches for coarse soils and…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "dewatering.method_selection"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Dewatering / groundwater-control method selection",
+      "entry": "dewatering.method_selection",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "dewatering.method_selection",
+      "type": "reference_design",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

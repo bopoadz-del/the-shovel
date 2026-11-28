@@ -1,0 +1,90 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:calculate_interim_payment",
+  "kind": "formula",
+  "facts": {
+    "name": "Interim payment",
+    "described_as": "Net interim payment from a gross valuation and a retention percentage.",
+    "inputs": [
+      {
+        "name": "gross_valuation",
+        "label": "gross valuation",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": "period"
+      },
+      {
+        "name": "retention_percent",
+        "label": "retention",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "gross_valuation",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "retention_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "retention_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "net_payment",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "calculate_interim_payment"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Interim payment"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_formulas_additions.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Net payment from one gross valuation less a retention percentage; gives the retention amount and the net.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:interim_payment_to_date",
+        "difference": "interim_payment_to_date adds materials on site, caps retention at a limit and deducts earlier certificates; calculate_interim_payment does none of these."
+      },
+      {
+        "id": "formula:calculate_payment",
+        "difference": "calculate_payment separates the claimed from the certified amount and can carry a cumulative certified total."
+      }
+    ]
+  }
+}

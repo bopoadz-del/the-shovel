@@ -1,0 +1,78 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:bill_section_map",
+  "kind": "rag",
+  "facts": {
+    "name": "Bill section map",
+    "described_as": "The sections a bill of quantities prints, read from the document's own headings, in the order the document prints them: each section's number and its heading. An empty list means the document prints no section heading.",
+    "inputs": [
+      {
+        "name": "document_id",
+        "label": "document id",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": "",
+        "described_as": "The document, by the id a search or the document list returned."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "bill_section_map",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/bill_section_map.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Returns the sections a bill of quantities prints, number and heading, in the order the document prints them, read from the document's own headings.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:bill_rows_aggregate",
+        "difference": "That one counts and totals rows; this one only names the sections the rows sit in."
+      },
+      {
+        "id": "tool:list_project_documents",
+        "difference": "That one lists documents; this one lists the sections inside one bill."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "supports",
+        "how": "Answers what sections a bill has; for any other single passage search instead."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "supports",
+        "how": "Gives the section's own heading words, so a total confined to one section passes words the bill really prints."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Shows which bill section holds the work a specification clause governs, before the rows are read."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "not_for",
+        "how": "A bill's section headings say nothing about a drawing."
+      }
+    ]
+  }
+}

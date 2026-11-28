@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_astm_construction_standards",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ASTM — construction specifications, practices, and test evidence",
+    "described_as": "Original guidance using public ASTM scope/use records checked **2026-11-06**.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_astm_construction_standards.md",
+      "title": "ASTM — construction specifications, practices, and test evidence"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_astm_construction_standards.md",
+      "sections": [
+        "Concrete: do not confuse supply, specimen preparation, and testing",
+        "Steel: a shared yield level does not establish interchangeability",
+        "Fire tests answer different questions",
+        "Verification boundary",
+        "Sources — public ASTM records"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

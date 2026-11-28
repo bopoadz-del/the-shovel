@@ -1,0 +1,40 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:cesmm4_classification_guide",
+  "kind": "knowledge",
+  "facts": {
+    "name": "CESMM4 Classification Reference Guide",
+    "described_as": "CESMM4 is the Civil Engineering Standard Method of Measurement, 4th edition — the UK / international convention for classifying construction quantities in Bill…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/cesmm4_classification_guide.md",
+      "title": "CESMM4 Classification Reference Guide"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/cesmm4_classification_guide.md",
+      "sections": [
+        "What CESMM4 Is",
+        "CESMM4 References Are Classifications, Not Line Items",
+        "Why This Matters",
+        "How To Look Up a Rate",
+        "Reference Infrastructure BOQ — D999.x Family",
+        "Verified Described Items",
+        "Unpriced Codes in the Series",
+        "Currency",
+        "Unit Conventions",
+        "Common Misconceptions"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

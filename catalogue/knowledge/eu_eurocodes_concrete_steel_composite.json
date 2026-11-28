@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:eu_eurocodes_concrete_steel_composite",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Eurocodes — concrete, steel and composite reference pointers",
+    "described_as": "Citation-only scope map, checked 2026-11-06 (Asia/Dubai). Original descriptions;",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/eu_eurocodes_concrete_steel_composite.md",
+      "title": "Eurocodes — concrete, steel and composite reference pointers"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/eu_eurocodes_concrete_steel_composite.md",
+      "sections": [
+        "EN 1992 — concrete",
+        "EN 1993 — steel",
+        "Selected second-generation additions",
+        "EN 1994 — steel/concrete composite work",
+        "Application boundary",
+        "Public sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:interim_payment_to_date",
+  "kind": "formula",
+  "facts": {
+    "name": "Interim payment to date",
+    "described_as": "Amount due on an interim payment certificate: work done to date plus materials on site, less retention at the contract rate up to its limit, less the amount certified on earlier certificates.",
+    "inputs": [
+      {
+        "name": "work_value_to_date",
+        "label": "value of work done to date",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": "cumulative"
+      },
+      {
+        "name": "retention_percent",
+        "label": "retention",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "previously_certified",
+        "label": "amount certified on earlier certificates",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": "cumulative"
+      },
+      {
+        "name": "materials_on_site",
+        "label": "materials on site",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": "cumulative"
+      },
+      {
+        "name": "retention_limit",
+        "label": "retention limit",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "gross_to_date",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "retention_to_date",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "net_to_date",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "amount_due",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "working",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "interim_payment_to_date"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": "FIDIC Clause 14.3",
+      "credit": "Interim payment to date"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_formulas_additions.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Amount due on an interim payment certificate measured to date: work done to date plus materials on site, less retention at the contract rate up to its limit, less what earlier certificates already paid.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:calculate_payment",
+        "difference": "calculate_payment takes this period's certified amount on its own; interim_payment_to_date takes cumulative values and subtracts earlier certificates."
+      },
+      {
+        "id": "formula:calculate_interim_payment",
+        "difference": "calculate_interim_payment has no materials on site, no retention limit and no deduction of earlier certificates."
+      }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:thermal.core_temp_limit",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Mass-concrete peak core temperature limit = 70 degC",
+    "described_as": "Peak internal (core) temperature of a mass-concrete pour must be kept at or below 70 degC to limit the risk of delayed ettringite formation (DEF) and thermal c…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "thermal.core_temp_limit"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Mass-concrete peak core temperature limit = 70 degC",
+      "entry": "thermal.core_temp_limit",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "thermal.core_temp_limit",
+      "type": "threshold",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

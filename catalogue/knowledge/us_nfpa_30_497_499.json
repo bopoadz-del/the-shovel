@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_nfpa_30_497_499",
+  "kind": "knowledge",
+  "facts": {
+    "name": "NFPA 30, 497, and 499 — liquids and electrical hazardous-area classification",
+    "described_as": "Original guidance for the **2024 editions** of NFPA 30, 497, and 499, based on",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_nfpa_30_497_499.md",
+      "title": "NFPA 30, 497, and 499 — liquids and electrical hazardous-area classification"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_nfpa_30_497_499.md",
+      "sections": [
+        "NFPA 30 — liquid classification is not a storage allowance",
+        "NFPA 497 — flammable gas/vapour Class I locations",
+        "NFPA 499 — combustible dust is not the gas/vapour case",
+        "Remaining decisions",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

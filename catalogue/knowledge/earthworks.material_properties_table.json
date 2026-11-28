@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.material_properties_table",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Earthworks material properties reference table (Appendix V)",
+    "described_as": "Reference properties per material layer. Columns: A = Modified Proctor density (t/m3), B = Loose density (t/m3), C = Compaction (%), D = Swelling factor, E = T…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.material_properties_table"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Earthworks material properties reference table (Appendix V)",
+      "entry": "earthworks.material_properties_table",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.material_properties_table",
+      "type": "reference_design",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

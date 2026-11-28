@@ -1,0 +1,53 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:highrise.pt_floor_five_day_cycle_chart",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Post-tensioned floor: five-day cycle bar chart (quarter-day cells)",
+    "described_as": "Bar positions of a post-tensioned floor cycle chart titled a five-day cycle time program: columns, slab formwork, anchorages, steel and tendons, concrete, stri…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "highrise.pt_floor_five_day_cycle_chart"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Post-tensioned floor: five-day cycle bar chart (quarter-day cells)",
+      "entry": "highrise.pt_floor_five_day_cycle_chart",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "highrise.pt_floor_five_day_cycle_chart",
+      "type": "table",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:osha_focus_four_hazards",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Construction Safety — Leading Hazards & Corrective Controls (OSHA Focus Four)",
+    "described_as": "Reference note on the leading causes of construction fatalities and the controls",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/osha_focus_four_hazards.md",
+      "title": "Construction Safety — Leading Hazards & Corrective Controls (OSHA Focus Four)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/osha_focus_four_hazards.md",
+      "sections": [
+        "The Focus Four hazards and their corrective controls",
+        "The corrective-action pattern",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

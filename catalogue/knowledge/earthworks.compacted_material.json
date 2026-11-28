@@ -1,0 +1,79 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.compacted_material",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Compacted volume from loose volume and swelling factor",
+    "described_as": "Compacted (in-place) quantity = Loose quantity / Swelling factor, i.e. Compacted = E_loose / D where E_loose is the loose (tipper-loose) quantity (table column…",
+    "inputs": [
+      {
+        "name": "E_loose",
+        "label": "Loose (tipper-loose) quantity (table column E)",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "D",
+        "label": "Swelling factor (table column D)",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.compacted_material"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Compacted volume from loose volume and swelling factor",
+      "entry": "earthworks.compacted_material",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.compacted_material",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

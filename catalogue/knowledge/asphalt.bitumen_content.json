@@ -1,0 +1,54 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:asphalt.bitumen_content",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Asphalt bitumen content by course",
+    "described_as": "Reference bitumen content by asphalt course: base course approximately 3.6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "asphalt.bitumen_content"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Asphalt bitumen content by course",
+      "entry": "asphalt.bitumen_content",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, asphalt section 3 p35 (typed sheet; p39 is the retyped copy)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "asphalt.bitumen_content",
+      "type": "reference_design",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, asphalt section 3 p35 (typed sheet; p39 is the retyped copy)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

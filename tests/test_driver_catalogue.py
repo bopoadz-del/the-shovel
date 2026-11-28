@@ -196,6 +196,68 @@ def test_an_output_feeds_an_input_of_the_same_name_and_unit_only(registered, tak
     assert held["formula:zz_cat_dst"]["feeds"] == []
 
 
+_HANDS_BACK = {
+    # The returned dict hands an input back under another name.
+    "width": ("def zz_cat_copy(zz_w, zz_l):\n    return {'zz_w2': zz_w, 'zz_area': zz_w * zz_l}\n",
+              "zz_cat_takes_area"),
+    "area": ("def zz_cat_copy(zz_w, zz_l):\n    return {'zz_w2': zz_w * 2, 'zz_area': zz_l}\n",
+             "zz_cat_takes_w"),
+}
+
+
+@pytest.mark.parametrize("which", sorted(_HANDS_BACK))
+def test_an_output_handed_back_from_an_input_feeds_nothing(registered, tmp_path, which):
+    # That output is the caller's figure, not a result: only the worked-out
+    # output links.
+    body, fed = _HANDS_BACK[which]
+    path = tmp_path / "zz_cat_copy.py"
+    path.write_text(body, encoding="utf-8")
+    ns: dict = {}
+    exec(compile(body, str(path), "exec"), ns)
+    fr.formula(owner="base", description="Synthetic copy.", display_name="Synthetic copy",
+               inputs={"zz_w": "m", "zz_l": "m"}, outputs={"zz_w2": "m", "zz_area": "m2"})(ns["zz_cat_copy"])
+    registered["formula"].append("zz_cat_copy")
+    _formula(registered, "zz_cat_takes_w", {"zz_w2": "m"}, {"c": "m3"})
+    _formula(registered, "zz_cat_takes_area", {"zz_area": "m2"}, {"c": "m3"})
+    catalogue._CACHE.clear()
+    held = {e["id"]: e for e in catalogue.entries()}
+    assert held["formula:zz_cat_copy"]["feeds"] == [f"formula:{fed}"]
+    other = ({"zz_cat_takes_w", "zz_cat_takes_area"} - {fed}).pop()
+    assert held[f"formula:{other}"]["fed_by"] == []
+
+
+@pytest.mark.parametrize("out_name,fed", [("zz_a", False), ("zz_b", True)])
+def test_an_output_named_like_its_own_input_feeds_nothing(registered, out_name, fed):
+    _formula(registered, "zz_cat_src", {"zz_a": "m"}, {out_name: "m"})
+    _formula(registered, "zz_cat_dst", {out_name: "m"}, {"c": "m3"})
+    catalogue._CACHE.clear()
+    held = {e["id"]: e for e in catalogue.entries()}
+    assert held["formula:zz_cat_src"]["feeds"] == (["formula:zz_cat_dst"] if fed else [])
+    assert held["formula:zz_cat_dst"]["fed_by"] == (["formula:zz_cat_src"] if fed else [])
+
+
+@pytest.mark.parametrize("body,copied", [
+    ("def f(a, b):\n    return {'x': a, 'y': a * b}\n", {"a", "b", "x"}),
+    ("def f(a, b):\n    return {'x': b, 'y': a}\n", {"a", "b", "x", "y"}),
+    ("def f(a, b):\n    c = 2\n    return {'x': c, 'y': [a]}\n", {"a", "b"}),
+    ("def f(a, b):\n    return dict(x=a)\n", {"a", "b"}),
+])
+def test_copied_outputs_reads_returned_dict_literals(tmp_path, body, copied):
+    path = tmp_path / "zz_src.py"
+    path.write_text(body, encoding="utf-8")
+    ns: dict = {}
+    exec(compile(body, str(path), "exec"), ns)
+    assert catalogue.copied_outputs(ns["f"], {"a": None, "b": None}) == copied
+
+
+@pytest.mark.parametrize("inputs", [{"a": None}, {"a": None, "b": None}])
+def test_copied_outputs_without_source_copies_by_name_only(inputs):
+    ns: dict = {}
+    # Compiled from a string with no file: the source cannot be read.
+    exec(compile("def f(a, b=0):\n    return {'x': a}\n", "<no file>", "exec"), ns)
+    assert catalogue.copied_outputs(ns["f"], inputs) == set(inputs)
+
+
 # -- the index ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("built", ["cold", "cached"])
@@ -246,6 +308,84 @@ def test_a_registered_formula_reaches_the_index_without_a_restart(registered, na
     assert len(after) == len(before) + 1
     assert [line for line in after if line.startswith(f"formula:{name} | ")] == [
         f"formula:{name} | formula | Synthetic {name} | Synthetic {name}."]
+
+
+# -- source file: the body, not the wrapper -----------------------------------------
+
+def _source_of(name):
+    return [e for e in catalogue.entries() if e["id"] == f"formula:{name}"][0]["source"]["file"]
+
+
+def _wrapped_in(spec_fn, wrappers):
+    out = spec_fn
+    for wrap in wrappers:
+        out = wrap(out)
+    return out
+
+
+def _real_wrappers(which):
+    from app.agents.hats.qaqc import defaults, results
+    table = {"range_hold": [results.qaqc_calculator],
+             "defaults": [defaults.disclose_defaults],
+             "both": [results.qaqc_calculator, defaults.disclose_defaults]}
+    return table[which]
+
+
+@pytest.mark.parametrize("which", ["range_hold", "defaults", "both"])
+@pytest.mark.parametrize("name", ["zz_src_one", "zz_src_two"])
+def test_a_formula_entry_names_the_file_of_its_body_whatever_wraps_it(registered, which, name):
+    """The wrapper that is outermost depends on import order; the entry's file must not."""
+    from dataclasses import replace
+
+    _formula(registered, name, {"a": "m"}, {"b": "m"})
+    bare = _source_of(name)
+    fr._REGISTRY[name] = replace(fr._REGISTRY[name],
+                                 fn=_wrapped_in(fr._REGISTRY[name].fn, _real_wrappers(which)))
+    catalogue._CACHE.clear()
+    assert bare == "tests/test_driver_catalogue.py"
+    assert _source_of(name) == bare
+
+
+_WRAPPER_MODULE = '''
+import functools
+
+def with_wraps(fn):
+    @functools.wraps(fn)
+    def kept(*a, **k):
+        return fn(*a, **k)
+    return kept
+
+def without_wraps(fn):
+    def own(*a, **k):
+        return fn(*a, **k)
+    return own
+'''
+
+
+@pytest.mark.parametrize("stem", ["zz_wrapmod_a", "zz_wrapmod_b"])
+def test_source_file_looks_through_wraps_only(tmp_path, monkeypatch, stem):
+    """functools.wraps leaves __wrapped__: followed. A wrapper without it is its
+    own body: its file is named (no guessing past it)."""
+    import importlib
+    import sys
+
+    (tmp_path / f"{stem}.py").write_text(_WRAPPER_MODULE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module(stem)
+    try:
+        def body(**kw):
+            return {}
+        assert catalogue._source_file(mod.with_wraps(body)) == "tests/test_driver_catalogue.py"
+        assert catalogue._source_file(mod.with_wraps(mod.with_wraps(body))) == "tests/test_driver_catalogue.py"
+        own = catalogue._source_file(mod.without_wraps(body))
+        assert own.endswith(f"{stem}.py") and own != "tests/test_driver_catalogue.py"
+    finally:
+        sys.modules.pop(stem, None)
+
+
+@pytest.mark.parametrize("thing", [len, print])
+def test_source_file_of_a_builtin_is_empty(thing):
+    assert catalogue._source_file(thing) == ""
 
 
 # -- lookup -------------------------------------------------------------------------
@@ -794,8 +934,9 @@ def test_a_formula_never_feeds_itself(unit):
     a = catalogue._entry("formula", "a", inputs=[{"name": "q", "unit": unit}], outputs=[{"name": "q", "unit": unit}])
     b = catalogue._entry("formula", "b", inputs=[{"name": "q", "unit": unit}], outputs=[])
     catalogue._link_formulas([a, b])
-    assert a["feeds"] == ["formula:b"] and a["fed_by"] == []
-    assert b["fed_by"] == ["formula:a"]
+    # a only hands q back: it feeds nobody, itself least of all.
+    assert a["feeds"] == [] and a["fed_by"] == []
+    assert b["fed_by"] == []
 
 
 @pytest.mark.parametrize("pick", [0, -1])

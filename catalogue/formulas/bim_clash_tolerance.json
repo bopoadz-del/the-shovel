@@ -1,0 +1,59 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:bim_clash_tolerance",
+  "kind": "formula",
+  "facts": {
+    "name": "BIM clash tolerance",
+    "described_as": "Clash tolerance for a model's level of development.",
+    "inputs": [
+      {
+        "name": "lod",
+        "label": "level of development",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          100,
+          500
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "lod",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "clash_tolerance_mm",
+        "unit": "mm",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "bim_clash_tolerance"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "BIM clash tolerance"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/formulas/construction_formulas_reference_tables.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

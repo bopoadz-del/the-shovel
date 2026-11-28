@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:iso_management_systems_risk_assets",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ISO — management systems, risk, assets and project references",
+    "described_as": "Citation-only directory, checked 2026-11-06 (Asia/Dubai). Original subject",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/iso_management_systems_risk_assets.md",
+      "title": "ISO — management systems, risk, assets and project references"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/iso_management_systems_risk_assets.md",
+      "sections": [
+        "Organizational systems and supporting guidance",
+        "Project-delivery context",
+        "Application boundary",
+        "Public sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

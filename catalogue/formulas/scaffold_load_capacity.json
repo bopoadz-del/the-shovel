@@ -1,0 +1,95 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:scaffold_load_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Scaffold load capacity",
+    "described_as": "Intended scaffold load and the capacity it must be built to support.",
+    "inputs": [
+      {
+        "name": "platform_area_m2",
+        "label": "platform area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "duty",
+        "label": "scaffold duty",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "safety_factor",
+        "label": "safety factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "duty",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "duty_load_kpa",
+        "unit": "kPa",
+        "main": false
+      },
+      {
+        "name": "intended_load_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "required_capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "safety_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "scaffold_load_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Scaffold load capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "safety",
+      "file": "app/agents/hats/safety/formulas/construction_formulas_safety.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

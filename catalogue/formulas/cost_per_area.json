@@ -1,0 +1,84 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cost_per_area",
+  "kind": "formula",
+  "facts": {
+    "name": "Cost per area",
+    "described_as": "Unit cost per area: a total cost divided by its area.",
+    "inputs": [
+      {
+        "name": "total_cost",
+        "label": "total cost",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "area",
+        "label": "area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "area_unit",
+        "label": "area unit",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "cost_per_area",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "area_unit",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cost_per_area"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Cost per area"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_commercial.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:productivity_manpower_duration",
+      "formula:resource_line_cost",
+      "formula:unit_cost_total"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

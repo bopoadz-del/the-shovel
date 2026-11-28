@@ -1,0 +1,122 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:formwork_striking_time",
+  "kind": "formula",
+  "facts": {
+    "name": "Formwork striking time",
+    "described_as": "Earliest formwork striking time from element type, temperature and test strength.",
+    "inputs": [
+      {
+        "name": "concrete_strength_7h",
+        "label": "concrete strength at striking",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          0,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "design_required_strength",
+        "label": "required striking strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          0,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ciria_surface_strength",
+        "label": "CIRIA surface strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          0,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "bs8110_minimum_hours",
+        "label": "minimum striking time",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "proposed_hours",
+        "label": "proposed striking time",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "recommended_hours",
+        "unit": "h",
+        "main": false
+      },
+      {
+        "name": "bs8110_minimum_hours",
+        "unit": "h",
+        "main": false
+      },
+      {
+        "name": "ciria_minimum_strength_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "design_required_strength_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "actual_early_strength_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "formwork_striking_time"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Formwork striking time"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_estidama_pbrs_pcrs",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Estidama — Pearl Building and Community rating systems",
+    "described_as": "Independently authored guidance using the official **PBRS** and **PCRS Design &",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_estidama_pbrs_pcrs.md",
+      "title": "Estidama — Pearl Building and Community rating systems"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_estidama_pbrs_pcrs.md",
+      "sections": [
+        "Select the correct assessment boundary",
+        "Prerequisites, points, and stage gates",
+        "PBRS — building-level review map",
+        "PCRS — community-level review map",
+        "Additional source-verified policy and performance examples",
+        "Mandatory rating policy and community scope",
+        "Building and community credits are not interchangeable",
+        "A current planning interface is publicly documented",
+        "Details not established here",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

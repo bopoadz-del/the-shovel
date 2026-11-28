@@ -1,0 +1,33 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:osha_1926_crane_power_line_clearance",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Crane Power-Line Clearance — Site Safety Criteria (OSHA 29 CFR 1926 Subpart CC)",
+    "described_as": "REAL, sourced minimum approach distances between cranes and energized overhead",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/osha_1926_crane_power_line_clearance.md",
+      "title": "Crane Power-Line Clearance — Site Safety Criteria (OSHA 29 CFR 1926 Subpart CC)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/osha_1926_crane_power_line_clearance.md",
+      "sections": [
+        "Minimum clearance to energized overhead power lines (crane operation)",
+        "KSA applicability",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

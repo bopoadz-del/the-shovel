@@ -1,0 +1,157 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:composite_column_design",
+  "kind": "formula",
+  "facts": {
+    "name": "Composite column comparison",
+    "described_as": "Compares a composite column with an embedded steel section against a reinforced concrete column for a given axial load.",
+    "inputs": [
+      {
+        "name": "axial_load_kn",
+        "label": "axial load",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "column_diameter_mm",
+        "label": "column diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          100,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "concrete_grade_n_mm2",
+        "label": "concrete strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          5,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "use_i_beam",
+        "label": "use an I-beam",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "i_beam_weight_t",
+        "label": "steel section weight",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_area_mm2",
+        "label": "structural steel area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_fy_mpa",
+        "label": "structural steel yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "rebar_area_mm2",
+        "label": "reinforcement area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "rebar_fy_mpa",
+        "label": "reinforcement yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "option_a",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "option_b",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "recommended",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "composite_column_design"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Composite column comparison"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

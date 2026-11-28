@@ -1,0 +1,98 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:arithmetic_step",
+  "kind": "formula",
+  "facts": {
+    "name": "Arithmetic step",
+    "described_as": "One arithmetic step on two values with their units: add, subtract, multiply or divide. Use it for every in-between step of a worked answer, even a single division. Values in different units are added or subtracted only after one is converted to the other's unit.",
+    "inputs": [
+      {
+        "name": "operator",
+        "label": "operator (add, subtract, multiply or divide)",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "a",
+        "label": "first value",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          -1000000000000000.0,
+          1000000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "b",
+        "label": "second value",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          -1000000000000000.0,
+          1000000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "a_unit",
+        "label": "unit of the first value",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "b_unit",
+        "label": "unit of the second value",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "result_unit",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "arithmetic_step"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": "arithmetic",
+      "credit": "Arithmetic step"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/arithmetic.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

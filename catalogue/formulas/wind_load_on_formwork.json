@@ -1,0 +1,117 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:wind_load_on_formwork",
+  "kind": "formula",
+  "facts": {
+    "name": "Wind load on formwork",
+    "described_as": "Wind force and overturning moment on climbing formwork from wind speed and exposed area.",
+    "inputs": [
+      {
+        "name": "wind_velocity_m_s",
+        "label": "wind speed",
+        "type": "number",
+        "unit": "m/s",
+        "range": [
+          0,
+          120
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "formwork_area_m2",
+        "label": "formwork area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "formwork_height_m",
+        "label": "formwork height",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "formwork_width_m",
+        "label": "formwork width",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "shape_factor",
+        "label": "shape factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          3
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "wind_pressure_kpa",
+        "unit": "kPa",
+        "main": false
+      },
+      {
+        "name": "wind_force_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "overturning_moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "bending_stress_n_m2",
+        "unit": "N/m2",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "wind_load_on_formwork"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Wind load on formwork"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "safety",
+      "file": "app/agents/hats/safety/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

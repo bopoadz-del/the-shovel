@@ -1,0 +1,95 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:search_project_documents",
+  "kind": "rag",
+  "facts": {
+    "name": "Project document search",
+    "described_as": "Search inside this project's documents (including imported Drive files).",
+    "inputs": [
+      {
+        "name": "query",
+        "label": "what to look for",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": "",
+        "described_as": "What to search for."
+      },
+      {
+        "name": "top_k",
+        "label": "number of passages",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          100
+        ],
+        "required": false,
+        "basis": "",
+        "described_as": "Max number of results (default 5)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "search_project_documents",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Finds the passages in this project's own documents that speak to a question, ranked by relevance, each with its document and page so the answer can cite it.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:search_general_knowledge",
+        "difference": "That one searches the platform's library of standards and guidance, not this project's documents."
+      },
+      {
+        "id": "tool:fetch_document",
+        "difference": "That one reads one named document whole; this one finds passages across all of them."
+      },
+      {
+        "id": "tool:bill_rows_aggregate",
+        "difference": "A search returns a few ranked passages, never every row of a bill, so it cannot give a count or total."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "leads",
+        "how": "Search for the clause, note or line the question is about and answer from the passage it returns, citing its document and page."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "supports",
+        "how": "Finds which bill and which wording the rows use; the count or total itself comes from the bill row tool, not from adding ranked passages."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "leads",
+        "how": "Run one search for the specification clause and another for the bill item; the answer joins the two passages and cites both documents."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "leads",
+        "how": "Run one search for the specification clause and another for the drawing note, schedule or title block; cite both documents."
+      }
+    ]
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cost_buildup_rebar",
+  "kind": "formula",
+  "facts": {
+    "name": "Reinforcement cost build-up",
+    "described_as": "Cost build-up of reinforcement per tonne from material, fabrication, fixing and overheads.",
+    "inputs": [
+      {
+        "name": "quantity_kg",
+        "label": "quantity",
+        "type": "number",
+        "unit": "kg",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "material_price_per_t",
+        "label": "material price",
+        "type": "number",
+        "unit": "currency/t",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "labour_mhr_t",
+        "label": "labour hours per tonne",
+        "type": "number",
+        "unit": "man-hour/t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "labour_rate_per_hr",
+        "label": "labour rate",
+        "type": "number",
+        "unit": "currency/h",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crane_hr_t",
+        "label": "crane hours per tonne",
+        "type": "number",
+        "unit": "h/t",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "crane_rate_per_hr",
+        "label": "crane rate",
+        "type": "number",
+        "unit": "currency/h",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "waste_pct",
+        "label": "waste allowance",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "indirect_pct",
+        "label": "indirect cost share",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "markup_pct",
+        "label": "markup",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rates",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "material_per_t",
+        "unit": "currency/t",
+        "main": false
+      },
+      {
+        "name": "labour_per_t",
+        "unit": "currency/t",
+        "main": false
+      },
+      {
+        "name": "equipment_per_t",
+        "unit": "currency/t",
+        "main": false
+      },
+      {
+        "name": "selling_price_per_t",
+        "unit": "currency/t",
+        "main": true
+      },
+      {
+        "name": "total_project_value",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cost_buildup_rebar"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Reinforcement cost build-up"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:diaphragm_wall.panel_sequence",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Diaphragm wall panel sequence and guide-wall geometry",
+    "described_as": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence: (1) build the guide walls and make the first-pass excavati…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "diaphragm_wall.panel_sequence"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Diaphragm wall panel sequence and guide-wall geometry",
+      "entry": "diaphragm_wall.panel_sequence",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p6",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "diaphragm_wall.panel_sequence",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p6",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_osha_1910",
+  "kind": "knowledge",
+  "facts": {
+    "name": "OSHA 29 CFR 1910 — operating-workplace safety and construction interfaces",
+    "described_as": "Original summary of publicly accessible federal requirements checked",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_osha_1910.md",
+      "title": "OSHA 29 CFR 1910 — operating-workplace safety and construction interfaces"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_osha_1910.md",
+      "sections": [
+        "Decide the applicable work standard, not just the building's label",
+        "Selected operating-workplace review map",
+        "Publicly resolved fall-system examples",
+        "Permits and energy control need real arrangements",
+        "Remaining applicability",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

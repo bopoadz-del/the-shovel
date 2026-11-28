@@ -1,0 +1,121 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:rebar_by_area",
+  "kind": "formula",
+  "facts": {
+    "name": "Reinforcement mass by area",
+    "described_as": "Reinforcement mass for a slab or wall area from bar diameter and spacing.",
+    "inputs": [
+      {
+        "name": "area_m2",
+        "label": "area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "spacing_mm",
+        "label": "bar spacing",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          10,
+          2000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "bar_diameter_mm",
+        "label": "bar diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          4,
+          60
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "both_ways",
+        "label": "both ways",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "density_kg_m3",
+        "label": "steel density",
+        "type": "number",
+        "unit": "kg/m3",
+        "range": [
+          1000,
+          20000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "bars_per_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "total_bar_length_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "total_mass_kg",
+        "unit": "kg",
+        "main": false
+      },
+      {
+        "name": "both_ways",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "rebar_by_area"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Reinforcement mass by area"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_quantities.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:rebar_weight"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Reinforcement mass for a slab or wall from its area, bar diameter and bar spacing, one way or both ways; gives bars per metre, total bar length and mass.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:rebar_weight",
+        "difference": "rebar_weight needs the bar length or the mass already known; rebar_by_area derives the length from area and spacing."
+      }
+    ]
+  }
+}

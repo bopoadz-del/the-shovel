@@ -1,0 +1,114 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:steel_tension_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Steel member tension capacity",
+    "described_as": "Design tensile strength of a steel member: the lesser of gross-section yielding and net-section rupture.",
+    "inputs": [
+      {
+        "name": "gross_area_mm2",
+        "label": "gross area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          1,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "net_area_mm2",
+        "label": "net area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          1,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "fy_mpa",
+        "label": "steel yield strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          100,
+          1500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "fu_mpa",
+        "label": "steel ultimate strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          200,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "governing_limit_state",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "yield_capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "rupture_capacity_kn",
+        "unit": "kN",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "steel_tension_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Steel member tension capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_steel.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

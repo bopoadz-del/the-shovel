@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:enabling.tech_limits",
+  "kind": "knowledge",
+  "facts": {
+    "name": "High-rise enabling-works technology limits (typical envelopes)",
+    "described_as": "Indicative technology envelopes used on high-rise enabling/superstructure works. Deep foundations typically extend to >=50 m depth; bored piles up to 2.0 m dia…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "enabling.tech_limits"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "High-rise enabling-works technology limits (typical envelopes)",
+      "entry": "enabling.tech_limits",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "enabling.tech_limits",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

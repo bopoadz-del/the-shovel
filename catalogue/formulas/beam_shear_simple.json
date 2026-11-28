@@ -1,0 +1,86 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_shear_simple",
+  "kind": "formula",
+  "facts": {
+    "name": "Beam shear force",
+    "described_as": "Maximum shear of a simply supported beam under a distributed load and an optional central point load.",
+    "inputs": [
+      {
+        "name": "udl_w_kn_m",
+        "label": "uniform load",
+        "type": "number",
+        "unit": "kN/m",
+        "range": [
+          0,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "central_point_load_kn",
+        "label": "central point load",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "max_shear_kn",
+        "unit": "kN",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_shear_simple"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Beam shear force"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_beam_analysis.py"
+    },
+    "required_groups": [
+      [
+        "udl_w_kn_m",
+        "central_point_load_kn"
+      ],
+      [
+        "span_m"
+      ]
+    ],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

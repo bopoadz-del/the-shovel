@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:rcc.compaction_95spd",
+  "kind": "knowledge",
+  "facts": {
+    "name": "RCC minimum compaction (Standard Proctor Density)",
+    "described_as": "Roller-compacted concrete must be compacted to greater than 95% of Standard Proctor Density (SPD). Verify by in-situ field density testing on each layer; under…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "rcc.compaction_95spd"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "RCC minimum compaction (Standard Proctor Density)",
+      "entry": "rcc.compaction_95spd",
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "rcc.compaction_95spd",
+      "type": "threshold",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

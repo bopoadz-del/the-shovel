@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:fetch_document",
+  "kind": "rag",
+  "facts": {
+    "name": "Document reader",
+    "described_as": "Fetch the content of ONE specific project document by document_id or filename. Use this when the user refers to a specific or attached file. For open-ended questions across the corpus use search_project_documents instead.",
+    "inputs": [
+      {
+        "name": "document_id",
+        "label": "document id",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The document id (preferred when known, e.g. from an attachment note or a prior search result)."
+      },
+      {
+        "name": "filename",
+        "label": "file name",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The document's original filename (used when the id is not known)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "fetch_document",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Reads one document of this project whole, picked by its id or file name, when the question is about that document as a whole or names it.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:search_project_documents",
+        "difference": "That one finds ranked passages across every document; this one returns the text of a single document."
+      },
+      {
+        "id": "tool:list_project_documents",
+        "difference": "That one lists the documents the project holds without reading any of them."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "supports",
+        "how": "Use it when the question names the document; for a passage in an unnamed document search first."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "not_for",
+        "how": "The text of a bill is not its rows: a count or total over bill rows comes from the bill row tool."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Reads the named specification or bill whole when a searched passage cuts off the clause or item the question needs."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "supports",
+        "how": "Reads the named drawing or specification whole when a searched passage is not enough to join the two."
+      }
+    ]
+  }
+}

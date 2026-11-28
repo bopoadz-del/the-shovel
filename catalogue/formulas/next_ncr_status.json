@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:next_ncr_status",
+  "kind": "formula",
+  "facts": {
+    "name": "NCR next status",
+    "described_as": "The next step of the non-conformance (NCR) workflow after a given status.",
+    "inputs": [
+      {
+        "name": "ncr_status",
+        "label": "current NCR status",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "current_status",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "next_status",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "workflow_complete",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "next_ncr_status"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "NCR next status"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "contracts",
+      "file": "app/agents/hats/contracts/formulas/document_rules.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

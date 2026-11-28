@@ -1,0 +1,38 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_abu_dhabi_building_code",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ADIBC — Abu Dhabi building-code scope and coordination",
+    "described_as": "An independently authored summary of the **2013 Abu Dhabi International Building",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_abu_dhabi_building_code.md",
+      "title": "ADIBC — Abu Dhabi building-code scope and coordination"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_abu_dhabi_building_code.md",
+      "sections": [
+        "Application and companion requirements",
+        "Approval and inspection evidence",
+        "Technical review map",
+        "Coordination approach",
+        "Directly sourced 2013 numerical examples",
+        "Sourced occupancy periods, not a universal certificate duration",
+        "Details not established here",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

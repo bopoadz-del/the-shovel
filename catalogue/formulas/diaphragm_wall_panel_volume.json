@@ -1,0 +1,110 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:diaphragm_wall_panel_volume",
+  "kind": "formula",
+  "facts": {
+    "name": "Diaphragm wall panel volume",
+    "described_as": "Concrete volume of diaphragm wall panels, with an allowance for tremie overbreak.",
+    "inputs": [
+      {
+        "name": "panel_length",
+        "label": "panel length",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "wall_thickness",
+        "label": "wall thickness",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          5
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "excavation_depth",
+        "label": "excavation depth",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "panel_count",
+        "label": "number of panels",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "panel_count",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "volume_per_panel_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "total_volume_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "volume_with_waste_m3",
+        "unit": "m3",
+        "main": false
+      },
+      {
+        "name": "waste_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "diaphragm_wall_panel_volume"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Diaphragm wall panel volume"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

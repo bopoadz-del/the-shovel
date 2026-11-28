@@ -1,0 +1,91 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:concrete_thermal_cracking_check",
+  "kind": "formula",
+  "facts": {
+    "name": "Mass concrete thermal check",
+    "described_as": "Mass-concrete thermal check: core temperature and core-to-surface difference against limits.",
+    "inputs": [
+      {
+        "name": "core_temp_c",
+        "label": "core temperature",
+        "type": "number",
+        "unit": "degC",
+        "range": [
+          -30,
+          120
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "surface_temp_c",
+        "label": "surface temperature",
+        "type": "number",
+        "unit": "degC",
+        "range": [
+          -50,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "core_temp_c",
+        "unit": "degC",
+        "main": false
+      },
+      {
+        "name": "surface_temp_c",
+        "unit": "degC",
+        "main": false
+      },
+      {
+        "name": "delta_t_c",
+        "unit": "degC",
+        "main": false
+      },
+      {
+        "name": "core_ok",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "delta_ok",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "thermal_cracking_risk",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "concrete_thermal_cracking_check"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Mass concrete thermal check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

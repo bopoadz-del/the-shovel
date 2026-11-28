@@ -1,0 +1,105 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:break_even_point",
+  "kind": "formula",
+  "facts": {
+    "name": "Break-even point",
+    "described_as": "Quantity and revenue at which income covers the fixed costs: fixed costs divided by the contribution per unit (price less variable cost per unit). Only defined while the price is above the variable cost; with an expected quantity, also the margin of safety and the profit.",
+    "inputs": [
+      {
+        "name": "fixed_costs",
+        "label": "fixed costs for the period",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "price_per_unit",
+        "label": "selling price per unit",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "variable_cost_per_unit",
+        "label": "variable cost per unit",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "expected_units",
+        "label": "expected quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "break_even_units",
+        "unit": "nr",
+        "main": false
+      },
+      {
+        "name": "break_even_revenue",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "contribution_per_unit",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "working",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "break_even_point"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Break-even point"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "commercial",
+      "file": "app/agents/hats/commercial/formulas/construction_formulas_additions.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:rc_beam_shear_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete section shear capacity",
+    "described_as": "Shear capacity of a concrete section without shear reinforcement.",
+    "inputs": [
+      {
+        "name": "width_mm",
+        "label": "section width",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          50,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "eff_depth_mm",
+        "label": "effective depth",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          20,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "fc_mpa",
+        "label": "concrete compressive strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          5,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "rho_l",
+        "label": "longitudinal reinforcement ratio",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          0.1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shear_capacity_kn",
+        "unit": "kN",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "rc_beam_shear_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete section shear capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_structural_rc.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:design_review_procedure",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Design Review and Acceptance Procedure",
+    "described_as": "The design review and acceptance procedure governs the review and acceptance of design documents within the construction programme. It applies to all design su…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/design_review_procedure.md",
+      "title": "Design Review and Acceptance Procedure"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/design_review_procedure.md",
+      "sections": [
+        "Scope",
+        "Valid Design Review Statuses",
+        "Forbidden Statuses on Design Documents",
+        "Why APPROVED Is Forbidden",
+        "What This Means In Practice",
+        "Review Distribution Period",
+        "Minimum Distribution Period",
+        "Maximum Distribution Period",
+        "Common Misconception",
+        "Worked Example",
+        "Related Procedures"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

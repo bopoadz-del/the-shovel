@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:posttension.five_day_cycle",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Post-tensioned floor 5-day construction cycle",
+    "described_as": "Reference floor-cycle for a post-tensioned slab high-rise: a 5-day cycle per floor (form/reinforce/place PT, pour, stress, strike and reposition formwork over…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "posttension.five_day_cycle"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Post-tensioned floor 5-day construction cycle",
+      "entry": "posttension.five_day_cycle",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "posttension.five_day_cycle",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

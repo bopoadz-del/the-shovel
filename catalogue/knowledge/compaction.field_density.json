@@ -1,0 +1,79 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:compaction.field_density",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Field compaction percentage (sand-cone field density)",
+    "described_as": "Field compaction percentage = (field dry density / laboratory maximum dry density) * 100, i.e. %Compaction = field_dry_density / lab_mdd * 100. The result is a…",
+    "inputs": [
+      {
+        "name": "field_dry_density",
+        "label": "In-place (field) dry density from sand-cone test",
+        "type": "number",
+        "unit": "ton/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "lab_mdd",
+        "label": "Laboratory maximum dry density (Modified Proctor)",
+        "type": "number",
+        "unit": "ton/meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "percent",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "compaction.field_density"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Field compaction percentage (sand-cone field density)",
+      "entry": "compaction.field_density",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "compaction.field_density",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

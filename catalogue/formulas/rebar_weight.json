@@ -1,0 +1,172 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:rebar_weight",
+  "kind": "formula",
+  "facts": {
+    "name": "Reinforcement weight",
+    "described_as": "Mass of reinforcing bars from diameter and length, or the length from a mass.",
+    "inputs": [
+      {
+        "name": "bar_diameter_mm",
+        "label": "bar diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          4,
+          60
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "total_length_m",
+        "label": "total length",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "quantity",
+        "label": "number of bars",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "density_kg_m3",
+        "label": "steel density",
+        "type": "number",
+        "unit": "kg/m3",
+        "range": [
+          1000,
+          20000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "total_weight_kg",
+        "label": "total weight",
+        "type": "number",
+        "unit": "kg",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "total_mass_kg",
+        "label": "total mass",
+        "type": "number",
+        "unit": "kg",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "total_mass_t",
+        "label": "total mass in tonnes",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "mode",
+        "label": "calculation mode",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "unit_mass_kg_m",
+        "unit": "kg/m",
+        "main": false
+      },
+      {
+        "name": "total_mass_kg",
+        "unit": "kg",
+        "main": false
+      },
+      {
+        "name": "total_mass_t",
+        "unit": "t",
+        "main": false
+      },
+      {
+        "name": "total_length_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "quantity",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "metres_run",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "mode",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "rebar_weight"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Reinforcement weight"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_quantities.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:rebar_by_area"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Mass of reinforcing bars of one diameter from their total length (or from a count of bars of that length), or the metres run that a given mass of that diameter makes.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:rebar_by_area",
+        "difference": "rebar_by_area starts from a slab or wall area and a bar spacing; rebar_weight starts from a known bar length or a known mass."
+      }
+    ]
+  }
+}

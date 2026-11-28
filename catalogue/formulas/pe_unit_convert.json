@@ -1,0 +1,133 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:pe_unit_convert",
+  "kind": "formula",
+  "facts": {
+    "name": "Unit conversion",
+    "described_as": "Converts a value between engineering units: length, area, volume, second moment of area, force, pressure and stress, mass, time, angle, temperature, percentages, ratios of these (kN/m, kg/m3, price per t), and labour effort to working time given the crew size and working hours.",
+    "inputs": [
+      {
+        "name": "value",
+        "label": "value to convert",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          -10000000000000.0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "from_unit",
+        "label": "unit to convert from",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "to_unit",
+        "label": "unit to convert to",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crew_size",
+        "label": "crew size",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          1,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "hours_per_day",
+        "label": "working hours per day",
+        "type": "number",
+        "unit": "h",
+        "range": [
+          1,
+          24
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "days_per_week",
+        "label": "working days per week",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          1,
+          7
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value_in",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "from_unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "to_unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "value_out",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "dimension",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "formula_used",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "pe_unit_convert"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Unit conversion"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

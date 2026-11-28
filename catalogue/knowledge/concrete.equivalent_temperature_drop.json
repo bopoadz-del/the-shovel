@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:concrete.equivalent_temperature_drop",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Temperature drop equivalent to a strain",
+    "described_as": "Thermal strain = alpha x dT, so a strain (for example a shrinkage strain) equals a temperature drop dT = strain / alpha. The course quotes alpha 7.2e-6 to 10.8…",
+    "inputs": [
+      {
+        "name": "strain",
+        "label": "Strain to express as a temperature change",
+        "type": "number",
+        "unit": "dimensionless",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "thermal_coefficient",
+        "label": "Coefficient of thermal expansion alpha",
+        "type": "number",
+        "unit": "1/delta_degC",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "delta_degC",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "concrete.equivalent_temperature_drop"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Temperature drop equivalent to a strain",
+      "entry": "concrete.equivalent_temperature_drop",
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p35",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "concrete.equivalent_temperature_drop",
+      "type": "formula",
+      "domain": "construction.concrete",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p35",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

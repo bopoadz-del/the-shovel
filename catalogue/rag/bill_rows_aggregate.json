@@ -1,0 +1,116 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:bill_rows_aggregate",
+  "kind": "rag",
+  "facts": {
+    "name": "Bill row count and total",
+    "described_as": "Count, or total the quantity or amount of, the bill of quantities rows whose description contains every given term (optionally only inside a section). Use this for 'how many items ...' and 'what is the total quantity / amount of ...' over a bill: it reads every row of the bill and lists the rows it used with reference and page. Report its count, sum and rows as given; do not add figures yourself.",
+    "inputs": [
+      {
+        "name": "terms",
+        "label": "description words",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "Words every matching row's description contains."
+      },
+      {
+        "name": "section",
+        "label": "section words",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "Words of the bill section (heading path) to stay inside. Optional."
+      },
+      {
+        "name": "measure",
+        "label": "quantity or amount",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "choices": [
+          "quantity",
+          "amount"
+        ],
+        "described_as": "What to sum (default quantity)."
+      },
+      {
+        "name": "document_id",
+        "label": "document id",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": "",
+        "described_as": "The bill document (source PDF or its derived sheet). Optional: default every derived bill."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "computed"
+      }
+    ],
+    "call": {
+      "tool": "bill_rows_aggregate",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "computed",
+      "passages_are_sources": false,
+      "reason_codes": [
+        "no_derived_bill_sheet",
+        "derived_sheet_has_no_readable_bytes",
+        "derived_sheet_is_not_a_readable_workbook"
+      ]
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Counts, or totals the quantity or amount of, every row of a bill of quantities whose description holds the given words, and lists the rows it used with reference and page.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:search_project_documents",
+        "difference": "A search returns a few ranked passages; this tool reads every row of the bill, so only it can give a complete count or total."
+      },
+      {
+        "id": "tool:bill_section_map",
+        "difference": "That one returns a bill's section headings; this one counts and totals the rows."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "not_for",
+        "how": "A question answered by one passage needs no count or total; search instead."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "leads",
+        "how": "Pass the words of the item, and the section when the question names one; report its count, sum and rows as given, without adding figures."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Gives the bill side when the question needs a total or count of the items the specification clause governs; the clause itself comes from a search."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "not_for",
+        "how": "It reads only bill rows; neither a specification clause nor a drawing is a bill row."
+      }
+    ]
+  }
+}

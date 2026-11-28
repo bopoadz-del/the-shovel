@@ -1,0 +1,54 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:steelwork.temporary_truss_min_fillet_weld",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Temporary steel truss and strut details: fillet welds 10 mm minimum",
+    "described_as": "General note on the course's temporary steel truss and strut detail drawings: welds are full penetration butt welds unless otherwise stated, and fillet welds a…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "steelwork.temporary_truss_min_fillet_weld"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Temporary steel truss and strut details: fillet welds 10 mm minimum",
+      "entry": "steelwork.temporary_truss_min_fillet_weld",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p27 and p30 (general notes)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "steelwork.temporary_truss_min_fillet_weld",
+      "type": "threshold",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p27 and p30 (general notes)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

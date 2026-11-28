@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_aisc_360",
+  "kind": "knowledge",
+  "facts": {
+    "name": "AISC 360 — structural steel design, stability, and quality evidence",
+    "described_as": "Original guidance for **ANSI/AISC 360-22**, checked **2026-11-06**. The directly",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_aisc_360.md",
+      "title": "AISC 360 — structural steel design, stability, and quality evidence"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_aisc_360.md",
+      "sections": [
+        "Design basis and responsibilities",
+        "Verified strength example — tension is not one limit state",
+        "Coordinated review map",
+        "Errata and remaining decisions",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

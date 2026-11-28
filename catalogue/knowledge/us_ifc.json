@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_ifc",
+  "kind": "knowledge",
+  "facts": {
+    "name": "IFC — fire prevention, operational hazards, and approval interfaces",
+    "described_as": "Original guidance for the **2021 International Fire Code**, using the public ICC",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_ifc.md",
+      "title": "IFC — fire prevention, operational hazards, and approval interfaces"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_ifc.md",
+      "sections": [
+        "Design and continuing fire-safety duties",
+        "Materials, storage, and changing use",
+        "Practical review method",
+        "Unresolved applicability",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

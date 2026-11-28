@@ -67,9 +67,12 @@ def _one_line(text: Any, limit: int = FOR_CHARS) -> str:
 
 
 def _source_file(obj: Any) -> str:
+    """The file that holds the callable's own body. A wrapper made with
+    functools.wraps (range hold, default disclosure) is looked through:
+    which wrapper is outermost depends on import order, the body does not."""
     try:
-        path = inspect.getsourcefile(obj) or ""
-    except TypeError:
+        path = inspect.getsourcefile(inspect.unwrap(obj)) or ""
+    except (TypeError, ValueError):
         # A built-in or a C callable has no source file: the entry says so.
         _LOG.debug("catalogue: no source file for %r", obj, exc_info=True)
         return ""
@@ -117,6 +120,7 @@ def _formula_entries() -> List[Dict[str, Any]]:
     from app.lib import formula_registry as fr
 
     out = []
+    copies: Dict[str, set] = {}
     for spec in fr.all_specs():
         params = fr.parameters(spec)
         entry = _entry(
@@ -136,13 +140,43 @@ def _formula_entries() -> List[Dict[str, Any]]:
         gaps = ("standard",) if not spec.standard else ()
         entry["gaps"] = _gaps(entry, gaps)
         out.append(entry)
-    _link_formulas(out)
+        copies[entry["id"]] = copied_outputs(spec.fn, params)
+    _link_formulas(out, copies)
     return out
 
 
-def _link_formulas(entries: List[Dict[str, Any]]) -> None:
+def copied_outputs(fn: Any, inputs: Any) -> set:
+    """The outputs a formula hands back as one of its own inputs, unchanged:
+    an output named like an input, or a key of a returned dict literal whose
+    value is a bare parameter of the function. Such an output is what the
+    caller gave, not a result, so it feeds nothing. Read from the code's own
+    structure; a function whose source cannot be read copies only by name."""
+    import ast
+    import textwrap
+
+    names = set(inputs)
+    copied = set(names)
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError) as exc:
+        _LOG.debug("catalogue: no source for %r (%s); copies read by name only", fn, exc)
+        return copied
+    params = set(inspect.signature(fn).parameters) | names
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key, value in zip(node.value.keys, node.value.values):
+                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
+                        and isinstance(value, ast.Name) and value.id in params):
+                    copied.add(key.value)
+    return copied
+
+
+def _link_formulas(entries: List[Dict[str, Any]], copies: Optional[Dict[str, set]] = None) -> None:
     """``feeds`` / ``fed_by``: formula A feeds formula B when one of A's
-    outputs is one of B's inputs by the same name and the same unit."""
+    outputs is one of B's inputs by the same name and the same unit, and A
+    works that output out: an output A only hands back from its own inputs
+    (``copied_outputs``) is the caller's figure, not A's, and links nothing."""
+    copies = copies or {}
     takes: Dict[Tuple[str, str], List[str]] = {}
     for e in entries:
         for i in e["inputs"]:
@@ -150,7 +184,10 @@ def _link_formulas(entries: List[Dict[str, Any]]) -> None:
                 takes.setdefault((i["name"], i["unit"]), []).append(e["id"])
     by_id = {e["id"]: e for e in entries}
     for e in entries:
+        copied = copies.get(e["id"], set()) | {i["name"] for i in e["inputs"]}
         for o in e["outputs"]:
+            if o["name"] in copied:
+                continue
             for target in takes.get((o["name"], o["unit"]), []):
                 if target != e["id"] and target not in e["feeds"]:
                     e["feeds"].append(target)
@@ -293,6 +330,7 @@ def _state_key() -> Any:
     from app.agents.core import tool_registry
     from app.agents.driver import routes
     from app.blocks import _knowledge
+    from app.agents.driver import catalogue_files
     from app.lib import formula_registry
 
     tool_registry.load()
@@ -303,7 +341,10 @@ def _state_key() -> Any:
             _knowledge_state(),
             # The knowledge base reloads when its file changes; the file's
             # identity (path, mtime, size, inode) is part of the state.
-            _knowledge.kb_identity())
+            _knowledge.kb_identity(),
+            # The catalogue files' hints are read into the entries; a file
+            # added, removed or rewritten is a new state.
+            catalogue_files.identity())
 
 
 def order(entry: Dict[str, Any]) -> Tuple[int, str]:
@@ -319,7 +360,11 @@ def entries() -> List[Dict[str, Any]]:
     key = _state_key()
     if key not in _CACHE:
         _CACHE.clear()
-        built = [e for build in _BUILDERS for e in build()]
+        from app.agents.driver import catalogue_files
+
+        # An approved file's hint fills a when_to_use / when_not the registry
+        # leaves empty (``catalogue_files.enrich``); nothing else changes.
+        built = catalogue_files.enriched([e for build in _BUILDERS for e in build()])
         _CACHE[key] = sorted(built, key=order)
     return copy.deepcopy(_CACHE[key])
 

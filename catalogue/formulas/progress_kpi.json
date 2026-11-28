@@ -1,0 +1,93 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:progress_kpi",
+  "kind": "formula",
+  "facts": {
+    "name": "Progress KPI (SPI and variance)",
+    "described_as": "Planned and actual percent complete, the progress variance and a progress-based SPI (earned by schedule, not EVM cost-based).",
+    "inputs": [
+      {
+        "name": "planned_cum",
+        "label": "planned cumulative to date",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "actual_cum",
+        "label": "actual cumulative to date",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "planned_total",
+        "label": "planned total at finish",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "planned_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "actual_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "variance_pct",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "spi_progress",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "progress_kpi"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Progress KPI (SPI and variance)"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/project_control.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

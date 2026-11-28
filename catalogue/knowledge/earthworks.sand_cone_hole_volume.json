@@ -1,0 +1,99 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:earthworks.sand_cone_hole_volume",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Sand-replacement test: volume of the test hole",
+    "described_as": "Hole volume V = (mass of sand before test - mass of sand after test - mass of sand held in the cone) / calibrated sand density. Masses in g and sand density in…",
+    "inputs": [
+      {
+        "name": "sand_before",
+        "label": "Mass of sand and jar before the test",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "sand_after",
+        "label": "Mass of sand and jar after the test",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "sand_in_cone",
+        "label": "Mass of sand that fills the cone (calibration)",
+        "type": "number",
+        "unit": "gram",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "sand_density",
+        "label": "Calibrated bulk density of the test sand",
+        "type": "number",
+        "unit": "gram/centimeter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "centimeter**3",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "earthworks.sand_cone_hole_volume"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Sand-replacement test: volume of the test hole",
+      "entry": "earthworks.sand_cone_hole_volume",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14-15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "earthworks.sand_cone_hole_volume",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14-15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

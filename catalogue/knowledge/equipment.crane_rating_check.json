@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.crane_rating_check",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Crane rated-load chart check",
+    "described_as": "Always check the required lifted capacity per crane against the crane's rated-load (capacity) chart at the ACTUAL boom length and working radius for the lift,…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.crane_rating_check"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Crane rated-load chart check",
+      "entry": "equipment.crane_rating_check",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.crane_rating_check",
+      "type": "reference_design",
+      "domain": "construction.roads",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

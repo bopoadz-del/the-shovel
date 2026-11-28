@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:asphalt.material_stock",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Material in stock on the asphalt material sheet",
+    "described_as": "Quantity in stock = cumulative quantity received - cumulative actual consumption, for one material row of the monthly asphalt material sheet. The course's plan…",
+    "inputs": [
+      {
+        "name": "cumulative_received",
+        "label": "Quantity received since the start, weighbridge-checked",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cumulative_consumption",
+        "label": "Quantity actually consumed since the start",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "tonne",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "asphalt.material_stock"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Material in stock on the asphalt material sheet",
+      "entry": "asphalt.material_stock",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p18",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "asphalt.material_stock",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p18",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

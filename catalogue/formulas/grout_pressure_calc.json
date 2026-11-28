@@ -1,0 +1,137 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:grout_pressure_calc",
+  "kind": "formula",
+  "facts": {
+    "name": "Post-tensioning grout checks",
+    "described_as": "Grouting pressure and strength checks for post-tensioning ducts.",
+    "inputs": [
+      {
+        "name": "tendon_duct_diameter_mm",
+        "label": "duct diameter",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          20,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "required_pressure_n_mm2",
+        "label": "grout pressure",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "strength_28d_n_mm2",
+        "label": "28-day strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          1,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "strength_7d_n_mm2",
+        "label": "7-day strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          1,
+          150
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "mixing_time_minutes",
+        "label": "mixing time",
+        "type": "number",
+        "unit": "min",
+        "range": [
+          0,
+          120
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "duct_area_mm2",
+        "unit": "mm2",
+        "main": false
+      },
+      {
+        "name": "grout_volume_l_m",
+        "unit": "L/m",
+        "main": false
+      },
+      {
+        "name": "pressure_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "pressure_kg_cm2",
+        "unit": "kgf/cm2",
+        "main": false
+      },
+      {
+        "name": "pressure_psi",
+        "unit": "psi",
+        "main": false
+      },
+      {
+        "name": "strength_28d_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "strength_7d_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "mixing_time_min",
+        "unit": "min",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "grout_pressure_calc"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Post-tensioning grout checks"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "qaqc",
+      "file": "app/agents/hats/qaqc/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

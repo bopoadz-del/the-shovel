@@ -1,0 +1,92 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_governing_moment",
+  "kind": "formula",
+  "facts": {
+    "name": "Beam governing bending moment",
+    "described_as": "Governing bending moment of a beam under the given loads, derived from the boundary conditions of the support condition -- solved, never looked up.",
+    "inputs": [
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "support",
+        "label": "support condition",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "loads",
+        "label": "load list",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "moment_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "position_m",
+        "unit": "m",
+        "main": false
+      },
+      {
+        "name": "sense",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "support",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "expression",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_governing_moment"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Beam governing bending moment"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/beam_solver.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

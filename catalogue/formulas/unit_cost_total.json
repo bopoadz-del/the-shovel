@@ -1,0 +1,68 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:unit_cost_total",
+  "kind": "formula",
+  "facts": {
+    "name": "Quantity times unit rate",
+    "described_as": "Line extension: quantity times unit rate.",
+    "inputs": [
+      {
+        "name": "quantity",
+        "label": "quantity",
+        "type": "number",
+        "unit": "nr",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "unit_rate",
+        "label": "unit rate",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_cost",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "unit_cost_total"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Quantity times unit rate"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_commercial.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:cost_per_area"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

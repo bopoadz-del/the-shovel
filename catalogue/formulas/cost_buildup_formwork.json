@@ -1,0 +1,196 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:cost_buildup_formwork",
+  "kind": "formula",
+  "facts": {
+    "name": "Formwork cost build-up",
+    "described_as": "Cost build-up of formwork per square metre from materials, reuses, labour and overheads.",
+    "inputs": [
+      {
+        "name": "area_m2",
+        "label": "area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "shuttering_supply_per_m2",
+        "label": "shuttering supply cost",
+        "type": "number",
+        "unit": "currency/m2",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "scaffolding_per_m2_day",
+        "label": "scaffolding cost",
+        "type": "number",
+        "unit": "currency/m2/day",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "cycle_days",
+        "label": "formwork cycle",
+        "type": "integer",
+        "unit": "days",
+        "range": [
+          1,
+          365
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "labour_mhr_m2",
+        "label": "labour hours per m2",
+        "type": "number",
+        "unit": "man-hour/m2",
+        "range": [
+          0,
+          1000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "labour_rate_per_hr",
+        "label": "labour rate",
+        "type": "number",
+        "unit": "currency/h",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crane_rate_per_hr",
+        "label": "crane rate",
+        "type": "number",
+        "unit": "currency/h",
+        "range": [
+          0,
+          1000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crane_output_m2_hr",
+        "label": "crane output",
+        "type": "number",
+        "unit": "m2/h",
+        "range": [
+          0,
+          100000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "indirect_pct",
+        "label": "indirect cost share",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "markup_pct",
+        "label": "markup",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rates",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shuttering_per_m2",
+        "unit": "currency/m2",
+        "main": false
+      },
+      {
+        "name": "scaffolding_per_m2",
+        "unit": "currency/m2",
+        "main": false
+      },
+      {
+        "name": "material_per_m2",
+        "unit": "currency/m2",
+        "main": false
+      },
+      {
+        "name": "labour_per_m2",
+        "unit": "currency/m2",
+        "main": false
+      },
+      {
+        "name": "selling_price_per_m2",
+        "unit": "currency/m2",
+        "main": true
+      },
+      {
+        "name": "total_for_area",
+        "unit": "currency",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "cost_buildup_formwork"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Formwork cost build-up"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

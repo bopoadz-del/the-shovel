@@ -1,0 +1,105 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:crane_lift_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Crane lift capacity and utilisation",
+    "described_as": "Net crane capacity after rigging deductions, and the lift's utilisation.",
+    "inputs": [
+      {
+        "name": "chart_capacity_t",
+        "label": "chart capacity",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "deductions_t",
+        "label": "deductions",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "load_t",
+        "label": "load",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "max_utilization",
+        "label": "maximum utilisation",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "net_capacity_t",
+        "unit": "t",
+        "main": false
+      },
+      {
+        "name": "utilization_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "passed",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "max_utilization_percent",
+        "unit": "%",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "crane_lift_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Crane lift capacity and utilisation"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "safety",
+      "file": "app/agents/hats/safety/formulas/construction_formulas_safety.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

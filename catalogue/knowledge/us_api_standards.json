@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_api_standards",
+  "kind": "knowledge",
+  "facts": {
+    "name": "API — selecting tank, pressure-relief, and industrial integrity standards",
+    "described_as": "Original summary of representative API publications using the official 2025",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_api_standards.md",
+      "title": "API — selecting tank, pressure-relief, and industrial integrity standards"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_api_standards.md",
+      "sections": [
+        "Distinguish new tanks from in-service integrity",
+        "Relief-device sizing, installation, and the overall system are different",
+        "Resolved coefficient example — preliminary is not certified capacity",
+        "Other industrial interfaces in the official catalogue",
+        "Remaining applicability and limited public detail",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

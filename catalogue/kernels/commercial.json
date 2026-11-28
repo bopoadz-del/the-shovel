@@ -1,0 +1,47 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:commercial",
+  "kind": "kernel",
+  "facts": {
+    "name": "Commercial Hat",
+    "described_as": "Cost build-ups, interim payment/IPC, cash flow, BOQ pricing, rate analysis. Owns all cost and commercial workflow.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "commercial"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.commercial.json",
+      "manifest": "fork.hat.commercial",
+      "formulas": [
+        "formula:break_even_point",
+        "formula:calculate_evm",
+        "formula:calculate_interim_payment",
+        "formula:calculate_payment",
+        "formula:interim_payment_to_date",
+        "formula:leed_points_estimate",
+        "formula:roi_calculator"
+      ],
+      "tools": [
+        "tool:cash_flow_forecast",
+        "tool:evm_calculate",
+        "tool:payment_certificate"
+      ],
+      "skills": [
+        "skill:commercial.q1",
+        "skill:commercial.q3",
+        "skill:commercial.q4"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

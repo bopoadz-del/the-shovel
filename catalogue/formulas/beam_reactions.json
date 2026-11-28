@@ -1,0 +1,92 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:beam_reactions",
+  "kind": "formula",
+  "facts": {
+    "name": "Beam support reactions",
+    "described_as": "Support reactions of a beam under the given loads, solved from the boundary conditions of the support condition.",
+    "inputs": [
+      {
+        "name": "span_m",
+        "label": "span",
+        "type": "number",
+        "unit": "m",
+        "range": [
+          0,
+          200
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "support",
+        "label": "support condition",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "loads",
+        "label": "load list",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "reaction_left_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "reaction_right_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "moment_left_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "moment_right_kn_m",
+        "unit": "kN.m",
+        "main": false
+      },
+      {
+        "name": "support",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "beam_reactions"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Beam support reactions"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/beam_solver.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,213 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:crane_cost_estimate",
+  "kind": "formula",
+  "facts": {
+    "name": "Crane hire cost",
+    "described_as": "Crane cost over a hire period including operator and rigging crew.",
+    "inputs": [
+      {
+        "name": "num_cranes",
+        "label": "number of cranes",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "crane_capacity_tons",
+        "label": "crane capacity",
+        "type": "number",
+        "unit": "t",
+        "range": [
+          0,
+          10000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "duration_months",
+        "label": "duration",
+        "type": "integer",
+        "unit": "month",
+        "range": [
+          1,
+          240
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "dry_hire_rate_per_month",
+        "label": "dry hire rate per crane per month",
+        "type": "number",
+        "unit": "currency/month",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "include_operator",
+        "label": "include operator",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "include_riggers",
+        "label": "include riggers",
+        "type": "flag",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "operator_rate_per_month",
+        "label": "operator cost per crane per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "riggers_rate_per_month",
+        "label": "rigging crew cost per crane per month",
+        "type": "text",
+        "unit": "currency/month",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "remote_area_factor",
+        "label": "remote area factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          3
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency of the rates",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "num_cranes",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crane_capacity_tons",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "duration_months",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "dry_hire_per_month",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "operator_per_month",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "riggers_per_month",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "remote_area_factor",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "per_crane_monthly",
+        "unit": "currency/month",
+        "main": false
+      },
+      {
+        "name": "total_project_cost",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "mobilization",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "demobilization",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "grand_total",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "currency",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "crane_cost_estimate"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Crane hire cost"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

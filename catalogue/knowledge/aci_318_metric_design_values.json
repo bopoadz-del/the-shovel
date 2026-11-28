@@ -1,0 +1,40 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:aci_318_metric_design_values",
+  "kind": "knowledge",
+  "facts": {
+    "name": "ACI 318-19 — SI examples and US structural-concrete review",
+    "described_as": "The existing SI tables below are calculated examples for their stated assumptions,",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/aci_318_metric_design_values.md",
+      "title": "ACI 318-19 — SI examples and US structural-concrete review"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/aci_318_metric_design_values.md",
+      "sections": [
+        "Modulus of elasticity and modulus of rupture (normal-weight concrete)",
+        "Minimum thickness of non-prestressed one-way solid slabs (ACI 318-19 Table 7.3.1.1)",
+        "Tension lap splice length, Class B (ACI 318-19 §25.4.2 / §25.5.2)",
+        "Concrete shear strength of beams, φVc (ACI 318-19 §22.5, φ = 0.75)",
+        "Drying shrinkage and strength gain (ACI 209R)",
+        "US application — design, detailing, durability, and acceptance",
+        "Publicly sourced durability example",
+        "Publicly sourced strength acceptance — not a universal early-age percentage",
+        "Remaining applicability and scope",
+        "Sources for the added US scope"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

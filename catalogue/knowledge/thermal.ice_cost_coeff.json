@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:thermal.ice_cost_coeff",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Concrete cooling: SCM vs flaked-ice cost coefficient (~10 Dhs/degC)",
+    "described_as": "Decision aid for lowering fresh-concrete placing temperature: the choice between supplementary cementitious materials (SCM, e.g. GGBS/fly-ash replacement) and…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "thermal.ice_cost_coeff"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Concrete cooling: SCM vs flaked-ice cost coefficient (~10 Dhs/degC)",
+      "entry": "thermal.ice_cost_coeff",
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "thermal.ice_cost_coeff",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

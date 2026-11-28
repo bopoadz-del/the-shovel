@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_nfpa_101",
+  "kind": "knowledge",
+  "facts": {
+    "name": "NFPA 101 — occupancy-specific life safety and escape",
+    "described_as": "Original summary for **NFPA 101, 2024 edition**, using the public edition contents",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_nfpa_101.md",
+      "title": "NFPA 101 — occupancy-specific life safety and escape"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_nfpa_101.md",
+      "sections": [
+        "Use the occupancy chapter together with the common provisions",
+        "Door/security examples resolved from public 2024 guidance",
+        "Coordinated review method",
+        "Remaining applicability",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

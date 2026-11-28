@@ -1,0 +1,37 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "kernel:safety",
+  "kind": "kernel",
+  "facts": {
+    "name": "Safety Hat",
+    "described_as": "HSE engineering checks: fall arrest, scaffold loading, guardrails, excavation support, crane lifts, wind on temporary works, slope stability, dewatering uplift. Owns the safety verification workflow.",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "select_hat",
+      "arguments": {
+        "hat": "safety"
+      }
+    },
+    "cites": {},
+    "source": {
+      "registry": "kernel",
+      "file": "app/agents/manifests/fork.hat.safety.json",
+      "manifest": "fork.hat.safety",
+      "formulas": [
+        "formula:crane_lift_capacity",
+        "formula:fall_arrest_force",
+        "formula:guardrail_top_rail_height",
+        "formula:scaffold_load_capacity",
+        "formula:wind_load_on_formwork"
+      ],
+      "tools": [],
+      "skills": []
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

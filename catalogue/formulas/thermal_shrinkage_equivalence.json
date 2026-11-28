@@ -1,0 +1,71 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:thermal_shrinkage_equivalence",
+  "kind": "formula",
+  "facts": {
+    "name": "Shrinkage as an equivalent temperature drop",
+    "described_as": "Converts a shrinkage strain to the equivalent temperature drop.",
+    "inputs": [
+      {
+        "name": "shrinkage_strain",
+        "label": "shrinkage strain",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          0.01
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "alpha_c",
+        "label": "coefficient of thermal expansion",
+        "type": "number",
+        "unit": "1/degC",
+        "range": [
+          0,
+          0.001
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "shrinkage_strain",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "equivalent_temp_drop_c",
+        "unit": "degC",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "thermal_shrinkage_equivalence"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Shrinkage as an equivalent temperature drop"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

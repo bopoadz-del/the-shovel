@@ -1,0 +1,75 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:evaluate_tender",
+  "kind": "formula",
+  "facts": {
+    "name": "Tender evaluation",
+    "described_as": "Scores and ranks tender submissions on weighted technical and commercial criteria.",
+    "inputs": [
+      {
+        "name": "tenderers",
+        "label": "tender submissions",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "weights",
+        "label": "criterion weights",
+        "type": "table",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "ranked_tenderers",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "recommended",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "weights_applied",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "procedure",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "evaluate_tender"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Tender evaluation"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "procurement",
+      "file": "app/agents/hats/procurement/formulas/construction_knowledge.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

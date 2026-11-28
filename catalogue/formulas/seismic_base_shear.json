@@ -1,0 +1,164 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:seismic_base_shear",
+  "kind": "formula",
+  "facts": {
+    "name": "Seismic base shear",
+    "described_as": "Equivalent lateral-force base shear from the seismic coefficient and the seismic weight.",
+    "inputs": [
+      {
+        "name": "seismic_weight_kn",
+        "label": "seismic weight",
+        "type": "number",
+        "unit": "kN",
+        "range": [
+          0,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "sds",
+        "label": "design spectral acceleration (SDS)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          3
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "r",
+        "label": "response modification factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          8
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ie",
+        "label": "importance factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          1.5
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ag_g",
+        "label": "design ground acceleration (ag/g)",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "soil_factor_s",
+        "label": "soil factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          2
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "behaviour_factor_q",
+        "label": "behaviour factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          8
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "lambda_factor",
+        "label": "correction factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0.5,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "seismic_coefficient",
+        "label": "seismic coefficient",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          5
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "base_shear_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "seismic_response_coefficient_cs",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "seismic_base_shear"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Seismic base shear"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_loads.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

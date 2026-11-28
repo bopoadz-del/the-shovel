@@ -1,0 +1,122 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:monte_carlo_percentiles",
+  "kind": "formula",
+  "facts": {
+    "name": "Monte Carlo P50 / P80 / P90 (duration)",
+    "described_as": "Seeded Monte Carlo of a total duration made of items with a user-supplied three-point range each (low, most likely, high; triangular): the P50, P80 and P90 totals, the mean, and the chance of finishing within the most likely total.",
+    "inputs": [
+      {
+        "name": "low",
+        "label": "low (optimistic) duration of each item",
+        "type": "series",
+        "unit": "days",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "most_likely",
+        "label": "most likely duration of each item",
+        "type": "series",
+        "unit": "days",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "high",
+        "label": "high (pessimistic) duration of each item",
+        "type": "series",
+        "unit": "days",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "iterations",
+        "label": "number of trials",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          100,
+          200000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "seed",
+        "label": "random seed",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          0,
+          2147483647
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "p50",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "p80",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "p90",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "mean",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "working",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "monte_carlo_percentiles"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Monte Carlo P50 / P80 / P90 (duration)"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

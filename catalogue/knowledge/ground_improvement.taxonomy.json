@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:ground_improvement.taxonomy",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Ground improvement methods taxonomy",
+    "described_as": "Ground improvement techniques: (1) MSE / reinforced-earth walls (mechanically stabilized earth with facing and soil reinforcement). (2) Pre-compression / surch…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "ground_improvement.taxonomy"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Ground improvement methods taxonomy",
+      "entry": "ground_improvement.taxonomy",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "ground_improvement.taxonomy",
+      "type": "reference_design",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

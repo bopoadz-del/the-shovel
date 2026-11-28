@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:us_ibc_irc",
+  "kind": "knowledge",
+  "facts": {
+    "name": "US model building codes — IBC and IRC",
+    "described_as": "Original guidance using **2021 IBC and 2021 IRC** public ICC contents/reference",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/us_ibc_irc.md",
+      "title": "US model building codes — IBC and IRC"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/us_ibc_irc.md",
+      "sections": [
+        "IBC — establish the building strategy before sizing components",
+        "IRC — limited residential scope, not every residential building",
+        "Unresolved applicability, not invented universal limits",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

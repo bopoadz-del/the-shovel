@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:wbdg_bim",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Building Information Modeling (BIM) — Execution, LOD & Interoperability (WBDG)",
+    "described_as": "Reference guidance on BIM in construction delivery. Source: WBDG Building",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/wbdg_bim.md",
+      "title": "Building Information Modeling (BIM) — Execution, LOD & Interoperability (WBDG)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/wbdg_bim.md",
+      "sections": [
+        "What BIM is",
+        "BIM Execution Plan (BxP / PxP)",
+        "Level of Development (LOD)",
+        "Interoperability",
+        "BIM to operations (COBie)",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

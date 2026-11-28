@@ -1,0 +1,134 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:resource_line_cost",
+  "kind": "formula",
+  "facts": {
+    "name": "Estimate line cost split",
+    "described_as": "Material, labour and plant split of one estimate line.",
+    "inputs": [
+      {
+        "name": "quantity",
+        "label": "quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "daily_output",
+        "label": "daily output",
+        "type": "number",
+        "unit": "count/d",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "day_rate",
+        "label": "day rate",
+        "type": "number",
+        "unit": "currency/d",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "material_rate_per_unit",
+        "label": "material rate per unit",
+        "type": "number",
+        "unit": "currency/count",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "plant_fraction_of_labour",
+        "label": "plant cost as a fraction of labour",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          10
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "quantity",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crew_days",
+        "unit": "days",
+        "main": false
+      },
+      {
+        "name": "labour_cost",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "plant_cost",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "material_cost",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "total_cost",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "total_is_partial",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "resource_line_cost"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Estimate line cost split"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "quantities",
+      "file": "app/agents/hats/quantities/formulas/construction_formulas_quantities.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:cost_per_area"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

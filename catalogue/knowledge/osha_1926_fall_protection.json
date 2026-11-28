@@ -1,0 +1,35 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:osha_1926_fall_protection",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Fall Protection — Site Safety Criteria (OSHA 29 CFR 1926 Subpart M)",
+    "described_as": "REAL, sourced fall-protection thresholds for construction sites. Source: OSHA",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/osha_1926_fall_protection.md",
+      "title": "Fall Protection — Site Safety Criteria (OSHA 29 CFR 1926 Subpart M)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/osha_1926_fall_protection.md",
+      "sections": [
+        "Guardrail systems",
+        "Personal fall arrest system (PFAS)",
+        "Hole and opening covers",
+        "KSA applicability",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:asphalt.material_overconsumption",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Material consumed beyond the theoretical quantity",
+    "described_as": "Over-consumption = actual consumption - theoretical consumption, for one material row of the monthly asphalt material sheet (this period or cumulative). A posi…",
+    "inputs": [
+      {
+        "name": "actual_consumption",
+        "label": "Material actually consumed (from issues / stock count)",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "theoretical_consumption",
+        "label": "Material the laid tonnage should have used",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "tonne",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "asphalt.material_overconsumption"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Material consumed beyond the theoretical quantity",
+      "entry": "asphalt.material_overconsumption",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "asphalt.material_overconsumption",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

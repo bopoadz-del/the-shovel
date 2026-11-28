@@ -1,0 +1,73 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:modulus_of_elasticity_concrete",
+  "kind": "formula",
+  "facts": {
+    "name": "Concrete modulus of elasticity",
+    "described_as": "Modulus of elasticity of concrete from its compressive strength, to the selected code.",
+    "inputs": [
+      {
+        "name": "fck_n_mm2",
+        "label": "characteristic concrete strength",
+        "type": "number",
+        "unit": "N/mm2",
+        "range": [
+          5,
+          150
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "value_mpa",
+        "unit": "MPa",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "modulus_of_elasticity_concrete"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Concrete modulus of elasticity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

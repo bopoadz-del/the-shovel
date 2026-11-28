@@ -1,0 +1,88 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:productivity_benchmark",
+  "kind": "formula",
+  "facts": {
+    "name": "Productivity benchmark",
+    "described_as": "Indicative productivity rate (units per crew-day) for a finishing trade, from the owner-supplied planner template. Unverified.",
+    "inputs": [
+      {
+        "name": "work_item",
+        "label": "work item",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "work_item",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crew",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "rate_per_crew_day",
+        "unit": "count/d",
+        "main": false
+      },
+      {
+        "name": "provenance",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "tier",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "confidence",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "flag",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "productivity_benchmark"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Productivity benchmark"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/productivity_benchmarks.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:crew_sizing"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Catalogue file",
+  "description": "One file per formula, discipline kernel, knowledge entry and retrieval tool. `facts` is written by code from the registries (scripts/build_catalogue_json.py) and must equal what the code says now; `hints` is written by people, as data, general and true for any project.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "kind", "facts", "hints"],
+  "properties": {
+    "schema": { "const": "catalogue-file/1" },
+    "id": { "type": "string", "pattern": "^(formula|kernel|knowledge|tool):[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+    "kind": { "enum": ["formula", "kernel", "knowledge", "rag"] },
+    "facts": { "$ref": "#/definitions/facts" },
+    "hints": { "$ref": "#/definitions/hints" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "formula" } } },
+      "then": { "properties": { "id": { "pattern": "^formula:" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "kernel" } } },
+      "then": { "properties": { "id": { "pattern": "^kernel:" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "knowledge" } } },
+      "then": { "properties": { "id": { "pattern": "^knowledge:" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "rag" } } },
+      "then": {
+        "properties": {
+          "id": { "pattern": "^tool:" },
+          "hints": { "required": ["question_kinds"] }
+        }
+      },
+      "else": {
+        "properties": { "hints": { "not": { "required": ["question_kinds"] } } }
+      }
+    }
+  ],
+  "definitions": {
+    "facts": {
+      "description": "Generated. Never edited by hand: regenerate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "described_as", "inputs", "outputs", "call", "cites", "source"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "described_as": { "type": "string", "description": "What the code's own declaration says the capability is (the registry description, the entry's statement, the file's first line, the offered tool description)." },
+        "inputs": { "type": "array", "items": { "$ref": "#/definitions/input" } },
+        "outputs": { "type": "array", "items": { "$ref": "#/definitions/output" } },
+        "required_groups": {
+          "description": "Alternative-required inputs: at least one name of each group must be given.",
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        },
+        "call": { "$ref": "#/definitions/call" },
+        "cites": { "type": "object", "description": "What an answer that uses the capability can cite; its content is checked against the code, field for field." },
+        "feeds": { "type": "array", "items": { "type": "string" } },
+        "fed_by": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "object", "required": ["registry"], "description": "Where the facts were read from; checked against the code, field for field." }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "label", "type", "unit", "range", "required", "basis"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "label": { "type": "string" },
+        "type": { "type": "string" },
+        "unit": { "type": "string" },
+        "range": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": ["number", "null"] } }
+          ]
+        },
+        "lower_bound_excluded": { "const": true },
+        "required": { "type": "boolean" },
+        "basis": { "type": "string" },
+        "choices": { "type": "array", "minItems": 1 },
+        "described_as": { "type": "string" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "unit"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "unit": { "type": "string" },
+        "main": { "type": "boolean" },
+        "kind": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "call": {
+      "description": "The tool call that runs the capability: the tool, the arguments that are fixed for this capability, and where the inputs go (`inputs_as` names the argument that holds them, keyed by input name; without it each input is an argument of its own).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "arguments"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1 },
+        "arguments": { "type": "object" },
+        "inputs_as": { "type": "string", "minLength": 1 }
+      }
+    },
+    "hints": {
+      "description": "Hand-written, as data. No project, client or document name; nothing keyed on a question's wording.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved", "purpose", "not_to_be_confused_with"],
+      "properties": {
+        "approved": { "type": "boolean", "description": "The owner has approved this hint. Only an approved hint is shown to the model." },
+        "purpose": { "type": "string", "maxLength": 400, "description": "What the capability is for, in one or two plain sentences. Empty: not written yet (a gap)." },
+        "not_to_be_confused_with": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "difference"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^(formula|kernel|knowledge|tool):[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+              "difference": { "type": "string", "minLength": 10, "maxLength": 300 }
+            }
+          }
+        },
+        "question_kinds": {
+          "description": "Retrieval tools only: what the tool does for each kind of question.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "role", "how"],
+            "properties": {
+              "kind": { "enum": ["single_passage", "totals_across_bill_rows", "specification_and_bill", "specification_and_drawing"] },
+              "role": { "enum": ["leads", "supports", "not_for"] },
+              "how": { "type": "string", "minLength": 10, "maxLength": 400 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

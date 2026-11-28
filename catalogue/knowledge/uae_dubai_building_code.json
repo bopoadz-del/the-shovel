@@ -1,0 +1,37 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_dubai_building_code",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Dubai Building Code — scope, coordination, and design review",
+    "described_as": "An independently authored summary of the **2021 Dubai Building Code (DBC)**,",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_dubai_building_code.md",
+      "title": "Dubai Building Code — scope, coordination, and design review"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_dubai_building_code.md",
+      "sections": [
+        "What the DBC does — and does not replace",
+        "Where the main design questions sit",
+        "Important interfaces",
+        "Bounded numerical examples from DBC 2021",
+        "A later official concrete attachment needs a validity check",
+        "Details not established here",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

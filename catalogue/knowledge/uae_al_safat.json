@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_al_safat",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Al Sa'fat — Dubai green-building requirements and evidence",
+    "described_as": "Independently authored guidance based on **Al Sa'fat, second edition, January",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_al_safat.md",
+      "title": "Al Sa'fat — Dubai green-building requirements and evidence"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_al_safat.md",
+      "sections": [
+        "Rating, applicability, and compliance routes",
+        "Site, comfort, and health",
+        "Energy, water, materials, and closeout",
+        "Source-verified numerical and closeout examples",
+        "Details not established here",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

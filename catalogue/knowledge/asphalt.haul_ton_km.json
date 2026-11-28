@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:asphalt.haul_ton_km",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Ton-kilometres of asphalt haulage",
+    "described_as": "Ton-km = asphalt quantity laid (t) x average haul distance (km) from the plant, per course layer; the monthly summary of asphalt operations reports it with the…",
+    "inputs": [
+      {
+        "name": "quantity_laid",
+        "label": "Asphalt laid in the period",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "average_haul_distance",
+        "label": "Average haul distance from plant to laying point",
+        "type": "number",
+        "unit": "kilometer",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "tonne*kilometer",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "asphalt.haul_ton_km"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Ton-kilometres of asphalt haulage",
+      "entry": "asphalt.haul_ton_km",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p36 and p40",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "asphalt.haul_ton_km",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p36 and p40",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

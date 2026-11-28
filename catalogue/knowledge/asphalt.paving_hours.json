@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:asphalt.paving_hours",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Paver hours to lay an asphalt quantity",
+    "described_as": "Paving time (hr) = asphalt tonnage to lay / paver production rate (t/hr). The rate is an input taken from the cited production norm for the layer (the course's…",
+    "inputs": [
+      {
+        "name": "tonnage_to_lay",
+        "label": "Asphalt (or stabilized material) to be laid",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "paver_rate",
+        "label": "Paver production rate for the layer",
+        "type": "number",
+        "unit": "tonne/hour",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "hour",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "asphalt.paving_hours"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Paver hours to lay an asphalt quantity",
+      "entry": "asphalt.paving_hours",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p20 and p23",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "asphalt.paving_hours",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p20 and p23",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

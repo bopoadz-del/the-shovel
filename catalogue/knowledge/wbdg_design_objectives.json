@@ -1,0 +1,33 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:wbdg_design_objectives",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Design Objectives — The 8+1 Whole-Building Goals (WBDG)",
+    "described_as": "Reference guidance on the design objectives a high-performance building must",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/wbdg_design_objectives.md",
+      "title": "Design Objectives — The 8+1 Whole-Building Goals (WBDG)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/wbdg_design_objectives.md",
+      "sections": [
+        "The design objectives",
+        "How they work together",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

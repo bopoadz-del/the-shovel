@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:equipment.required_daily_rate",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Required daily output from quantity and working days",
+    "described_as": "Required daily output = total quantity / working days. Split by shift with equipment.shift_quantity; hourly target with equipment.required_hourly_rate. Site-pr…",
+    "inputs": [
+      {
+        "name": "total_quantity",
+        "label": "Total quantity to move or place",
+        "type": "number",
+        "unit": "meter**3",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "working_days",
+        "label": "Working days available",
+        "type": "number",
+        "unit": "day",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter**3/day",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "equipment.required_daily_rate"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Required daily output from quantity and working days",
+      "entry": "equipment.required_daily_rate",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "equipment.required_daily_rate",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

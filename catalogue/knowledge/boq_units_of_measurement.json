@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:boq_units_of_measurement",
+  "kind": "knowledge",
+  "facts": {
+    "name": "BOQ Standard Units of Measurement — CESMM4 (Civil/Infra) + POMI (Buildings)",
+    "described_as": "Authoritative unit-of-measurement reference so the platform can determine the",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/boq_units_of_measurement.md",
+      "title": "BOQ Standard Units of Measurement — CESMM4 (Civil/Infra) + POMI (Buildings)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/boq_units_of_measurement.md",
+      "sections": [
+        "Part 1 — CESMM4 work classes (civil / infrastructure BOQs)",
+        "Part 2 — POMI sections (building BOQs)",
+        "Part 3 — OCR-robust keyword → unit lookup (use this to validate extracted units)",
+        "Notes on ambiguous / dual-unit cases"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

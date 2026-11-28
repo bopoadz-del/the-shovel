@@ -1,0 +1,103 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:progress_quantity",
+  "kind": "formula",
+  "facts": {
+    "name": "Progress and remaining quantity",
+    "described_as": "Planned and actual percent complete, remaining quantity and progress variance.",
+    "inputs": [
+      {
+        "name": "total_qty",
+        "label": "total quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "planned_qty",
+        "label": "planned quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "actual_qty",
+        "label": "actual quantity",
+        "type": "number",
+        "unit": "count",
+        "range": [
+          0,
+          1000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "planned_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "actual_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "planned_qty",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "actual_qty",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "remaining_qty",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "progress_variance_percent",
+        "unit": "%",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "progress_quantity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Progress and remaining quantity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/construction_formulas_planning.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

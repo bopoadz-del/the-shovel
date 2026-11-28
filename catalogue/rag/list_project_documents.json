@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "tool:list_project_documents",
+  "kind": "rag",
+  "facts": {
+    "name": "Project document list",
+    "described_as": "List this project's document register: each document's filename, type, and size. Use this when the user asks WHAT documents/files the project has. To search INSIDE document content use search_project_documents.",
+    "inputs": [
+      {
+        "name": "limit",
+        "label": "number of documents",
+        "type": "integer",
+        "unit": "nr",
+        "range": [
+          1,
+          200
+        ],
+        "required": false,
+        "basis": "",
+        "described_as": "Max documents to return (default 100, newest first)."
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "",
+        "kind": "search"
+      }
+    ],
+    "call": {
+      "tool": "list_project_documents",
+      "arguments": {}
+    },
+    "cites": {
+      "result": "search",
+      "passages_are_sources": true,
+      "reason_codes": []
+    },
+    "source": {
+      "registry": "tool",
+      "owner": "base",
+      "file": "app/agents/base/tools.py"
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Lists the documents this project holds, with file name, type and size, so the model knows what exists before it searches or reads one.",
+    "not_to_be_confused_with": [
+      {
+        "id": "tool:search_project_documents",
+        "difference": "That one looks inside the documents' text; this one only names the documents."
+      },
+      {
+        "id": "tool:fetch_document",
+        "difference": "That one returns a document's text; this one returns the register of documents."
+      }
+    ],
+    "question_kinds": [
+      {
+        "kind": "single_passage",
+        "role": "not_for",
+        "how": "A list of file names does not hold the passage a single-passage question needs; search instead."
+      },
+      {
+        "kind": "totals_across_bill_rows",
+        "role": "supports",
+        "how": "Finds which documents are bills, so the bill row tool can be pointed at the right one."
+      },
+      {
+        "kind": "specification_and_bill",
+        "role": "supports",
+        "how": "Shows which documents are specifications and which are bills before searching each."
+      },
+      {
+        "kind": "specification_and_drawing",
+        "role": "supports",
+        "how": "Shows which documents are specifications and which are drawings before searching each."
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:construction_catalog_rates_ksa_2025",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Construction Materials, Labour & Equipment Rates — Saudi Arabia (2025)",
+    "described_as": "INDICATIVE KSA construction rates (materials, labour, equipment) for use as the GENERAL-KNOWLEDGE reference when the project has no priced BOQ of its own. All…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/construction_catalog_rates_ksa_2025.md",
+      "title": "Construction Materials, Labour & Equipment Rates — Saudi Arabia (2025)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/construction_catalog_rates_ksa_2025.md",
+      "sections": [
+        "Material supply rates (SAR per unit)",
+        "Labour rates (SAR per day, 9.5-hour KSA shift)",
+        "Equipment dry-hire rates (SAR, without operator)",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

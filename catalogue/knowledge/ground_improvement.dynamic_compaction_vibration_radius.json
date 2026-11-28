@@ -1,0 +1,81 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:ground_improvement.dynamic_compaction_vibration_radius",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Dynamic compaction: radius beyond which vibration is not harmful",
+    "described_as": "R = 130 x sqrt(M x H), with M the falling mass in tonnes and H the drop height in metres; R in metres is the distance beyond which the course states there is n…",
+    "inputs": [
+      {
+        "name": "M",
+        "label": "Falling (pounder) mass",
+        "type": "number",
+        "unit": "tonne",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "H",
+        "label": "Drop height",
+        "type": "number",
+        "unit": "meter",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "unit": "meter",
+        "main": true
+      }
+    ],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "ground_improvement.dynamic_compaction_vibration_radius"
+      },
+      "inputs_as": "values"
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Dynamic compaction: radius beyond which vibration is not harmful",
+      "entry": "ground_improvement.dynamic_compaction_vibration_radius",
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p33",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "ground_improvement.dynamic_compaction_vibration_radius",
+      "type": "formula",
+      "domain": "construction.roads",
+      "sections": [
+        "statement",
+        "expression",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p33",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

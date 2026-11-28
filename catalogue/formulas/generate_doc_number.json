@@ -1,0 +1,80 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:generate_doc_number",
+  "kind": "formula",
+  "facts": {
+    "name": "Document number",
+    "described_as": "The register number of a project document from its type and sequence number.",
+    "inputs": [
+      {
+        "name": "doc_type",
+        "label": "document type",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "sequence",
+        "label": "sequence number",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1,
+          99999
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "year",
+        "label": "year",
+        "type": "integer",
+        "unit": "count",
+        "range": [
+          1900,
+          2200
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "document_number",
+        "unit": "",
+        "main": true
+      },
+      {
+        "name": "doc_type",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "generate_doc_number"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Document number"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "contracts",
+      "file": "app/agents/hats/contracts/formulas/document_rules.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

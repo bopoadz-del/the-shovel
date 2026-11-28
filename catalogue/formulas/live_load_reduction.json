@@ -1,0 +1,116 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:live_load_reduction",
+  "kind": "formula",
+  "facts": {
+    "name": "Live load reduction",
+    "described_as": "Reduced design live load on a member with a large tributary area.",
+    "inputs": [
+      {
+        "name": "base_live_load_kn_m2",
+        "label": "unreduced live load",
+        "type": "number",
+        "unit": "kN/m2",
+        "range": [
+          0,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "tributary_area_m2",
+        "label": "tributary area",
+        "type": "number",
+        "unit": "m2",
+        "range": [
+          0,
+          100000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "kll",
+        "label": "live load element factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          4
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "psi0",
+        "label": "combination factor",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "min_factor",
+        "label": "minimum reduction factor",
+        "type": "number",
+        "unit": "fraction",
+        "range": [
+          0,
+          1
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "reduced_live_load_kn_m2",
+        "unit": "kN/m2",
+        "main": false
+      },
+      {
+        "name": "reduction_factor",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "live_load_reduction"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Live load reduction"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_loads.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

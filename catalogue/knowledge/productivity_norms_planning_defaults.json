@@ -1,0 +1,33 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:productivity_norms_planning_defaults",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Trade Productivity Norms — Published Planning Ranges",
+    "described_as": "Daily output ranges per tradesman for common building trades, for use as the",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/productivity_norms_planning_defaults.md",
+      "title": "Trade Productivity Norms — Published Planning Ranges"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/productivity_norms_planning_defaults.md",
+      "sections": [
+        "Daily outputs per tradesman (8-hour shift, normal conditions)",
+        "Material planning norms (same contract: cite and state, never assume)",
+        "Rules of use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

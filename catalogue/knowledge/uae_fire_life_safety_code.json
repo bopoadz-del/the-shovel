@@ -1,0 +1,36 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_fire_life_safety_code",
+  "kind": "knowledge",
+  "facts": {
+    "name": "UAE Fire and Life Safety Code — evidence-backed coordination pointers",
+    "described_as": "An independently authored overview of fire/life-safety coordination. The",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_fire_life_safety_code.md",
+      "title": "UAE Fire and Life Safety Code — evidence-backed coordination pointers"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_fire_life_safety_code.md",
+      "sections": [
+        "Verified cross-reference map",
+        "How to use these pointers safely",
+        "Bounded 2018 hydrant facts from specialist secondary evidence",
+        "Direct authority evidence for construction-stage safety",
+        "Details not established here",
+        "Sources and evidence status"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

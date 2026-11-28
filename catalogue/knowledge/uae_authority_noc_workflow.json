@@ -1,0 +1,38 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:uae_authority_noc_workflow",
+  "kind": "knowledge",
+  "facts": {
+    "name": "UAE authority and NOC coordination — DM, DCD, DMT, and ADCDA",
+    "described_as": "Independently authored procedural guidance, checked against the public sources",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/uae_authority_noc_workflow.md",
+      "title": "UAE authority and NOC coordination — DM, DCD, DMT, and ADCDA"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/uae_authority_noc_workflow.md",
+      "sections": [
+        "Roles and source boundaries",
+        "Dubai: a sourced process outline, not a promise of today's portal screens",
+        "Abu Dhabi: municipal permitting, civil protection, and occupancy",
+        "Generic coordination register — recommended practice, not a mandated form",
+        "Later official occupancy implementation notice — August 2026",
+        "A current, category-specific master-plan submission dependency",
+        "Details not established here",
+        "Sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

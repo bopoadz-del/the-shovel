@@ -1,0 +1,61 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:concrete_mix_slip_form",
+  "kind": "formula",
+  "facts": {
+    "name": "Slip-form concrete mix",
+    "described_as": "Mix proportions for slip-formed concrete, flagged as indicative defaults when not supplied.",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "cube_strength_n_mm2",
+        "unit": "N/mm2",
+        "main": false
+      },
+      {
+        "name": "slump_mm",
+        "unit": "mm",
+        "main": false
+      },
+      {
+        "name": "max_concrete_temp_c",
+        "unit": "degC",
+        "main": false
+      },
+      {
+        "name": "retarder_10c_lit_m3",
+        "unit": "L/m3",
+        "main": false
+      },
+      {
+        "name": "retarder_20c_lit_m3",
+        "unit": "L/m3",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "concrete_mix_slip_form"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Slip-form concrete mix"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

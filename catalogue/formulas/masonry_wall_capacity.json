@@ -1,0 +1,217 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:masonry_wall_capacity",
+  "kind": "formula",
+  "facts": {
+    "name": "Masonry wall capacity",
+    "described_as": "Axial compressive capacity of a masonry wall, allowing for slenderness.",
+    "inputs": [
+      {
+        "name": "masonry_strength_mpa",
+        "label": "masonry compressive strength",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          0.5,
+          100
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "net_area_mm2",
+        "label": "net area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          1,
+          100000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "height_mm",
+        "label": "wall height",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          50,
+          50000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "thickness_mm",
+        "label": "wall thickness",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          25,
+          5000
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "code",
+        "label": "design code",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "radius_gyration_mm",
+        "label": "radius of gyration",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          1,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_area_mm2",
+        "label": "steel area",
+        "type": "number",
+        "unit": "mm2",
+        "range": [
+          0,
+          10000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "steel_stress_mpa",
+        "label": "steel stress",
+        "type": "number",
+        "unit": "MPa",
+        "range": [
+          0,
+          1500
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "gamma_m",
+        "label": "partial safety factor for masonry",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          1,
+          5
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "eccentricity_mm",
+        "label": "eccentricity",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          0,
+          10000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "ke",
+        "label": "masonry modulus factor",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          100,
+          2000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "eff_height_mm",
+        "label": "effective height",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          50,
+          50000
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "eff_thickness_mm",
+        "label": "effective thickness",
+        "type": "number",
+        "unit": "mm",
+        "range": [
+          25,
+          5000
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "capacity_kn",
+        "unit": "kN",
+        "main": false
+      },
+      {
+        "name": "slenderness_reduction_R",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "h_over_r",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "phi_reduction",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "slenderness_lambda_c",
+        "unit": "degC",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "masonry_wall_capacity"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Masonry wall capacity"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "design",
+      "file": "app/agents/hats/design/formulas/construction_formulas_masonry.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": [
+      "formula:post_tensioning_force"
+    ]
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

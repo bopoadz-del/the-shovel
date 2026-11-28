@@ -1,0 +1,37 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:eu_eurocodes_basis_and_actions",
+  "kind": "knowledge",
+  "facts": {
+    "name": "BS EN / Eurocodes — basis, actions and reference map",
+    "described_as": "Citation-only navigation, checked 2026-11-06 (Asia/Dubai). These are original",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/eu_eurocodes_basis_and_actions.md",
+      "title": "BS EN / Eurocodes — basis, actions and reference map"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/eu_eurocodes_basis_and_actions.md",
+      "sections": [
+        "How the references fit together",
+        "Edition and generation boundaries",
+        "EN 1990 — common design basis",
+        "EN 1991 — first-generation action-topic map",
+        "Selected newer action references",
+        "Other international-reference groups",
+        "Public sources"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

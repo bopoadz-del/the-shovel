@@ -1,0 +1,51 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:procurement.tender_lifecycle",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Construction tender lifecycle",
+    "described_as": "Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender (RAT) -> RFP issue -> Tender queries -> Tender Analysis (RAP) -> Pre…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "procurement.tender_lifecycle"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Construction tender lifecycle",
+      "entry": "procurement.tender_lifecycle",
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document",
+        "verified_against_standard": "procedure catalogue"
+      },
+      "credibility_tier": 4
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "procurement.tender_lifecycle",
+      "type": "workflow",
+      "domain": "construction.procurement",
+      "sections": [
+        "statement"
+      ],
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document",
+        "verified_against_standard": "procedure catalogue"
+      },
+      "credibility_tier": 4
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

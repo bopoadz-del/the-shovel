@@ -1,0 +1,37 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:construction_rates_gulf_ksa_2025",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Construction Cost Benchmarks — Saudi Arabia & Gulf (2025)",
+    "described_as": "REAL, sourced construction cost benchmarks for Saudi Arabia and the Gulf. Use",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/construction_rates_gulf_ksa_2025.md",
+      "title": "Construction Cost Benchmarks — Saudi Arabia & Gulf (2025)"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/construction_rates_gulf_ksa_2025.md",
+      "sections": [
+        "Asset-type build cost — Saudi Arabia (SAR/m² and USD/m²)",
+        "Detailed material prices — Saudi Arabia (SAR)",
+        "Residential construction — Saudi Arabia (SAR/m²)",
+        "Labour rates — Riyadh vs Dubai vs Doha (USD/hour, monthly for staff)",
+        "Market indicators — Saudi Arabia",
+        "Procurement lead times — Gulf (weeks)",
+        "How to use"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

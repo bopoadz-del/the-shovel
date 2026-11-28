@@ -1,0 +1,32 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:supervision_proposal_structure",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Site Supervision Proposal — Structure and Content Guide",
+    "described_as": "How a supervision consultant's technical proposal for a site-supervision",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "search_general_knowledge",
+      "arguments": {}
+    },
+    "cites": {
+      "document": "docs/knowledge/supervision_proposal_structure.md",
+      "title": "Site Supervision Proposal — Structure and Content Guide"
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "docs/knowledge/supervision_proposal_structure.md",
+      "sections": [
+        "Standard contents",
+        "Rules that distinguish a compliant submission"
+      ]
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

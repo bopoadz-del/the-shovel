@@ -1,0 +1,110 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:tolerance_check",
+  "kind": "formula",
+  "facts": {
+    "name": "Tolerance check",
+    "described_as": "Checks a measured value against a specified value and tolerance: whether it is within tolerance, its deviation, and the margin left. The specified value and the tolerance come from the user or the project documents.",
+    "inputs": [
+      {
+        "name": "measured",
+        "label": "measured value",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          -1000000000.0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "specified",
+        "label": "specified value",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          -1000000000.0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "tolerance_plus",
+        "label": "plus tolerance",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "tolerance_minus",
+        "label": "minus tolerance",
+        "type": "number",
+        "unit": "ratio",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "within_tolerance",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "deviation",
+        "unit": "same unit as specified",
+        "main": false
+      },
+      {
+        "name": "lower_limit",
+        "unit": "same unit as specified",
+        "main": false
+      },
+      {
+        "name": "upper_limit",
+        "unit": "same unit as specified",
+        "main": false
+      },
+      {
+        "name": "margin",
+        "unit": "same unit as specified",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "tolerance_check"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Tolerance check"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "base",
+      "file": "app/agents/base/formulas/construction_formulas_general.py"
+    },
+    "required_groups": [],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}

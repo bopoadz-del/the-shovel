@@ -1,0 +1,138 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:delay_damages_daily",
+  "kind": "formula",
+  "facts": {
+    "name": "Delay damages per day",
+    "described_as": "Daily delay damages: a flat amount per day, or the contract's rate as a percent of the contract amount; and their total over the days of delay when given.",
+    "inputs": [
+      {
+        "name": "rate_percent",
+        "label": "delay damages rate",
+        "type": "number",
+        "unit": "%",
+        "range": [
+          0,
+          100
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "contract_amount",
+        "label": "contract amount",
+        "type": "number",
+        "unit": "currency",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "currency",
+        "label": "currency",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "amount_per_day",
+        "label": "flat daily delay damages amount",
+        "type": "number",
+        "unit": "currency/day",
+        "range": [
+          0,
+          10000000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      },
+      {
+        "name": "days",
+        "label": "days of delay",
+        "type": "number",
+        "unit": "day",
+        "range": [
+          0,
+          1000000000.0
+        ],
+        "required": false,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "total_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "daily_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "rate_percent",
+        "unit": "%",
+        "main": false
+      },
+      {
+        "name": "contract_amount",
+        "unit": "currency",
+        "main": false
+      },
+      {
+        "name": "days",
+        "unit": "day",
+        "main": false
+      },
+      {
+        "name": "currency",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "per",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "delay_damages_daily"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Delay damages per day"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "contracts",
+      "file": "app/agents/hats/contracts/formulas/construction_formulas_commercial.py"
+    },
+    "required_groups": [
+      [
+        "rate_percent",
+        "amount_per_day"
+      ],
+      [
+        "contract_amount",
+        "amount_per_day"
+      ]
+    ],
+    "feeds": [],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}
