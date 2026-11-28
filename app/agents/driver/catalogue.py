@@ -67,9 +67,12 @@ def _one_line(text: Any, limit: int = FOR_CHARS) -> str:
 
 
 def _source_file(obj: Any) -> str:
+    """The file that holds the callable's own body. A wrapper made with
+    functools.wraps (range hold, default disclosure) is looked through:
+    which wrapper is outermost depends on import order, the body does not."""
     try:
-        path = inspect.getsourcefile(obj) or ""
-    except TypeError:
+        path = inspect.getsourcefile(inspect.unwrap(obj)) or ""
+    except (TypeError, ValueError):
         # A built-in or a C callable has no source file: the entry says so.
         _LOG.debug("catalogue: no source file for %r", obj, exc_info=True)
         return ""

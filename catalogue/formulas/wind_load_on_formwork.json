@@ -103,7 +103,7 @@
     "source": {
       "registry": "formula",
       "owner": "safety",
-      "file": "app/agents/hats/safety/defaults.py"
+      "file": "app/agents/hats/safety/formulas/construction_formulas.py"
     },
     "required_groups": [],
     "feeds": [],

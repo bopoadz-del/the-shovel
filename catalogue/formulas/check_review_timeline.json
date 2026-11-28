@@ -56,7 +56,7 @@
     "source": {
       "registry": "formula",
       "owner": "qaqc",
-      "file": "app/agents/hats/qaqc/results.py"
+      "file": "app/agents/hats/qaqc/formulas/design_review_rules.py"
     },
     "required_groups": [],
     "feeds": [],

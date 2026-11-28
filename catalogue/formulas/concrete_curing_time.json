@@ -69,7 +69,7 @@
     "source": {
       "registry": "formula",
       "owner": "qaqc",
-      "file": "app/agents/hats/qaqc/defaults.py"
+      "file": "app/agents/hats/qaqc/formulas/construction_formulas_qc.py"
     },
     "required_groups": [],
     "feeds": [],

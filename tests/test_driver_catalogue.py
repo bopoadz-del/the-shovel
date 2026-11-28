@@ -310,6 +310,84 @@ def test_a_registered_formula_reaches_the_index_without_a_restart(registered, na
         f"formula:{name} | formula | Synthetic {name} | Synthetic {name}."]
 
 
+# -- source file: the body, not the wrapper -----------------------------------------
+
+def _source_of(name):
+    return [e for e in catalogue.entries() if e["id"] == f"formula:{name}"][0]["source"]["file"]
+
+
+def _wrapped_in(spec_fn, wrappers):
+    out = spec_fn
+    for wrap in wrappers:
+        out = wrap(out)
+    return out
+
+
+def _real_wrappers(which):
+    from app.agents.hats.qaqc import defaults, results
+    table = {"range_hold": [results.qaqc_calculator],
+             "defaults": [defaults.disclose_defaults],
+             "both": [results.qaqc_calculator, defaults.disclose_defaults]}
+    return table[which]
+
+
+@pytest.mark.parametrize("which", ["range_hold", "defaults", "both"])
+@pytest.mark.parametrize("name", ["zz_src_one", "zz_src_two"])
+def test_a_formula_entry_names_the_file_of_its_body_whatever_wraps_it(registered, which, name):
+    """The wrapper that is outermost depends on import order; the entry's file must not."""
+    from dataclasses import replace
+
+    _formula(registered, name, {"a": "m"}, {"b": "m"})
+    bare = _source_of(name)
+    fr._REGISTRY[name] = replace(fr._REGISTRY[name],
+                                 fn=_wrapped_in(fr._REGISTRY[name].fn, _real_wrappers(which)))
+    catalogue._CACHE.clear()
+    assert bare == "tests/test_driver_catalogue.py"
+    assert _source_of(name) == bare
+
+
+_WRAPPER_MODULE = '''
+import functools
+
+def with_wraps(fn):
+    @functools.wraps(fn)
+    def kept(*a, **k):
+        return fn(*a, **k)
+    return kept
+
+def without_wraps(fn):
+    def own(*a, **k):
+        return fn(*a, **k)
+    return own
+'''
+
+
+@pytest.mark.parametrize("stem", ["zz_wrapmod_a", "zz_wrapmod_b"])
+def test_source_file_looks_through_wraps_only(tmp_path, monkeypatch, stem):
+    """functools.wraps leaves __wrapped__: followed. A wrapper without it is its
+    own body: its file is named (no guessing past it)."""
+    import importlib
+    import sys
+
+    (tmp_path / f"{stem}.py").write_text(_WRAPPER_MODULE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module(stem)
+    try:
+        def body(**kw):
+            return {}
+        assert catalogue._source_file(mod.with_wraps(body)) == "tests/test_driver_catalogue.py"
+        assert catalogue._source_file(mod.with_wraps(mod.with_wraps(body))) == "tests/test_driver_catalogue.py"
+        own = catalogue._source_file(mod.without_wraps(body))
+        assert own.endswith(f"{stem}.py") and own != "tests/test_driver_catalogue.py"
+    finally:
+        sys.modules.pop(stem, None)
+
+
+@pytest.mark.parametrize("thing", [len, print])
+def test_source_file_of_a_builtin_is_empty(thing):
+    assert catalogue._source_file(thing) == ""
+
+
 # -- lookup -------------------------------------------------------------------------
 
 @pytest.mark.parametrize("reverse", [False, True])
