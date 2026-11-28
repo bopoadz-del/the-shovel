@@ -114,17 +114,35 @@ def backend_name() -> str:
     return raw
 
 
-def store_root() -> str:
-    """Directory that new document bytes are written under."""
-    configured = os.getenv("DOCUMENT_STORE_ROOT", "").strip()
+#: Where document bytes go when neither DOCUMENT_STORE_ROOT nor DATA_DIR is set.
+DEFAULT_DATA_DIR = "./data"
+
+
+def resolve_store_root(document_store_root: str | None, data_dir: str | None) -> str:
+    """The store root from the two settings' raw values (None = unset)."""
+    configured = (document_store_root or "").strip()
     if configured:
         return configured
-    return os.getenv("DATA_DIR", "./data")
+    return DEFAULT_DATA_DIR if data_dir is None else data_dir
+
+
+def store_root() -> str:
+    """Directory that new document bytes are written under."""
+    return resolve_store_root(os.getenv("DOCUMENT_STORE_ROOT"), os.getenv("DATA_DIR"))
 
 
 def _is_production() -> bool:
     env = os.getenv("ENV", os.getenv("ENVIRONMENT", "")).strip().lower()
     return env in ("prod", "production")
+
+
+#: The values that turn the durable-store guard on, after strip + lower.
+DURABLE_GUARD_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def guard_value_on(raw: str) -> bool:
+    """True when ``raw`` is a value that turns the guard on (any other is off)."""
+    return (raw or "").strip().lower() in DURABLE_GUARD_ON_VALUES
 
 
 def durable_guard_requested() -> bool:
@@ -133,9 +151,7 @@ def durable_guard_requested() -> bool:
     The live task does not set this. Leaving it unset is what keeps a
     deploy from refusing to boot before a durable volume exists.
     """
-    return os.getenv("REQUIRE_DURABLE_DOCUMENT_STORE", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    return guard_value_on(os.getenv("REQUIRE_DURABLE_DOCUMENT_STORE", ""))
 
 
 def _unescape_mount(value: str) -> str:

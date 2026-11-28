@@ -62,6 +62,118 @@ def _a_file(shipped, kind, index=0):
     return shipped[ids[index]]
 
 
+# -- an approved purpose is the index line's text --------------------------------------
+# enrich, capabilities, catalogue.registry_entries / entries / _built,
+# index_lines and index_block: what the model picks from.
+
+def _approve(root, entry_id, purpose, approved=True):
+    kind = entry_id.partition(":")[0]
+    rel = cf.path_of(kind, entry_id)
+    doc = _read(root, rel)
+    doc["hints"].update(approved=approved, purpose=purpose)
+    _write(root, rel, doc)
+    return doc
+
+
+def _line_of(lines, entry_id):
+    return next(line for line in lines if line.startswith(entry_id + " | "))
+
+
+def _ids_of(shipped, kind, count=2):
+    return sorted(i for i, d in shipped.items() if d["kind"] == kind)[:count]
+
+
+@pytest.mark.parametrize("index,purpose", [(0, "Weighs the steel of one bar mark."),
+                                           (1, "Gives the area a crew covers in a shift.")])
+def test_enrich_puts_an_approved_purpose_on_the_for_line_of_each_kind(shipped, capabilities, index, purpose):
+    from app.agents.driver import catalogue
+    held = {e["id"]: e for _k, e in capabilities}
+    ids = [_ids_of(shipped, "formula")[index], _ids_of(shipped, "knowledge")[index]]
+    files = json.loads(json.dumps(shipped))
+    plain = [held[i] for i in ids]
+    for entry_id in ids:
+        files[entry_id]["hints"].update(approved=True, purpose=f"{purpose} ({entry_id})")
+    out = cf.enrich(plain, files)
+    assert [e["for"] for e in out] == [f"{purpose} ({i})" for i in ids]
+    assert all("for" not in e["gaps"] for e in out)
+    # An entry the code gave no for line has that gap; an approved purpose fills it.
+    bare = [dict(e, **{"for": "", "gaps": ["for"] + e["gaps"]}) for e in plain]
+    filled = cf.enrich(bare, {i: dict(files[i], facts=cf.facts(files[i]["kind"], b))
+                              for i, b in zip(ids, bare)})
+    assert [e["for"] for e in filled] == [f"{purpose} ({i})" for i in ids]
+    assert all("for" not in e["gaps"] for e in filled)
+    # The entries handed in are not changed: enrich returns copies.
+    assert [e["for"] for e in plain] == [held[i]["for"] for i in ids]
+    # A purpose longer than an index line is cut the way every for line is.
+    long = (purpose + " ") * 20
+    files[ids[0]]["hints"]["purpose"] = long
+    cut = cf.enrich(plain, files)[0]["for"]
+    assert cut == catalogue._one_line(long) and len(cut) == catalogue.FOR_CHARS and cut.endswith("…")
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_enrich_leaves_the_for_line_when_the_hint_may_not_be_shown(shipped, capabilities, index):
+    held = {e["id"]: e for _k, e in capabilities}
+    ids = [_ids_of(shipped, "formula")[index], _ids_of(shipped, "knowledge")[index]]
+    plain = [held[i] for i in ids]
+    for change in ({"approved": False, "purpose": "Written, not approved."},
+                   {"approved": True, "purpose": "   "},
+                   {"approved": True, "purpose": "", "stale": True}):
+        files = json.loads(json.dumps(shipped))
+        for entry_id in ids:
+            files[entry_id]["hints"].update(approved=change["approved"], purpose=change["purpose"])
+            if change.get("stale"):
+                files[entry_id]["hints"]["purpose"] = "Approved, but the facts moved on."
+                files[entry_id]["facts"]["name"] = "a name the code does not give"
+        assert [e["for"] for e in cf.enrich(plain, files)] == [held[i]["for"] for i in ids], change
+
+
+@pytest.mark.parametrize("index,purpose", [(0, "Approved purpose one."), (1, "Approved purpose two.")])
+def test_index_lines_and_index_block_show_the_approved_purpose(shipped, copy_dir, monkeypatch, index, purpose):
+    from app.agents.driver import catalogue
+    monkeypatch.setattr(cf, "files_dir", lambda: copy_dir)
+    formula_id = _ids_of(shipped, "formula", 4)[index]
+    knowledge_id = _ids_of(shipped, "knowledge", 4)[index]
+    unapproved_id = _ids_of(shipped, "formula", 4)[index + 2]
+    stale_id = _ids_of(shipped, "knowledge", 4)[index + 2]
+    before = catalogue.index_lines()
+    _approve(copy_dir, formula_id, purpose + " A formula.")
+    _approve(copy_dir, knowledge_id, purpose + " A knowledge entry.")
+    _approve(copy_dir, unapproved_id, "Not approved, never shown.", approved=False)
+    stale = _approve(copy_dir, stale_id, "Approved over facts that moved on.")
+    stale["facts"]["described_as"] = "what the code said once"
+    _write(copy_dir, cf.path_of("knowledge", stale_id), stale)
+    lines = catalogue.index_lines()
+    block = catalogue.index_block().splitlines()
+    for entry_id, text in ((formula_id, purpose + " A formula."), (knowledge_id, purpose + " A knowledge entry.")):
+        line = _line_of(lines, entry_id)
+        assert line.endswith(" | " + text) and line in block
+        assert line != _line_of(before, entry_id)
+        # The full entry the model reads with catalogue_lookup says the same.
+        assert catalogue.lookup([entry_id])["entries"][0]["for"] == text
+    for entry_id in (unapproved_id, stale_id):
+        assert _line_of(lines, entry_id) == _line_of(before, entry_id)
+        assert _line_of(before, entry_id) in block
+    assert len(lines) == len(before)
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_capabilities_and_registry_entries_keep_the_codes_text(shipped, copy_dir, monkeypatch, index):
+    from app.agents.driver import catalogue
+    monkeypatch.setattr(cf, "files_dir", lambda: copy_dir)
+    ids = [_ids_of(shipped, "formula")[index], _ids_of(shipped, "knowledge")[index]]
+    code_for = {e["id"]: e["for"] for e in catalogue.registry_entries() if e["id"] in ids}
+    for entry_id in ids:
+        _approve(copy_dir, entry_id, f"An approved purpose for {entry_id}.")
+    shown = {e["id"]: e["for"] for e in catalogue.entries() if e["id"] in ids}
+    assert shown == {i: f"An approved purpose for {i}." for i in ids}
+    # What the files are checked against is still the code's own text ...
+    assert {e["id"]: e["for"] for e in catalogue.registry_entries() if e["id"] in ids} == code_for
+    assert {e["id"]: e["for"] for _k, e in cf.capabilities() if e["id"] in ids} == code_for
+    # ... so approving a hint never makes its own file drift from the code.
+    assert not [line for line in cf.drift(copy_dir) if any(i in line for i in ids)]
+
+
 # -- drift: one file for every capability, none extra, facts equal to code -----------
 
 @pytest.mark.parametrize("kind", ["formula", "kernel", "knowledge", "rag"])

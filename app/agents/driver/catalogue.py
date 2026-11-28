@@ -308,7 +308,9 @@ def _knowledge_entries() -> List[Dict[str, Any]]:
 _BUILDERS = (_formula_entries, _tool_entries, _workflow_entries, _skill_entries, _knowledge_entries,
              kb_entries)
 
-_CACHE: Dict[Any, List[Dict[str, Any]]] = {}
+#: One state of what the builders read -> (the registries' own entries, the
+#: same entries with the approved files' hints), each in the fixed order.
+_CACHE: Dict[Any, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
 
 
 def _knowledge_state() -> Tuple[Tuple[str, int, int], ...]:
@@ -352,21 +354,36 @@ def order(entry: Dict[str, Any]) -> Tuple[int, str]:
     return KINDS.index(entry["kind"]), entry["id"]
 
 
-def entries() -> List[Dict[str, Any]]:
-    """Every entry, in the fixed order. Built once per state of what the
+def _built() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Both lists for the current state, built once per state of what the
     builders read (``_state_key``: a registered, replaced or removed
     formula, tool, workflow, card, skill or knowledge file is never
-    stale); each caller gets its own copy."""
+    stale)."""
     key = _state_key()
     if key not in _CACHE:
         _CACHE.clear()
         from app.agents.driver import catalogue_files
 
+        registry = sorted((e for build in _BUILDERS for e in build()), key=order)
         # An approved file's hint fills a when_to_use / when_not the registry
-        # leaves empty (``catalogue_files.enrich``); nothing else changes.
-        built = catalogue_files.enriched([e for build in _BUILDERS for e in build()])
-        _CACHE[key] = sorted(built, key=order)
-    return copy.deepcopy(_CACHE[key])
+        # leaves empty and gives the entry its approved purpose as ``for``
+        # (``catalogue_files.enrich``); nothing else changes.
+        _CACHE[key] = (registry, sorted(catalogue_files.enriched(registry), key=order))
+    return _CACHE[key]
+
+
+def registry_entries() -> List[Dict[str, Any]]:
+    """Every entry as the registries alone declare it, no file's hint read
+    in, in the fixed order: what a catalogue file's facts are checked
+    against. Each caller gets its own copy."""
+    return copy.deepcopy(_built()[0])
+
+
+def entries() -> List[Dict[str, Any]]:
+    """Every entry, with the approved files' hints, in the fixed order: what
+    the model reads (the index and ``lookup``). Each caller gets its own
+    copy."""
+    return copy.deepcopy(_built()[1])
 
 
 def index_line(entry: Dict[str, Any]) -> str:
