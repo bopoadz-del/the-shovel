@@ -171,6 +171,16 @@ def _into_row_unit(quantity: float, quantity_unit: Any, row_unit: str) -> tuple:
         f"{quantity_unit or 'no unit'}{kinds}, so this row does not apply to it")
 
 
+def _refusal(reason: str, field: str, given: bool = True) -> dict:
+    """A refused input, returned the way the sibling planning calculators
+    return one: the reason and the input to give again. ``given`` is False
+    when the input is absent (asked for), True when a given value is wrong."""
+    out = {"error": reason, "needs_input": [field]}
+    if given:
+        out["required"] = [field]
+    return out
+
+
 @formula(
     owner="planning",
     display_name="Production duration from a planner template row",
@@ -180,18 +190,19 @@ def _into_row_unit(quantity: float, quantity_unit: Any, row_unit: str) -> tuple:
         "The work item is one template row, named exactly as the row is "
         "(see the productivity.* knowledge entries for each row's unit and "
         "crew). The quantity's unit goes in quantity_unit; a quantity written "
-        "with a unit of its own is converted into quantity_unit when it is "
-        "the same kind and refused, naming both, when it is not. A quantity "
-        "in another unit of the row's kind (sq ft for an m2 row) is "
-        "converted into the row's unit and the conversion reported in "
-        "unit_conversion; another kind is refused, naming both. Unverified "
-        "owner-supplied template: never a project figure."
+        "with a unit of its own is taken in that unit. A quantity in another "
+        "unit of the row's kind (sq ft for an m2 row) is converted into the "
+        "row's unit and the conversion reported in unit_conversion; another "
+        "kind is refused, naming both, and a quantity with no unit is asked "
+        "for its unit. Unverified owner-supplied template: never a project "
+        "figure."
     ),
     inputs={
         "work_item": Param("-", label="planner template row (work item, as the row names it)"),
         # Its unit is quantity_unit's value, so the row-unit check below
-        # reads the unit the figure is in. A unit written in the value is
-        # converted into it or refused at the front door, never dropped.
+        # reads the unit the figure is in. A unit written in the value
+        # arrives here as quantity_unit (or is refused at the front door),
+        # never dropped.
         "quantity": Param("-", lo=0.0, hi=1e12, label="quantity of the work item",
                           unit_from="quantity_unit"),
         "quantity_unit": Param("-", label="unit the quantity is measured in"),
@@ -212,20 +223,30 @@ def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str)
     """Duration of one template row's work: the row the caller names, the
     quantity put into that row's unit (converted when it is the same kind,
     refused when it is not). No row is guessed from a
-    description: a name that is not a row is refused with the rows listed."""
+    description: a name that is not a row is refused with the rows listed.
+    Every refusal is returned (never raised), naming the input to give."""
     if not isinstance(work_item, str):
-        raise ValueError(f"the work item is the name of one planner template row, not {work_item!r}")
+        return _refusal(f"the work item is the name of one planner template row, not {work_item!r}",
+                        "work_item")
     if not math.isfinite(float(quantity)):
-        raise ValueError(f"the quantity of the work item is not a finite number ({quantity!r})")
+        return _refusal(f"the quantity of the work item is not a finite number ({quantity!r})",
+                        "quantity")
     key = _normalise_work_item(work_item)
     if key not in _BENCHMARK_KEYS:
         rows = ", ".join(item for item, *_ in template_rows())
-        raise ValueError(f"{work_item!r} is not a planner template row; the rows are: {rows}")
+        return _refusal(f"{work_item!r} is not a planner template row; the rows are: {rows}",
+                        "work_item")
     unit, crew, rate, _flag = _BENCHMARK_KEYS[key]
+    written = quantity_unit.strip() if isinstance(quantity_unit, str) else quantity_unit
+    if written in ("", "-", None):
+        # "-" is the platform's "no unit" marker, as blank is: the unit is
+        # missing, which is asked for; the row is not said not to apply.
+        return _refusal(f"row {key!r} is measured in {unit}; the quantity was given with no unit",
+                        "quantity_unit", given=False)
     try:
         quantity, converted = _into_row_unit(quantity, quantity_unit, unit)
     except ValueError as exc:
-        raise ValueError(f"row {key!r} {exc}") from None
+        return _refusal(f"row {key!r} {exc}", "quantity_unit")
     not_covered = next(nc for item, _u, _c, _r, _f, nc in template_rows()
                        if _normalise_work_item(item) == key)
     return {

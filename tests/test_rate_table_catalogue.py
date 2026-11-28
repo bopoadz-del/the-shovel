@@ -18,6 +18,16 @@ from app.lib import formula_registry as fr
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _refused(*args, given=True):
+    """The calculator's returned refusal (it never raises for an input):
+    its reason, after checking it names the input to give again."""
+    res = pb.crew_days_from_rate_row(*args)
+    assert "duration_crew_days" not in res, res
+    assert isinstance(res["needs_input"], list) and len(res["needs_input"]) == 1, res
+    assert ("required" in res) is given, res
+    return res["error"]
+
+
 def _run(work_item, quantity, unit):
     return cf.run_calculation(
         "crew_days_from_rate_row",
@@ -47,9 +57,7 @@ def test_duration_is_quantity_over_the_named_rows_rate(item, qty, unit, want_day
     ("epoxy paint floors", 10, ""),
 ])
 def test_a_quantity_in_another_unit_is_refused_naming_both(item, qty, unit):
-    with pytest.raises(ValueError) as err:
-        pb.crew_days_from_rate_row(item, qty, unit)
-    msg = str(err.value)
+    msg = _refused(item, qty, unit, given=bool(unit))
     assert item in msg and "m2" in msg
     assert (unit or "no unit") in msg
     out = _run(item, qty, unit or "none")
@@ -62,9 +70,7 @@ def test_a_quantity_in_another_unit_is_refused_naming_both(item, qty, unit):
     "blockwork",
 ])
 def test_a_name_that_is_not_a_row_is_refused_with_the_rows_listed(item):
-    with pytest.raises(ValueError) as err:
-        pb.crew_days_from_rate_row(item, 100, "m2")
-    msg = str(err.value)
+    msg = _refused(item, 100, "m2")
     assert "not a planner template row" in msg
     assert "blockwork walls" in msg and "ceiling painting common areas" in msg
 
@@ -147,9 +153,7 @@ def test_another_spelling_of_the_rows_unit_is_the_same_unit(item, qty, unit, wan
     (("blockwork walls", 600, "kg"), "kg"),
 ])
 def test_degenerate_inputs_are_refused_naming_the_input(args, named):
-    with pytest.raises(ValueError) as err:
-        pb.crew_days_from_rate_row(*args)
-    assert named in str(err.value)
+    assert named in _refused(*args)
     item, qty, unit = args
     out = _run(item, qty, unit)
     if any(isinstance(v, list) and len(v) == 1 for v in args):
@@ -280,16 +284,20 @@ def test_a_quantity_without_a_written_unit_is_left_to_the_range_check(value, uni
 
 
 @pytest.mark.parametrize("written,unit,want", [
-    ("2000 sq ft", "m2", [("quantity", "sq ft", "m2")]),
-    ("10 ft2", "M2", [("quantity", "ft2", "M2")]),
-    ("600 m2", "m2", []),
-    ("1,200 m2", "M2", []),
+    # Another unit of the same kind: the number goes on with ITS unit, so
+    # the calculator converts it and reports that; the front door does not.
+    ("2000 sq ft", "m2", (2000.0, "sq ft")),
+    ("10 ft2", "M2", (10.0, "ft2")),
+    # The same unit, another spelling: the sibling's word stands.
+    ("600 m2", "m2", (600.0, "m2")),
+    ("1,200 m2", "M2", (1200.0, "M2")),
 ])
-def test_a_conversion_into_quantity_unit_is_reported(written, unit, want):
-    _values, conv, _rej = fr.convert_written_units(
+def test_a_written_unit_of_the_siblings_kind_reaches_the_calculator(written, unit, want):
+    values, conv, rej = fr.convert_written_units(
         "crew_days_from_rate_row",
         {"work_item": "blockwork walls", "quantity": written, "quantity_unit": unit})
-    assert [(c["parameter"], c["from_unit"], c["to_unit"]) for c in conv] == want
+    assert rej == [] and conv == []
+    assert (values["quantity"], values["quantity_unit"]) == want
 
 
 @pytest.mark.parametrize("key,want", [("quantity", "quantity_unit"), ("work_item", ""), ("quantity_unit", "")])
@@ -403,9 +411,8 @@ def test_a_given_in_another_unit_of_the_rows_kind_is_converted_on_the_sheet(item
 def test_a_given_of_another_kind_is_still_refused_on_the_sheet(item, value, unit, kind):
     step = _sheet_step(value, unit, {"work_item": item, "quantity": "g1", "quantity_unit": "m2"})
     assert step["status"] != "done", step
-    with pytest.raises(ValueError) as err:
-        pb.crew_days_from_rate_row(item, value, unit)
-    assert kind in str(err.value) and "area" in str(err.value)
+    msg = _refused(item, value, unit)
+    assert kind in msg and "area" in msg
 
 
 @pytest.mark.parametrize("qty,unit,want", [
@@ -423,3 +430,130 @@ def test_into_row_unit_refuses_another_kind_or_no_unit(qty, unit):
     with pytest.raises(ValueError) as err:
         pb._into_row_unit(qty, unit, "m2")
     assert "measured in m2" in str(err.value)
+
+
+# --- one meaning on every path (the five faults on main after the first merge) ---
+
+@pytest.mark.parametrize("args,field,given", [
+    (("blockwork walls", 600, "m3"), "quantity_unit", True),
+    (("ceiling plaster", 40, "m"), "quantity_unit", True),
+    (("demolish blockwork walls", 600, "m2"), "work_item", True),
+    (("not a row", 1, "m2"), "work_item", True),
+    ((["a", "b"], 1, "m2"), "work_item", True),
+    (("blockwork walls", float("nan"), "m2"), "quantity", True),
+    (("blockwork walls", 600, "-"), "quantity_unit", False),
+    (("ceiling plaster", 25, " - "), "quantity_unit", False),
+    (("blockwork walls", 600, ""), "quantity_unit", False),
+    (("ceiling plaster", 25, None), "quantity_unit", False),
+])
+def test_every_refusal_is_returned_naming_the_input(args, field, given):
+    res = pb.crew_days_from_rate_row(*args)
+    assert res["needs_input"] == [field], res
+    assert res.get("required") == ([field] if given else None), res
+
+
+@pytest.mark.parametrize("args", [
+    ("blockwork walls", 600, "m2"), ("ceiling plaster", 2000, "sq ft"), ("blockwork walls", 0, "M2"),
+])
+def test_a_row_that_fits_is_not_refused(args):
+    res = pb.crew_days_from_rate_row(*args)
+    assert "error" not in res and "needs_input" not in res, res
+    assert res["duration_crew_days"] >= 0
+
+
+@pytest.mark.parametrize("item,qty,unit,status", [
+    # A given value that is wrong: status error, with the question.
+    ("blockwork walls", 600, "m3", "error"),
+    ("demolish blockwork walls", 600, "m2", "error"),
+    ("blockwork walls", "30 m3", "", "error"),
+    # No unit at all ("-" is no unit, as blank is): asked for.
+    ("blockwork walls", 600, "-", "needs_input"),
+    ("ceiling plaster", 25, "-", "needs_input"),
+])
+def test_a_refusal_reaches_the_public_path_as_a_question_not_a_break(item, qty, unit, status):
+    out = _run(item, qty, unit)
+    assert out["status"] == status, out
+    assert out.get("needs_input") is True and out.get("question"), out
+    assert "raised" not in out and "failed:" not in str(out.get("error")), out
+
+
+@pytest.mark.parametrize("item,written,unit,want_days,shown", [
+    ("blockwork walls", "2000 sq ft", "m2", 2000 * 0.09290304 / 12, "2000 sq ft = 185.80608 m2"),
+    ("ceiling plaster", "6.5 sqft", "M2", 6.5 * 0.09290304 / 20, "6.5 sqft = 0.60386976 m2"),
+    ("blockwork walls", "2000 sq ft", "-", 2000 * 0.09290304 / 12, "2000 sq ft = 185.80608 m2"),
+    # Negative: no conversion made, none reported.
+    ("blockwork walls", "600 m2", "M2", 50.0, "none"),
+    ("ceiling plaster", "1,000 sqm", "m2", 50.0, "none"),
+])
+def test_unit_conversion_states_the_conversion_the_user_input_got(item, written, unit, want_days, shown):
+    out = _run(item, written, unit)
+    assert out["status"] == "success", out
+    res = out["result"]
+    assert res["duration_crew_days"] == pytest.approx(want_days)
+    assert res["unit_conversion"].startswith(shown), res
+    # The envelope and the result agree: the conversion is said once, by the result.
+    assert not out.get("conversions"), out
+
+
+@pytest.mark.parametrize("value", [600, 25])
+def test_a_no_unit_given_keeps_the_plans_quantity_unit_on_the_sheet(value):
+    step = _sheet_step(value, "-", {"work_item": "blockwork walls", "quantity": "g1", "quantity_unit": "m2"})
+    assert step["status"] == "done", step
+    assert float(step["result"]["value"]) == pytest.approx(value / 12)
+
+
+@pytest.mark.parametrize("value", [600, 25])
+def test_a_no_unit_given_with_no_plan_unit_waits_for_the_unit(value):
+    step = _sheet_step(value, "-", {"work_item": "blockwork walls", "quantity": "g1"})
+    assert step["status"] == "waiting_input", step
+    assert step["needs"] == ["unit the quantity is measured in"], step
+
+
+@pytest.mark.parametrize("value", [600, 30])
+def test_an_absent_unit_refusal_from_the_formula_waits_on_the_sheet(value):
+    # The plan writes the "-" marker itself: the formula asks for the unit.
+    step = _sheet_step(value, "m2", {"work_item": "blockwork walls", "quantity": value, "quantity_unit": "-"})
+    assert step["status"] == "waiting_input", step
+    assert step["needs"] == ["unit the quantity is measured in"], step
+
+
+@pytest.mark.parametrize("value,unit,reason", [
+    (30, "m3", "volume"), (600, "nr", "nr"),
+])
+def test_a_wrong_given_on_the_sheet_fails_with_the_reason(value, unit, reason):
+    step = _sheet_step(value, unit, {"work_item": "blockwork walls", "quantity": "g1", "quantity_unit": "m2"})
+    assert step["status"] == "failed", step
+    assert reason in step["error"] and "could not run" not in step["error"], step
+
+
+def _declare(kind, unit_from, tag):
+    from typing import List
+
+    def probe_series(qs: List[float], qs_unit: str = "") -> dict:
+        return {"total": 0.0}
+
+    def probe_one(qs: float, qs_unit: str = "") -> dict:
+        return {"total": 0.0}
+
+    fn = probe_series if kind == "series" else probe_one
+    return fr.formula(owner="planning", display_name="probe", description="probe",
+                      name=f"probe_unit_from_{tag}",
+                      inputs={"qs": fr.Param("-", unit_from=unit_from), "qs_unit": fr.Param("-")},
+                      outputs={"total": "-"})(fn)
+
+
+@pytest.mark.parametrize("unit_from", ["qs_unit", "other_unit"])
+def test_a_series_cannot_declare_unit_from(unit_from):
+    with pytest.raises(ValueError, match="series input 'qs'"):
+        _declare("series", unit_from, f"series_{unit_from}")
+    assert fr.get(f"probe_unit_from_series_{unit_from}") is None
+
+
+@pytest.mark.parametrize("kind,unit_from", [("number", "qs_unit"), ("series", "")])
+def test_a_single_figure_or_a_series_without_unit_from_registers(kind, unit_from):
+    tag = f"{kind}_{unit_from or 'none'}"
+    _declare(kind, unit_from, tag)
+    try:
+        assert fr.get(f"probe_unit_from_{tag}") is not None
+    finally:
+        fr._REGISTRY.pop(f"probe_unit_from_{tag}", None)
