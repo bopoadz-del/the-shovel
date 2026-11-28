@@ -218,37 +218,31 @@ def note_figures(data: Any) -> Set[float]:
     return set()
 
 
-#: A figure with the minus written before it, where the minus is a sign and
-#: not a dash between two things: at the start of the text or after a space,
-#: an opening bracket, a colon or an equals sign ("-2.35 m", "level: -4.10"),
-#: never after a letter or a digit ("C-40", "2-2.35").
-SIGNED_FIGURE = re.compile(r"(?:(?<![^\s(\[:=])([-\u2212]))?(\d[\d,]*(?:\.\d+)?)")
-
-
-def signed_figures(data: Any) -> Set[float]:
-    """The figures a note's values hold, each with the sign the note gives it:
-    a JSON number as it is, a figure written inside text below zero when a
-    minus sign is written before it (``SIGNED_FIGURE``). The sizes are the
-    figures ``note_figures`` reads; a figure check compares sizes, and whoever
-    shows a told figure says with this what the note itself holds."""
-    if isinstance(data, bool):
-        return set()
-    if isinstance(data, (int, float)):
-        return {float(str(data))}
-    if isinstance(data, str):
-        out: Set[float] = set()
-        for minus, token in SIGNED_FIGURE.findall(data):
-            try:
-                size = float(token.replace(",", ""))
-            except ValueError:
-                continue  # "1,,": digits with no figure in them
-            out.add(-size if minus else size)
-        return out
+def note_entries(data: Any, name: str = "") -> List[Tuple[str, Any]]:
+    """Each value a note holds, with the name the note keeps it under: the
+    keys down to it joined by " > "; an item of a list goes by the list's
+    name. In the note's own order."""
     if isinstance(data, dict):
-        return set().union(*(signed_figures(v) for v in data.values()))
+        return [entry for key, value in data.items()
+                for entry in note_entries(value, f"{name} > {key}" if name else str(key))]
     if isinstance(data, list):
-        return set().union(*(signed_figures(v) for v in data))
-    return set()
+        return [entry for value in data for entry in note_entries(value, name)]
+    return [(name, data)]
+
+
+def as_written(value: Any) -> str:
+    """One value of a note as the note holds it: text word for word, a number
+    with every digit and its sign (never an exponent), anything else as JSON
+    writes it."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool) or value is None:
+        return json.dumps(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _shown(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def untold_figures(value: Any, told_from: Iterable[str], before: Any = None) -> List[float]:

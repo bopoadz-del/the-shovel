@@ -1493,20 +1493,24 @@ def _match(value: float, pool: Iterable[float]) -> bool:
     return any(_close(value, p) for p in pool)
 
 
-def _told_label(value: float, held: Iterable[float]) -> str:
-    """The credit of a figure a told note backs. Figures are matched by size.
-    ``held`` is every figure the told notes hold, with its sign; where one of
-    the size matched is held below zero, the credit lists every held figure
-    of that size exactly as the notes hold it (both, when a note holds the
-    size above and below zero), so the reader sees the user's own figures
-    next to the answer's."""
-    from app.agents import provenance_trail as pt
+def _told_words(value: float, notes: Iterable[Any]) -> str:
+    """What the told notes hold of the figure matched, in the notes' own
+    words: every value of ``notes`` that holds a figure of that size, under
+    the name the note keeps it by, exactly as the note holds it. Figures are
+    matched by size and no code reads a sign out of a note's text; the reader
+    is shown the user's own words next to the answer's figure."""
     from app.core import llm_memory
 
-    same = sorted(h for h in set(held) if _match(value, _rescaled({abs(h)})))
-    if not any(h < 0 for h in same):
-        return pt.USER_NOTE_LABEL
-    return f"{pt.USER_NOTE_LABEL}; the note holds {', '.join(llm_memory._shown(h) for h in same)}"
+    lines: list[str] = []
+    for note in notes:
+        for name, held in llm_memory.note_entries(note):
+            if not _match(value, _rescaled(llm_memory.note_figures(held))):
+                continue
+            words = llm_memory.as_written(held)
+            line = f"{name}: {words}" if name else words
+            if line not in lines:
+                lines.append(line)
+    return "; ".join(lines)
 
 
 def _rescaled(values: Iterable[float]) -> set[float]:
@@ -1725,10 +1729,8 @@ def figure_provenance(
 
         # A told note's figures, read as every told check reads them
         # (llm_memory.note_figures): its values, never its key names.
-        told_vals = {n for rec in ev.records if rec.kind == "user_note"
-                     for n in llm_memory.note_figures(json.loads(rec.text))}
-        told_held = {n for rec in ev.records if rec.kind == "user_note"
-                     for n in llm_memory.signed_figures(json.loads(rec.text))}
+        told_notes = [json.loads(rec.text) for rec in ev.records if rec.kind == "user_note"]
+        told_vals = {n for note in told_notes for n in llm_memory.note_figures(note)}
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         # B11: the words of the ask a cited sentence must name when a chunk
         # carries competing figures in the same unit. Derived only on the
@@ -1901,8 +1903,8 @@ def figure_provenance(
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
             if entry is None and _match(value, _rescaled(told_vals)):
-                entry = {"figure": fig, "source": pt.SOURCE_USER_NOTE,
-                         "doc_name": _told_label(value, told_held)}
+                entry = {"figure": fig, "source": pt.SOURCE_USER_NOTE, "doc_name": pt.USER_NOTE_LABEL,
+                         "sentence": _told_words(value, told_notes)}
             if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:
