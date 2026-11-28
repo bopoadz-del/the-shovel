@@ -96,6 +96,12 @@ def test_enrich_puts_an_approved_purpose_on_the_for_line_of_each_kind(shipped, c
     out = cf.enrich(plain, files)
     assert [e["for"] for e in out] == [f"{purpose} ({i})" for i in ids]
     assert all("for" not in e["gaps"] for e in out)
+    # An entry the code gave no for line has that gap; an approved purpose fills it.
+    bare = [dict(e, **{"for": "", "gaps": ["for"] + e["gaps"]}) for e in plain]
+    filled = cf.enrich(bare, {i: dict(files[i], facts=cf.facts(files[i]["kind"], b))
+                              for i, b in zip(ids, bare)})
+    assert [e["for"] for e in filled] == [f"{purpose} ({i})" for i in ids]
+    assert all("for" not in e["gaps"] for e in filled)
     # The entries handed in are not changed: enrich returns copies.
     assert [e["for"] for e in plain] == [held[i]["for"] for i in ids]
     # A purpose longer than an index line is cut the way every for line is.
