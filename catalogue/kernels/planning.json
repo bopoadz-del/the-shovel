@@ -21,6 +21,7 @@
       "formulas": [
         "formula:cash_flow",
         "formula:cpm_network",
+        "formula:crew_days_from_rate_row",
         "formula:crew_sizing",
         "formula:critical_path_float",
         "formula:electrical_installation_sequence",

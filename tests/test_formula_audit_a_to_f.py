@@ -63,6 +63,7 @@ _AUDIT_A_TO_F = [
     "crane_cost_estimate",
     "crane_lift_capacity",
     "crane_planning",
+    "crew_days_from_rate_row",
     "crew_sizing",
     "critical_path_float",
     "cut_fill_balance",
@@ -1131,6 +1132,31 @@ def test_audit_cash_flow(value, cost, adv, ret, lag, want_cv, want_adv, want_ret
     assert r["check_retention"] == pytest.approx(-want_ret)
 
     _err("cash_flow", {"monthly_value": [100], "monthly_cost": [90, 90]})
+
+
+# ── crew_days_from_rate_row (planner template row, unit checked) ───────────
+
+@pytest.mark.parametrize("item,qty,unit,want_rate,want_days", [
+    ("blockwork walls", 3000, "m2", 12.0, 250.0),
+    ("internal wall plaster", 350, "m2", 20.0, 17.5),
+])
+def test_audit_crew_days_from_rate_row(item, qty, unit, want_rate, want_days):
+    """Duration on one named template row: crew-days = Q / R(row).
+    Hand: blockwork 12 m2/crew-day, 3000 / 12 = 250 crew-days; plaster
+    20 m2/crew-day, 350 / 20 = 17.5. Boundary: the declared upper bound of
+    the quantity (1e12) runs, one step past it does not. Bad input: a
+    quantity in another dimension and a name that is not a row are errors.
+    """
+    r = _ok("crew_days_from_rate_row", {"work_item": item, "quantity": qty, "quantity_unit": unit})
+    assert r["rate_per_crew_day"] == pytest.approx(want_rate)
+    assert r["duration_crew_days"] == pytest.approx(want_days)
+    assert r["work_item"] == item
+
+    top = _ok("crew_days_from_rate_row", {"work_item": item, "quantity": 1e12, "quantity_unit": unit})
+    assert top["duration_crew_days"] == pytest.approx(1e12 / want_rate)
+    _err("crew_days_from_rate_row", {"work_item": item, "quantity": 2e12, "quantity_unit": unit})
+    _err("crew_days_from_rate_row", {"work_item": item, "quantity": qty, "quantity_unit": "m3"})
+    _err("crew_days_from_rate_row", {"work_item": item + " extra", "quantity": qty, "quantity_unit": unit})
 
 
 # ── crew_sizing (project-control A4) ───────────────────────────────────────
