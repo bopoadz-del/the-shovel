@@ -13,12 +13,14 @@ A pack is hand-written data in four parts, each line carrying ``approved``:
 
 Code checks a pack, it never writes a line's words (``problems``):
 every formula and skill the kernel owns has its line and nothing else does;
-every id a pack names is a catalogue entry; a chain's linked output and
-input carry the same declared unit; and the example's figures are what the
-formulas give when the chain is run (``run_chain``). Each line also carries
-the fingerprint of the code facts it was written against (``fingerprint``):
-a line whose facts have changed since is ``stale`` and counts as not
-approved (``approved_lines``) until it is read again and re-stamped
+every id a pack names is a catalogue entry of the kind its place takes
+(``KIND_OF``); a chain's linked output and input carry the same declared
+unit; and the example's figures are what the formulas give when the chain
+is run (``run_chain``). Each line also carries a fingerprint of what it was
+approved as (``line_fingerprint``): its own words and the code facts of
+every id it names (its own, its neighbours', its chain's formulas). A line
+whose words or named facts have changed since is ``stale`` and counts as
+not approved (``approved_lines``) until it is read again and re-stamped
 (``stamp``, which also clears its ``approved``). Nothing here reads a
 question or picks a formula.
 """
@@ -39,6 +41,15 @@ DIR_NAME = "catalogue_packs"
 #: The pack's parts that hold one line per catalogue id, and the field of
 #: that id. A chain's fingerprint covers every formula among its steps.
 LINE_PARTS = ("formulas", "knowledge", "skills")
+
+#: The catalogue kind each part's lines are about. A line's neighbours
+#: ("not to be confused with") are of the same kind as the line: a formula
+#: is confused with another formula, a skill with another skill.
+KIND_OF = {"formulas": "formula", "knowledge": "knowledge", "skills": "skill"}
+
+#: The fields of a line that are not its words: the stamp itself and the
+#: owner's flag. Every other field is part of what was approved.
+NOT_WORDS = ("fingerprint", "approved")
 
 #: How close a computed example figure must be to the written one: the
 #: written figure may be rounded to this many significant digits.
@@ -80,27 +91,43 @@ def code_facts(entry: Dict[str, Any]) -> Dict[str, Any]:
     return json.loads(json.dumps({k: entry.get(k) for k in keys}, allow_nan=False))
 
 
-def fingerprint(entries: Dict[str, Dict[str, Any]], ids: List[str]) -> str:
-    """The fingerprint of the code facts of ``ids`` (in the order given):
-    ``sha256:`` and the first 16 hex digits of the hash of their canonical
-    JSON. An id with no entry raises ``KernelPackError``."""
+def fingerprint(entries: Dict[str, Dict[str, Any]], ids: List[str],
+                words: Optional[Dict[str, Any]] = None) -> str:
+    """The fingerprint of the code facts of ``ids`` (in the order given)
+    and of ``words`` (a line's own fields): ``sha256:`` and the first 16
+    hex digits of the hash of their canonical JSON. An id with no entry
+    raises ``KernelPackError``."""
     missing = [i for i in ids if i not in entries]
     if missing:
         raise KernelPackError(f"no catalogue entry for {', '.join(missing)}")
-    blob = json.dumps([[i, code_facts(entries[i])] for i in ids], sort_keys=True,
+    blob = json.dumps([[[i, code_facts(entries[i])] for i in ids], words], sort_keys=True,
                       separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _line_ids(part: str, line: Dict[str, Any]) -> List[str]:
-    """The ids whose facts a line is written against."""
+    """The ids whose facts a line is written against: a chain's formulas;
+    for any other line its own id and each neighbour it names (the
+    neighbour's ``difference`` states a fact about that neighbour)."""
     if part == "chains":
-        seen: List[str] = []
-        for step in line["steps"]:
-            if step["formula"] not in seen:
-                seen.append(step["formula"])
-        return seen
-    return [line["id"]]
+        named = [step["formula"] for step in line["steps"]]
+    else:
+        named = [line["id"]] + [n["id"] for n in line.get("not_to_be_confused_with") or []]
+    seen: List[str] = []
+    for i in named:
+        if i not in seen:
+            seen.append(i)
+    return seen
+
+
+def _words(line: Dict[str, Any]) -> Dict[str, Any]:
+    """A line's own words: every field but ``NOT_WORDS``."""
+    return {k: v for k, v in line.items() if k not in NOT_WORDS}
+
+
+def line_fingerprint(entries: Dict[str, Dict[str, Any]], part: str, line: Dict[str, Any]) -> str:
+    """What a line is stamped with: its words and the facts of the ids it names."""
+    return fingerprint(entries, _line_ids(part, line), _words(line))
 
 
 def _lines(pack: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
@@ -195,7 +222,7 @@ def problems(pack: Any, entries: Optional[Dict[str, Dict[str, Any]]] = None) -> 
     if kernel is None or kernel["kind"] != "kernel":
         return [f"kernel: {pack['kernel']!r} is not a discipline kernel"]
     owned = {"formulas": kernel["source"]["formulas"], "skills": kernel["source"]["skills"]}
-    kind_of = {"formulas": "formula", "knowledge": "knowledge", "skills": "skill"}
+    kind_of = KIND_OF
     for part in LINE_PARTS:
         ids = [line["id"] for line in pack[part]]
         dupes = sorted({i for i in ids if ids.count(i) > 1})
@@ -214,10 +241,12 @@ def problems(pack: Any, entries: Optional[Dict[str, Dict[str, Any]]] = None) -> 
                 found.append(f"{part}: a line for {', '.join(extra)}, which the kernel does not own")
         for line in pack[part]:
             for neighbour in line.get("not_to_be_confused_with") or []:
+                other = entries.get(neighbour["id"])
                 if neighbour["id"] == line["id"]:
                     found.append(f"{part}/{line['id']}: names itself as a neighbour")
-                elif neighbour["id"] not in entries:
-                    found.append(f"{part}/{line['id']}: neighbour {neighbour['id']!r} is not a catalogue entry")
+                elif other is None or other["kind"] != kind_of[part]:
+                    found.append(f"{part}/{line['id']}: neighbour {neighbour['id']!r} "
+                                 f"is not a catalogue {kind_of[part]}")
     chain_ids = [c["id"] for c in pack["chains"]]
     if len(set(chain_ids)) != len(chain_ids):
         found.append("chains: two chains share an id")
@@ -227,14 +256,16 @@ def problems(pack: Any, entries: Optional[Dict[str, Dict[str, Any]]] = None) -> 
 
 
 def stale(pack: Dict[str, Any], entries: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
-    """The lines whose fingerprint is not that of the code facts now (a
-    formula's inputs, units or ranges changed since the line was written),
-    each as ``part/id``. A stale line counts as not approved."""
+    """The lines whose fingerprint is not that of their words and named
+    code facts now (the line was edited, or an id it names changed its
+    facts in code, since it was stamped), each as ``part/id``. A line
+    naming an id the code no longer has is stale. A stale line counts as
+    not approved."""
     entries = entries if entries is not None else _entries()
     out = []
     for part, line in _lines(pack):
         ids = _line_ids(part, line)
-        if any(i not in entries for i in ids) or line["fingerprint"] != fingerprint(entries, ids):
+        if any(i not in entries for i in ids) or line["fingerprint"] != line_fingerprint(entries, part, line):
             out.append(f"{part}/{line['id']}")
     return out
 
@@ -284,6 +315,8 @@ def run_chain(chain: Dict[str, Any],
 def _agrees(written: float, computed: Any) -> bool:
     if not isinstance(computed, (int, float)) or isinstance(computed, bool):
         return False
+    if not math.isfinite(written):
+        return False
     if written == computed:
         return True
     if computed == 0 or not math.isfinite(computed):
@@ -315,7 +348,8 @@ def example_problems(chain: Dict[str, Any],
 
 def load(root: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """Every pack under ``root`` by kernel id, each checked against the
-    schema and its file name (``<kernel name>.json``). Raises
+    shipped schema (the one in ``packs_dir()``, whatever ``root`` holds)
+    and its file name (``<kernel name>.json``). Raises
     ``KernelPackError`` naming every fault; nothing is dropped quietly."""
     root = root or packs_dir()
     if not os.path.isdir(root):
@@ -347,28 +381,41 @@ def load(root: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
 
 def check(root: Optional[str] = None) -> List[str]:
     """Every fault of every shipped pack and every stale line, each as
-    ``<kernel>: ...``; empty when all agree with the code."""
+    ``<kernel>: ...``; empty when all agree with the code. A packs
+    directory that cannot be loaded, or holds no pack, is reported as a
+    fault (``packs: ...``), never raised and never passed."""
+    try:
+        packs = load(root)
+    except KernelPackError as exc:
+        return [f"packs: {p}" for p in str(exc).splitlines()]
+    if not packs:
+        return [f"packs: no kernel pack in {root or packs_dir()}"]
     entries = _entries()
     out: List[str] = []
-    for kernel, pack in load(root).items():
+    for kernel, pack in packs.items():
         found = problems(pack, entries)
         if not found:
             found = [p for chain in pack["chains"] for p in example_problems(chain, entries)]
-            found += [f"{line}: stale (its code facts changed; read it again and re-stamp)"
+            found += [f"{line}: stale (its words or the code facts it names changed since it was stamped; read it again and re-stamp)"
                       for line in stale(pack, entries)]
         out.extend(f"{kernel}: {p}" for p in found)
     return out
 
 
 def stamp(pack: Dict[str, Any], entries: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
-    """Give every line the fingerprint of its code facts now, in place. A
-    line whose fingerprint changes loses its ``approved``: it was approved
-    against facts that are no longer the code's. Returns ``part/id`` of
-    the lines changed."""
+    """Give every line the fingerprint of its words and named code facts
+    now, in place. A line whose fingerprint changes loses its
+    ``approved``: what was approved is no longer what the line says or
+    what the code says. Returns ``part/id`` of the lines changed. A pack
+    with any ``problems`` is not stamped: ``KernelPackError`` names every
+    one and the pack is left as it was."""
     entries = entries if entries is not None else _entries()
+    found = problems(pack, entries)
+    if found:
+        raise KernelPackError("\n".join(found))
     changed = []
     for part, line in _lines(pack):
-        now = fingerprint(entries, _line_ids(part, line))
+        now = line_fingerprint(entries, part, line)
         if line["fingerprint"] != now:
             line["fingerprint"] = now
             line["approved"] = False

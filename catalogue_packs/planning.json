@@ -4,7 +4,7 @@
   "formulas": [
     {
       "id": "formula:cash_flow",
-      "fingerprint": "sha256:4022c09934d1bd54",
+      "fingerprint": "sha256:6774856417111328",
       "approved": false,
       "purpose": "Contractor cash flow over a monthly value and cost series: the advance paid at the start and recovered pro rata, retention held monthly and released at the last month, payments lagged by whole months, net cash and the peak funding requirement.",
       "not_to_be_confused_with": [
@@ -16,7 +16,7 @@
     },
     {
       "id": "formula:cpm_network",
-      "fingerprint": "sha256:3d19777989a72c57",
+      "fingerprint": "sha256:a82d3d3d4e771316",
       "approved": false,
       "purpose": "Forward and backward pass over a whole activity network with its links and lags: early and late dates, total and free float of every activity, the project duration and the critical path.",
       "not_to_be_confused_with": [
@@ -28,7 +28,7 @@
     },
     {
       "id": "formula:crew_sizing",
-      "fingerprint": "sha256:36915f65d76e39a5",
+      "fingerprint": "sha256:c2e1ffeb64c9e258",
       "approved": false,
       "purpose": "Crews needed to put a quantity in place within a stated duration at a rate per crew-day, rounded up to whole crews, with crew-days, man-hours (crew-days times persons per crew times hours per day) and the duration the fielded crews give.",
       "not_to_be_confused_with": [
@@ -40,7 +40,7 @@
     },
     {
       "id": "formula:critical_path_float",
-      "fingerprint": "sha256:9eedac2ae956f3c4",
+      "fingerprint": "sha256:9114f735e1ba1c21",
       "approved": false,
       "purpose": "Total float of one activity from its early and late start and finish, and whether it is critical (zero or negative float). Free float is not computed here.",
       "not_to_be_confused_with": [
@@ -52,7 +52,7 @@
     },
     {
       "id": "formula:crew_days_from_rate_row",
-      "fingerprint": "sha256:a6674368e4672259",
+      "fingerprint": "sha256:250ab09a731ea88b",
       "approved": false,
       "purpose": "Crew-days for a quantity of one finishing-trade work item at the planner template row's rate (quantity over rate per crew-day); the quantity's unit is converted into the row's unit when it is the same kind and refused, naming both, when it is not. The template is unverified, never a project figure.",
       "not_to_be_confused_with": [
@@ -68,7 +68,7 @@
     },
     {
       "id": "formula:electrical_installation_sequence",
-      "fingerprint": "sha256:a954d439887fe810",
+      "fingerprint": "sha256:8c393c21e6f34c6a",
       "approved": false,
       "purpose": "Durations of the electrical installation stages, first fix to handover, from the floor area, the number of floors and the output rate the caller gives for each stage.",
       "not_to_be_confused_with": [
@@ -80,7 +80,7 @@
     },
     {
       "id": "formula:floor_cycle_progress",
-      "fingerprint": "sha256:27f2178728bf3840",
+      "fingerprint": "sha256:8f9aef9b83a98536",
       "approved": false,
       "purpose": "Weighted progress across floor or zone elements: completed over total units per element, and the sum of each element's progress times its weight over the sum of the weights.",
       "not_to_be_confused_with": [
@@ -92,7 +92,7 @@
     },
     {
       "id": "formula:manhours_scurve",
-      "fingerprint": "sha256:2c8aafdec64f40e6",
+      "fingerprint": "sha256:00c06fa9c7da2b1d",
       "approved": false,
       "purpose": "Planned and actual man-hours to date as percentages of the planned total, and a productivity index: the planned percentage divided by the actual percentage.",
       "not_to_be_confused_with": [
@@ -104,7 +104,7 @@
     },
     {
       "id": "formula:monte_carlo_cost_percentiles",
-      "fingerprint": "sha256:9e2aa3f9e07bd91c",
+      "fingerprint": "sha256:8718828fbdbd0634",
       "approved": false,
       "purpose": "Seeded Monte Carlo of a total cost made of items with a three-point range each (low, most likely, high; triangular): the P50, P80 and P90 totals, the mean, and the chance of coming in within the most likely total.",
       "not_to_be_confused_with": [
@@ -116,7 +116,7 @@
     },
     {
       "id": "formula:monte_carlo_percentiles",
-      "fingerprint": "sha256:dda795dc48e9e10a",
+      "fingerprint": "sha256:d8f28be4b8d47152",
       "approved": false,
       "purpose": "Seeded Monte Carlo of a total duration made of items with a three-point range each (low, most likely, high; triangular): the P50, P80 and P90 totals, the mean, and the chance of finishing within the most likely total.",
       "not_to_be_confused_with": [
@@ -128,7 +128,7 @@
     },
     {
       "id": "formula:plumbing_flow_programme",
-      "fingerprint": "sha256:066c780ecdf8b7db",
+      "fingerprint": "sha256:14255fa81182802d",
       "approved": false,
       "purpose": "Durations of the plumbing stages from material submittal to handover for a floor area and number of floors, with fixed days for submittal, procurement, water connection and handover and area-driven days for the fixing and testing stages.",
       "not_to_be_confused_with": [
@@ -140,14 +140,10 @@
     },
     {
       "id": "formula:productivity_benchmark",
-      "fingerprint": "sha256:a7323964a82eea93",
+      "fingerprint": "sha256:06e2678bed5b7162",
       "approved": false,
       "purpose": "Looks up an indicative rate per crew-day, its unit and crew for a finishing-trade work item in an owner-supplied planner template marked unverified; a work item not in the template gets no rate.",
       "not_to_be_confused_with": [
-        {
-          "id": "knowledge:productivity_norms_planning_defaults",
-          "difference": "the planning norms give low, typical and high daily outputs per tradesman from published references; productivity_benchmark gives one rate per crew-day from the planner template."
-        },
         {
           "id": "formula:crew_days_from_rate_row",
           "difference": "crew_days_from_rate_row also takes the quantity and its unit, checks the unit against the row's and gives the crew-days; productivity_benchmark only reads the row's rate."
@@ -156,7 +152,7 @@
     },
     {
       "id": "formula:productivity_manpower_duration",
-      "fingerprint": "sha256:46d2846e1b4200eb",
+      "fingerprint": "sha256:0dafada3d3fa3ea1",
       "approved": false,
       "purpose": "Links quantity, productivity, manpower, man-hours and duration: works out every output whose paired inputs are given and refuses when no pair is given; it never supplies a rate itself.",
       "not_to_be_confused_with": [
@@ -168,7 +164,7 @@
     },
     {
       "id": "formula:progress_kpi",
-      "fingerprint": "sha256:449d500750ca73c3",
+      "fingerprint": "sha256:0c01a0b185068e63",
       "approved": false,
       "purpose": "Planned and actual progress to date as percent of the planned total and their variance, with a progress-based SPI (actual over planned to date); without a planned total it gives the SPI only.",
       "not_to_be_confused_with": [
@@ -180,7 +176,7 @@
     },
     {
       "id": "formula:progress_quantity",
-      "fingerprint": "sha256:27157b14884b32e4",
+      "fingerprint": "sha256:493b15e10908892d",
       "approved": false,
       "purpose": "Planned and actual percent complete of one quantity, the quantity remaining and the progress variance in percent.",
       "not_to_be_confused_with": [
@@ -192,7 +188,7 @@
     },
     {
       "id": "formula:supervision_ratio",
-      "fingerprint": "sha256:be3c18fade30a091",
+      "fingerprint": "sha256:1b6fc68d2088d72a",
       "approved": false,
       "purpose": "Supervisors per discipline and in total, HSE officers and document controllers for given quantities of concrete, steel, piping, cable and area, at the quantity per supervisor the caller gives.",
       "not_to_be_confused_with": [
@@ -206,40 +202,30 @@
   "knowledge": [
     {
       "id": "knowledge:productivity_norms_planning_defaults",
-      "fingerprint": "sha256:e6a10a6d429c5071",
+      "fingerprint": "sha256:a3eeec69cd9b2dba",
       "approved": false,
       "purpose": "Published low, typical and high daily outputs per tradesman for common building trades and material planning norms, to cite and state when the project's own outputs are not given; the contractor's measured outputs override them.",
-      "not_to_be_confused_with": [
-        {
-          "id": "formula:productivity_benchmark",
-          "difference": "productivity_benchmark is one rate per crew-day from the planner template, not a range per tradesman."
-        }
-      ]
+      "not_to_be_confused_with": []
     },
     {
       "id": "knowledge:evm_thresholds_and_traffic_lights",
-      "fingerprint": "sha256:b0631bbd43078f46",
+      "fingerprint": "sha256:dd7555523c6649ba",
       "approved": false,
       "purpose": "How to read CPI and SPI: their definitions, the traffic-light bands, TCPI and forecasting, to read after a performance index has been computed.",
-      "not_to_be_confused_with": [
-        {
-          "id": "formula:progress_kpi",
-          "difference": "progress_kpi's SPI is progress-based (quantities to date), not the earned-value SPI these bands are written for."
-        }
-      ]
+      "not_to_be_confused_with": []
     }
   ],
   "skills": [
     {
       "id": "skill:planning.l1",
-      "fingerprint": "sha256:33fb9998e796108c",
+      "fingerprint": "sha256:1f574ed76dcadee4",
       "approved": false,
       "purpose": "Lookahead constraint sweep: for each activity of the next weeks and each tracked constraint, cleared with evidence, open with an owner and date, or UNKNOWN; it never moves a date.",
       "not_to_be_confused_with": []
     },
     {
       "id": "skill:planning.l2",
-      "fingerprint": "sha256:3fb9da1601676310",
+      "fingerprint": "sha256:66d8bc5aa08b6250",
       "approved": false,
       "purpose": "Critical path and delay impact: early and late dates, total and free float, the critical path and the days of a stated delay absorbed by float, from the activities and logic supplied; it assumes no durations or logic.",
       "not_to_be_confused_with": [
@@ -251,21 +237,21 @@
     },
     {
       "id": "skill:planning.l3",
-      "fingerprint": "sha256:274f9e0929deddfd",
+      "fingerprint": "sha256:7a03c9a0ae5f059c",
       "approved": false,
       "purpose": "Schedule narrative for the owner: what moved and by how much from the programme comparison, and why with a record for each cause; no cause without a record.",
       "not_to_be_confused_with": []
     },
     {
       "id": "skill:planning.l4",
-      "fingerprint": "sha256:658a6bd9bebd71bf",
+      "fingerprint": "sha256:7f1cdfac8d74eda4",
       "approved": false,
       "purpose": "Meeting minutes to actions: recorded decisions, actions with owner and date or UNKNOWN and their source line, and previous actions carried forward; it invents no owner or date.",
       "not_to_be_confused_with": []
     },
     {
       "id": "skill:planning.l5",
-      "fingerprint": "sha256:4b26e8de8c91e181",
+      "fingerprint": "sha256:a00e75f9bc011ca0",
       "approved": false,
       "purpose": "Binding-constraint analysis: where work waits most from the records, the one constraint that bounds the work front and the response class (exploit, elevate, subordinate); it estimates no rates.",
       "not_to_be_confused_with": [
@@ -279,7 +265,7 @@
   "chains": [
     {
       "id": "benchmark_rate_to_crews",
-      "fingerprint": "sha256:b002f82e463f18aa",
+      "fingerprint": "sha256:6919a3a867cdf820",
       "approved": false,
       "purpose": "Crews for a finishing quantity: take the template's rate per crew-day for the work item, then size the crews for the quantity and the stated duration.",
       "steps": [
@@ -340,7 +326,7 @@
     },
     {
       "id": "crew_plan_to_productivity",
-      "fingerprint": "sha256:502a13fe0be00084",
+      "fingerprint": "sha256:f3e2070fc938960e",
       "approved": false,
       "purpose": "The productivity per man-hour a crew plan implies: size the crews, then divide the quantity by the plan's man-hours.",
       "steps": [
