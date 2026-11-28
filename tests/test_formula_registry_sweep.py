@@ -52,6 +52,9 @@ _NUM_GUESS = [
     ("cohesion", 25.0), ("safety", 2.0), ("fos", 2.0),
 ]
 _STR_GUESS = [
+    # a planner template row and the unit it is measured in: checked before
+    # the bare "unit" guess below, which would name a volume
+    ("work_item", "blockwork walls"), ("quantity_unit", "m2"),
     ("type", "standard"), ("grade", "C30"), ("class", "A"), ("unit", "m3"),
     ("category", "general"), ("status", "open"), ("discipline", "CIV"),
     ("code", "GEN"), ("name", "item"), ("method", "default"),

@@ -1,0 +1,57 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:productivity.blockwork_walls",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Production rate: blockwork walls",
+    "described_as": "Planner template production rate for blockwork walls: 12 m2 per crew-day (mason + helper (1:1)), on a 10-hour crew-day. The template does not state what the ra…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "productivity.blockwork_walls"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Production rate: blockwork walls",
+      "entry": "productivity.blockwork_walls",
+      "provenance": {
+        "source": "benchmark, unverified, owner-supplied planner template (GCC residential tower, finishing trades)",
+        "project": null,
+        "confidence": "benchmark",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "productivity.blockwork_walls",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "benchmark, unverified, owner-supplied planner template (GCC residential tower, finishing trades)",
+        "project": null,
+        "confidence": "benchmark",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "The planner template's production rate for blockwork walls: its unit, crew and what the row does not cover. Unverified template, not a project figure.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:crew_days_from_rate_row",
+        "difference": "This entry states the row; crew_days_from_rate_row turns a quantity in the row's unit into crew-days at this row's rate."
+      }
+    ]
+  }
+}
