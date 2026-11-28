@@ -31,16 +31,46 @@ def _chain(pack, chain_id):
     return next(c for c in pack["chains"] if c["id"] == chain_id)
 
 
-def test_shipped_packs_agree_with_the_code():
-    assert kp.check() == []
+def _write_root(tmp_path, packs):
+    """A packs directory of its own: the shipped schema and ``packs``."""
+    with open(os.path.join(kp.packs_dir(), kp.SCHEMA_FILE), encoding="utf-8") as f:
+        (tmp_path / kp.SCHEMA_FILE).write_text(f.read(), encoding="utf-8")
+    for pack in packs:
+        name = pack["kernel"].split(":", 1)[1] + ".json"
+        (tmp_path / name).write_text(json.dumps(pack), encoding="utf-8")
+    return str(tmp_path)
 
 
-def test_shipped_pack_has_every_formula_and_skill_of_its_kernel(shipped, entries):
+@pytest.mark.parametrize("root", ["shipped", "copy"])
+def test_shipped_packs_agree_with_the_code(tmp_path, shipped, root):
+    where = None if root == "shipped" else _write_root(tmp_path, shipped.values())
+    assert kp.check(where) == []
+
+
+@pytest.mark.parametrize("break_it,expect", [
+    ("stale", "formulas/formula:rebar_weight: stale"),
+    ("example", "chains/slab_concrete_to_price/example: step"),
+])
+def test_check_reports_a_stale_line_and_a_wrong_figure(tmp_path, pack, break_it, expect):
+    # both are faults ``problems`` does not see: only ``check`` finds them
+    if break_it == "stale":
+        line = next(x for x in pack["formulas"] if x["id"] == "formula:rebar_weight")
+        line["fingerprint"] = "sha256:" + "0" * 16
+    else:
+        figure = _chain(pack, "slab_concrete_to_price")["example"][-1]
+        figure["value"] = round(figure["value"] * 1.5, 2)
+    assert kp.problems(pack) == []
+    found = kp.check(_write_root(tmp_path, [pack]))
+    assert any(p.startswith("kernel:quantities: " + expect) for p in found), found
+
+
+@pytest.mark.parametrize("part", ["formulas", "skills"])
+def test_shipped_pack_has_every_formula_and_skill_of_its_kernel(shipped, entries, part):
     for kernel, pack in shipped.items():
-        owned = entries[kernel]["source"]
-        assert sorted(line["id"] for line in pack["formulas"]) == sorted(owned["formulas"])
-        assert sorted(line["id"] for line in pack["skills"]) == sorted(owned["skills"])
-        assert not any(line["approved"] for _part, line in kp._lines(pack)), "nothing is approved yet"
+        owned = entries[kernel]["source"][part]
+        assert owned, f"{kernel} owns no {part}"
+        assert sorted(line["id"] for line in pack[part]) == sorted(owned)
+        assert not any(line["approved"] for line in pack[part]), "nothing is approved yet"
 
 
 @pytest.mark.parametrize("part,index", [("formulas", 0), ("formulas", 5), ("skills", 1)])
@@ -71,9 +101,32 @@ def test_every_id_a_pack_names_must_exist(pack, entries, where):
     assert any(ghost in p for p in kp.problems(pack, entries))
 
 
-def test_the_shipped_pack_has_no_problem_before_it_is_broken(pack, entries):
-    # the negative of every refusal above: the unbroken input passes
+@pytest.mark.parametrize("harmless", ["none", "lines_reordered", "all_approved"])
+def test_the_shipped_pack_has_no_problem_before_it_is_broken(pack, entries, harmless):
+    # the negative of every refusal above: the unbroken input passes, and so
+    # do changes no check is about (line order, the approved flag)
+    if harmless == "lines_reordered":
+        for part in kp.LINE_PARTS:
+            pack[part].reverse()
+    elif harmless == "all_approved":
+        for _part, line in kp._lines(pack):
+            line["approved"] = True
     assert kp.problems(pack, entries) == []
+
+
+@pytest.mark.parametrize("break_it,where", [
+    ("extra_key", "pack: Additional properties"),
+    ("approved_word", "formulas/0/approved: "),
+])
+def test_a_pack_off_the_schema_gives_the_schema_fault_first(pack, entries, break_it, where):
+    # these faults are invisible to every later check: only the schema sees them
+    if break_it == "extra_key":
+        pack["notes"] = "free text"
+    else:
+        pack["formulas"][0]["approved"] = "yes"
+    found = kp.problems(pack, entries)
+    assert found and all(p == q for p, q in zip(found, kp.schema_problems(pack)))
+    assert any(p.startswith(where) for p in found), found
 
 
 @pytest.mark.parametrize("chain_id,step,name,output", [
@@ -124,11 +177,31 @@ def test_an_input_the_formula_does_not_take_is_refused(pack, entries, chain_id, 
     assert any(f"takes no input {bad_input!r}" in p for p in kp._chain_problems(chain, entries))
 
 
-def test_a_chain_of_one_formula_is_refused_by_the_schema(pack):
-    for chain in pack["chains"]:
-        chain["steps"] = chain["steps"][:1]
+@pytest.mark.parametrize("chain_id", ["slab_concrete_to_price", "slab_rebar_to_price"])
+def test_a_chain_of_one_formula_is_refused_by_the_schema(pack, chain_id):
+    index = [c["id"] for c in pack["chains"]].index(chain_id)
+    pack["chains"][index]["steps"] = pack["chains"][index]["steps"][:1]
     found = kp.schema_problems(pack)
-    assert len([p for p in found if p.startswith("chains/")]) == 2, found
+    assert [p for p in found if p.startswith("chains/")] and         all(p.startswith(f"chains/{index}/steps") for p in found if p.startswith("chains/")), found
+
+
+@pytest.mark.parametrize("ghost", ["formula:no_such_formula_x", "knowledge:"])
+def test_running_a_chain_with_a_step_that_is_not_a_formula_raises(pack, entries, ghost):
+    if ghost == "knowledge:":
+        ghost = pack["knowledge"][0]["id"]                     # exists, but not a formula
+    chain = copy.deepcopy(_chain(pack, "slab_rebar_to_price"))
+    chain["steps"][0]["formula"] = ghost
+    with pytest.raises(kp.KernelPackError, match=r"steps/0: .* is not a catalogue formula"):
+        kp.run_chain(chain, entries)
+
+
+@pytest.mark.parametrize("kind", ["missing", "a_file"])
+def test_load_without_a_packs_directory_raises(tmp_path, kind):
+    root = tmp_path / "nowhere"
+    if kind == "a_file":
+        root.write_text("{}", encoding="utf-8")
+    with pytest.raises(kp.KernelPackError, match="no kernel packs directory"):
+        kp.load(str(root))
 
 
 @pytest.mark.parametrize("chain_id", ["slab_concrete_to_price", "slab_rebar_to_price"])
