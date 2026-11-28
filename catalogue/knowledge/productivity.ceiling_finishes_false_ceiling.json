@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: ceiling finishes false ceiling",
-    "described_as": "Planner template production rate for ceiling finishes false ceiling: 40 m2 per crew-day (mason), on a 10-hour crew-day. Does not cover: demolition, removal or…",
+    "described_as": "Planner template production rate for ceiling finishes false ceiling: 40 m2 per crew-day (mason), on a 10-hour crew-day. The template does not state what the ra…",
     "inputs": [],
     "outputs": [],
     "call": {

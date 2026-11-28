@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: blockwork walls",
-    "described_as": "Planner template production rate for blockwork walls: 12 m2 per crew-day (mason + helper (1:1)), on a 10-hour crew-day. Does not cover: demolition, removal or…",
+    "described_as": "Planner template production rate for blockwork walls: 12 m2 per crew-day (mason + helper (1:1)), on a 10-hour crew-day. The template does not state what the ra…",
     "inputs": [],
     "outputs": [],
     "call": {

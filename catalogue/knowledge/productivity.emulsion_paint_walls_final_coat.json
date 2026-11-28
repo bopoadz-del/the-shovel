@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: emulsion paint walls final coat",
-    "described_as": "Planner template production rate for emulsion paint walls final coat: 45 m2 per crew-day (painter), on a 10-hour crew-day. Does not cover: demolition, removal…",
+    "described_as": "Planner template production rate for emulsion paint walls final coat: 45 m2 per crew-day (painter), on a 10-hour crew-day. The template does not state what the…",
     "inputs": [],
     "outputs": [],
     "call": {

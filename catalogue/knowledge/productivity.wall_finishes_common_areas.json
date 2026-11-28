@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: wall finishes common areas",
-    "described_as": "Planner template production rate for wall finishes common areas: 40 m2 per crew-day (mason), on a 10-hour crew-day. Does not cover: demolition, removal or stri…",
+    "described_as": "Planner template production rate for wall finishes common areas: 40 m2 per crew-day (mason), on a 10-hour crew-day. The template does not state what the rate e…",
     "inputs": [],
     "outputs": [],
     "call": {

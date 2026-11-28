@@ -4,7 +4,7 @@
   "kind": "formula",
   "facts": {
     "name": "Production duration from a planner template row",
-    "described_as": "Crew-days to do a quantity of one finishing-trade work item at the planner template's rate: duration = quantity / rate per crew-day. The work item is one template row, named exactly as the row is (see the productivity.* knowledge entries for each row's unit, crew and what it does not cover). The quantity's unit must be the row's unit; a quantity in another unit is refused, naming both. Unverified owner-supplied template: never a project figure.",
+    "described_as": "Crew-days to do a quantity of one finishing-trade work item at the planner template's rate: duration = quantity / rate per crew-day. The work item is one template row, named exactly as the row is (see the productivity.* knowledge entries for each row's unit and crew). The quantity's unit must be the row's unit; a quantity in another unit is refused, naming both. Unverified owner-supplied template: never a project figure.",
     "inputs": [
       {
         "name": "work_item",
@@ -22,7 +22,7 @@
         "unit": "",
         "range": [
           0.0,
-          null
+          1000000000000.0
         ],
         "required": true,
         "basis": "",

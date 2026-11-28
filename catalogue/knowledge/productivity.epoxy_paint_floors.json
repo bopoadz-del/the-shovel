@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: epoxy paint floors",
-    "described_as": "Planner template production rate for epoxy paint floors: 40 m2 per crew-day (painter), on a 10-hour crew-day. Does not cover: demolition, removal or stripping…",
+    "described_as": "Planner template production rate for epoxy paint floors: 40 m2 per crew-day (painter), on a 10-hour crew-day. The template does not state what the rate exclude…",
     "inputs": [],
     "outputs": [],
     "call": {

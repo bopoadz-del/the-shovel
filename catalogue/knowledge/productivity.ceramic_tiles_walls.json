@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: ceramic tiles walls",
-    "described_as": "Planner template production rate for ceramic tiles walls: 40 m2 per crew-day (mason (tiler)), on a 10-hour crew-day. Does not cover: demolition, removal or str…",
+    "described_as": "Planner template production rate for ceramic tiles walls: 40 m2 per crew-day (mason (tiler)), on a 10-hour crew-day. The template does not state what the rate…",
     "inputs": [],
     "outputs": [],
     "call": {

@@ -1,5 +1,5 @@
 """The planner template's production rates as catalogue entries: one
-knowledge entry per work item (its unit, crew and what it does not cover),
+knowledge entry per work item (its unit and crew),
 the figures held once in the shipped knowledge base, and a duration
 calculator that takes the row the caller names and checks the quantity's
 unit against that row's. No row is chosen from a description."""
@@ -35,7 +35,8 @@ def test_duration_is_quantity_over_the_named_rows_rate(item, qty, unit, want_day
     assert res["crew"] == want_crew
     assert res["unit"] == "m2"
     assert "unverified" in res["provenance"]
-    assert any("demolition" in line for line in res["not_covered"])
+    # The template states no exclusions; none are invented for it.
+    assert res["not_covered"] == pb._EXCLUSIONS_NOT_STATED
 
 
 @pytest.mark.parametrize("item,qty,unit", [
@@ -87,7 +88,7 @@ def test_every_row_is_one_knowledge_entry_with_a_catalogue_file(index):
         assert doc["facts"]["cites"]["entry"] == rid
         stated = doc["facts"]["described_as"]
         assert item in stated and unit in stated
-        assert rate > 0 and crew and not_covered
+        assert rate > 0 and crew and not_covered == ()
 
 
 @pytest.mark.parametrize("item,rate", [("blockwork walls", 12.0), ("ceiling plaster", 20.0)])
@@ -163,3 +164,30 @@ def test_more_than_one_row_named_is_refused(item):
     out = _run(item, 600, "m2")
     assert out["status"] != "success", out
     assert "one planner template row" in str(out.get("error"))
+
+
+def _shipped_ids_with_prefix(prefix):
+    path = os.path.join(_ROOT, "app", "knowledge", "construction_kb.json")
+    data = json.load(open(path, encoding="utf-8"))
+    return {e["id"] for e in data["entries"] if str(e.get("id", "")).startswith(prefix)}
+
+
+@pytest.mark.parametrize("prefix", ["productivity.", "productivity.blockwork"])
+def test_every_template_row_in_the_knowledge_base_is_named_by_the_table(prefix):
+    shipped = _shipped_ids_with_prefix(prefix)
+    assert shipped, prefix
+    assert shipped <= set(pb.ROW_IDS)
+    assert len(pb.ROW_IDS) == len(set(pb.ROW_IDS))
+    assert len(pb.template_rows()) == len(_shipped_ids_with_prefix("productivity."))
+
+
+@pytest.mark.parametrize("stated,want", [
+    ((), "not stated by the planner template"),
+    (("supply only",), ["supply only"]),
+])
+def test_exclusions_are_the_sources_own_or_said_not_stated(monkeypatch, stated, want):
+    rows = [(item, unit, crew, rate, flag, stated if i == 0 else ())
+            for i, (item, unit, crew, rate, flag, _nc) in enumerate(pb.template_rows())]
+    monkeypatch.setattr(pb, "template_rows", lambda: rows)
+    out = pb.crew_days_from_rate_row(rows[0][0], 24, rows[0][1])
+    assert out["not_covered"] == want

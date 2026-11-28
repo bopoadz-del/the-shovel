@@ -4,7 +4,7 @@
   "kind": "knowledge",
   "facts": {
     "name": "Production rate: ceiling plaster",
-    "described_as": "Planner template production rate for ceiling plaster: 20 m2 per crew-day (mason), on a 10-hour crew-day. Does not cover: demolition, removal or stripping of ex…",
+    "described_as": "Planner template production rate for ceiling plaster: 20 m2 per crew-day (mason), on a 10-hour crew-day. The template does not state what the rate excludes. Un…",
     "inputs": [],
     "outputs": [],
     "call": {

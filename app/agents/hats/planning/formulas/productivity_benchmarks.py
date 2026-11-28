@@ -20,7 +20,7 @@ _BENCHMARK_PROVENANCE = (
 
 #: The planner template's rows live in the shipped knowledge base, one entry
 #: per work item (``productivity.<work item>``), each with its unit, crew,
-#: rate, flag and what it does not cover. That is the one copy of the
+#: rate, flag and the exclusions the template states, if any. That is the one copy of the
 #: figures; the catalogue offers each row as its own entry. This tuple names
 #: the rows the planner template holds, in the template's order.
 ROW_IDS = (
@@ -57,6 +57,10 @@ def template_rows() -> list:
         out.append((t["work_item"], t["unit"], t["crew"], float(t["rate_per_crew_day"]),
                     t.get("flag") or "", tuple(t.get("not_covered") or ())))
     return out
+
+
+#: What a row reports when its source states no exclusions.
+_EXCLUSIONS_NOT_STATED = "not stated by the planner template"
 
 
 def _normalise_work_item(text: str) -> str:
@@ -151,8 +155,8 @@ def _same_unit(a: Any, b: Any) -> bool:
         "Crew-days to do a quantity of one finishing-trade work item at the "
         "planner template's rate: duration = quantity / rate per crew-day. "
         "The work item is one template row, named exactly as the row is "
-        "(see the productivity.* knowledge entries for each row's unit, crew "
-        "and what it does not cover). The quantity's unit must be the row's "
+        "(see the productivity.* knowledge entries for each row's unit and "
+        "crew). The quantity's unit must be the row's "
         "unit; a quantity in another unit is refused, naming both. Unverified "
         "owner-supplied template: never a project figure."
     ),
@@ -197,6 +201,8 @@ def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str)
         "unit": unit,
         "crew": crew,
         "rate_per_crew_day": rate,
-        "not_covered": list(not_covered),
+        # Only exclusions the source states; when it states none, that is
+        # said, never an empty list a reader could take as "covers all".
+        "not_covered": list(not_covered) or _EXCLUSIONS_NOT_STATED,
         "provenance": _BENCHMARK_PROVENANCE,
     }
