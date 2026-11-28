@@ -34,7 +34,7 @@ CHAMBERS = [
 ]
 
 
-# -- measure_totals: the one place a bill result's sums are made -------------
+# -- _measure_totals: the one place a bill result's sums are made -------------
 
 @pytest.mark.parametrize("rows,measure,want_sum,want_unit,want_by_unit,without", [
     (KERBS, "quantity", 162.0, "m", {"m": 162.0}, []),
@@ -43,7 +43,7 @@ CHAMBERS = [
     (CHAMBERS, "amount", 9550.0, None, None, []),
 ])
 def test_measure_totals(rows, measure, want_sum, want_unit, want_by_unit, without):
-    out = agg.measure_totals(rows, measure)
+    out = agg._measure_totals(rows, measure)
     assert out["sum"] == want_sum
     assert out["unit"] == want_unit
     assert out["sum_by_unit"] == want_by_unit
@@ -51,12 +51,13 @@ def test_measure_totals(rows, measure, want_sum, want_unit, want_by_unit, withou
 
 
 @pytest.mark.parametrize("measure", ["rate", "", "Quantity "])
-def test_measure_totals_refuses_a_measure_it_does_not_know(measure):
-    with pytest.raises(ValueError):
-        agg.measure_totals(KERBS, measure)
+def test_aggregate_refuses_a_measure_it_does_not_know(measure):
+    """The one check of the measure is aggregate's; the totals trust it."""
+    with pytest.raises(ValueError, match="measure must be one of"):
+        agg.aggregate(KERBS, terms="kerb", measure=measure)
 
 
-# -- other_measure_totals: no list repeated, no 0 read off nothing ------------
+# -- _other_measure_totals: no list repeated, no 0 read off nothing ------------
 
 @pytest.mark.parametrize("rows,measure,want_sum,want_unit,missing", [
     # some rows carry the figure: the total is theirs, the rest are counted
@@ -72,7 +73,7 @@ def test_measure_totals_refuses_a_measure_it_does_not_know(measure):
     ([], "quantity", 0.0, "", 0),
 ])
 def test_other_measure_totals(rows, measure, want_sum, want_unit, missing):
-    out = agg.other_measure_totals(rows, measure)
+    out = agg._other_measure_totals(rows, measure)
     assert out["measure"] == measure
     assert out["sum"] == want_sum
     assert out["unit"] == want_unit
@@ -101,7 +102,7 @@ def test_aggregate_totals_the_other_measure_over_the_same_rows(
         assert row["quantity"] == agg.SheetRow.figure(src, "quantity")
         assert row["amount"] == agg.SheetRow.figure(src, "amount")
     # the asked measure is unchanged by the second total
-    assert out["sum"] == agg.measure_totals(rows, measure)["sum"]
+    assert out["sum"] == agg._measure_totals(rows, measure)["sum"]
     # the other total is ahead of the rows, so a cut that keeps the head keeps it
     keys = list(out)
     assert keys.index("other_measure") < keys.index("rows")
@@ -167,3 +168,14 @@ def test_bill_rows_statement_ignores_an_other_measure_it_cannot_read(bad):
     sts = bill_rows_statement(body)
     assert [(s.basis, s.what, s.figure) for s in sts] == [
         ("count", "quantity", 2.0), ("sum", "quantity", 150.0)]
+
+
+@pytest.mark.parametrize("junk", ["not a bill", ["a", "list"], 7])
+def test_bill_rows_statement_skips_an_entry_that_is_not_a_bill(junk):
+    """A malformed entry beside a good bill states nothing; the good bill is
+    stated whole, both measures."""
+    body = _bill(KERBS[:2], "kerb", "quantity")
+    body["bills"].insert(0, junk)
+    sts = bill_rows_statement(body)
+    assert [(s.basis, s.what, s.figure) for s in sts] == [
+        ("count", "quantity", 2.0), ("sum", "quantity", 150.0), ("sum", "amount", 4650.0)]

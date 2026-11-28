@@ -1015,7 +1015,7 @@ def aggregate(
 
     Every listed row carries both its quantity and its amount, and
     ``other_measure`` totals the measure not asked over the same rows
-    (:func:`measure_totals`, the same summing), so a question that wants both
+    (:func:`_measure_totals`, the same summing), so a question that wants both
     is answered by one call. The rows are selected for ``measure`` alone.
 
     With ``ask``, a size, a depth band, a bill or a dimension the ask totals
@@ -1083,7 +1083,7 @@ def aggregate(
         MEASURE_QUANTITY: row.figure(MEASURE_QUANTITY),
         MEASURE_AMOUNT: row.figure(MEASURE_AMOUNT),
     } for row in selected]
-    asked = measure_totals(selected, measure)
+    asked = _measure_totals(selected, measure)
     other = next(m for m in MEASURES if m != measure)
     return {
         "measure": measure,
@@ -1110,35 +1110,34 @@ def aggregate(
         "without_page": without_page,
         # Before the rows: past the tool-result cap the message keeps the
         # head of the result, and the other measure's total must survive it.
-        "other_measure": other_measure_totals(selected, other),
+        "other_measure": _other_measure_totals(selected, other),
         "rows": used,
     }
 
 
-def other_measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
-    """:func:`measure_totals` of the measure not asked, over the rows already
+def _other_measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
+    """:func:`_measure_totals` of the measure not asked, over the rows already
     selected. Each row already carries its own figure (or none), so the rows
     without it are counted, not listed again. When no row carries the figure
     there is no total to state: ``sum`` is ``None``, never a 0 read off
     nothing."""
-    totals = measure_totals(rows, measure)
+    totals = _measure_totals(rows, measure)
     missing = len(totals.pop("without_figure"))
     if rows and missing == len(rows):
         totals.update(sum=None, unit=None)
     return {"measure": measure, **totals, "rows_without_figure": missing}
 
 
-def measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
+def _measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
     """The total of ``measure`` over ``rows``, the one place a bill result's
     sums are made.
 
     Quantities are summed per unit (adding cubic metres to metres is not a
     total): a single unit gives ``sum`` and ``unit``, mixed units give
     ``sum_by_unit`` and no single ``sum``. Amounts are one sum. A row without
-    the figure adds nothing and is named in ``without_figure``.
+    the figure adds nothing and is named in ``without_figure``. ``measure``
+    is one :func:`aggregate` has already checked.
     """
-    if measure not in MEASURES:
-        raise ValueError(f"measure must be one of {MEASURES}")
     sums: dict[str, float] = {}
     without = []
     for row in rows:
