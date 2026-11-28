@@ -83,3 +83,11 @@ def test_a_refused_text_input_still_fails_the_calculation():
                                                  "thickness_m": "0.1"})
     inner = env.get("result", env)
     assert env.get("status") != "success" or (isinstance(inner, dict) and inner.get("error")), env
+
+
+@pytest.mark.parametrize("length", ["1e400", "-1e400"])
+def test_an_exponent_past_float_range_is_refused_naming_the_input(length):
+    env = cf.run_calculation("concrete_volume", {"length_m": length, "width_m": "2",
+                                                 "thickness_m": "0.1", "waste_factor": 0})
+    assert env.get("status") != "success", env
+    assert "length" in str(env.get("error") or env).lower()
