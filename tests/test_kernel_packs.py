@@ -190,6 +190,15 @@ def test_a_chain_of_one_formula_is_refused_by_the_schema(pack, chain_id):
     assert [p for p in found if p.startswith("chains/")] and         all(p.startswith(f"chains/{index}/steps") for p in found if p.startswith("chains/")), found
 
 
+@pytest.mark.parametrize("keep", [0, 1])
+def test_a_pack_with_fewer_than_two_chains_is_refused(pack, entries, keep):
+    # the design: two or three worked chains per pack; the shipped two pass
+    assert kp.schema_problems(pack) == []
+    pack["chains"] = pack["chains"][:keep]
+    found = kp.problems(pack, entries)
+    assert any(p.startswith("chains: ") for p in found), found
+
+
 @pytest.mark.parametrize("ghost", ["formula:no_such_formula_x", "knowledge:"])
 def test_running_a_chain_with_a_step_that_is_not_a_formula_raises(pack, entries, ghost):
     if ghost == "knowledge:":

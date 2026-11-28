@@ -64,6 +64,6 @@
     "formulas": {"type": "array", "items": {"$ref": "#/definitions/line"}},
     "knowledge": {"type": "array", "items": {"$ref": "#/definitions/line"}},
     "skills": {"type": "array", "items": {"$ref": "#/definitions/line"}},
-    "chains": {"type": "array", "items": {"$ref": "#/definitions/chain"}}
+    "chains": {"type": "array", "minItems": 2, "items": {"$ref": "#/definitions/chain"}}
   }
 }
