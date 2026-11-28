@@ -51,7 +51,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Reads the text of one document by id or file name, up to a fixed length: truncated says whether that length cut the end, partial_read whether only part of a scan was read. A name equal to a file name (ignoring case) is taken without asking, even when several share it; a name partly matching several returns an error naming them all. A result longer than one tool message comes in windows.",
+    "purpose": "Reads one document's text by id or file name, up to a fixed length: truncated says that length cut the end, partial_read that only part of a scan was read. An exact file name (ignoring case) is taken unasked; if several share it, a general-knowledge one included, one is read and the others cannot be reached by name; a partial match on several is an error naming them. Long results come in windows.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",

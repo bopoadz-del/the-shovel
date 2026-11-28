@@ -44,7 +44,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Lists the documents this project holds, newest first: the total count, then up to limit entries (default 100, at most 200), each with file name, type and size. It reads no document's text and returns no document id; fetch_document accepts the file name it gives.",
+    "purpose": "Lists the documents this project holds, newest first: the total count, then up to limit entries (default 100, at most 200), each with file name, type and size. It reads no document's text and returns no document id; two entries can carry the same file name.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",

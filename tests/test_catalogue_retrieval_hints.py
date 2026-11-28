@@ -480,3 +480,53 @@ def test_an_approved_hint_with_no_neighbour_leaves_when_not_a_gap(name):
     assert out["when_to_use"] == f"Works out {name}."
     assert out["when_not"] == ""
     assert "when_not" in out["gaps"] and "when_to_use" not in out["gaps"]
+
+
+# -- the same file name on several documents ----------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_docs, library_docs, read", [
+    # a re-upload: two project documents of one name
+    ([("old", "BOQ.xlsx"), ("new", "BOQ.xlsx")], [], "new"),
+    # a project file and a general-knowledge library file of one name
+    ([("mine", "Concrete Spec.pdf")], [("lib1", "concrete spec.PDF")], "lib1"),
+    ([("mine", "Concrete Spec.pdf"), ("other", "roof.pdf")], [("lib1", "Concrete Spec.pdf"), ("lib2", "x.pdf")], "lib1"),
+], ids=["re-upload", "library-twin", "library-twin-among-others"])
+async def test_fetch_by_a_name_several_documents_share_reads_one_and_the_others_are_out_of_reach(
+        fetchable, monkeypatch, project_docs, library_docs, read):
+    from app.agents.base.tools import handle_fetch_document
+    from app.core import projects
+    from app.core.rag import retriever
+
+    held = {"p": [{"id": i, "original_name": n, "file_path": i} for i, n in project_docs],
+            "lib": [{"id": i, "original_name": n, "file_path": i} for i, n in library_docs]}
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: held.get(pid, []))
+    monkeypatch.setattr(retriever, "_general_knowledge_project_ids", lambda: ["lib"] if library_docs else [])
+    sharing = [(i, n) for i, n in project_docs + library_docs if n.lower() == project_docs[0][1].lower()]
+    assert len(sharing) >= 2
+    got = set()
+    for _id, name in sharing:
+        out = await handle_fetch_document(_call("fetch_document", {"filename": name}))
+        assert out["ok"] is True and "error" not in out["result"]
+        got.add(out["result"]["document_id"])
+    # Whichever spelling of the shared name is asked, the same one document is read.
+    assert got == {read}
+    assert "one is read and the others cannot be reached by name" in _hints("fetch_document")["purpose"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("names", [["BOQ.xlsx", "BOQ.xlsx"], ["a.pdf", "A.pdf", "b.pdf"]])
+async def test_document_list_can_carry_one_file_name_twice_and_gives_no_id_to_tell_them_apart(monkeypatch, names):
+    from app.agents.base.tools import handle_list_project_documents
+    from app.core import projects
+
+    docs = [{"id": f"d{i}", "original_name": n, "doc_type": "x", "size": i + 1} for i, n in enumerate(names)]
+    monkeypatch.setattr(projects, "_master_corpus_source", lambda pid: None)
+    monkeypatch.setattr(projects, "list_documents", lambda pid, limit=100, **_kw: docs[:limit])
+    monkeypatch.setattr(projects, "count_documents", lambda pid: len(docs))
+    out = await handle_list_project_documents(_call("list_project_documents", {}))
+    listed = out["result"]["documents"]
+    assert [entry["filename"] for entry in listed] == names
+    assert all(set(entry) == {"filename", "doc_type", "size_bytes"} for entry in listed)
+    purpose = _hints("list_project_documents")["purpose"]
+    assert "two entries can carry the same file name" in purpose and "accepts the file name" not in purpose
