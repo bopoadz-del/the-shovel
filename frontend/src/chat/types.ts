@@ -70,4 +70,9 @@ export interface ChatMessage {
   /** The answer contract's rule 5: supporting text moved out of the lead,
    *  word for word. Shown under the answer, folded, never deleted. */
   details?: string
+  /** The final working sheet of a catalogue-path turn (SSE 'end'); shown
+   *  folded under the answer by ShowWorking, never merged into its text. */
+  sheet?: unknown
+  /** trace/1 ending of a catalogue-path turn: answer | asked_input | ceiling. */
+  ended?: string
 }
