@@ -14,7 +14,7 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
     """Build DeepSeek-style tool definitions.
 
     Includes one tool per allowed block, plus synthetic tools:
-    - ``remember_fact`` — always available.
+    - ``remember_fact`` — always available, save on a driven turn and the turns it starts.
     - ``search_project_documents`` — only when ``project_id`` is set.
     - ``delegate_to_agent`` — only when ``self.can_delegate``.
     """
@@ -657,6 +657,13 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
             },
         })
 
+    from app.agents import driver
+    from app.agents.core import tool_registry
+
+    if driver.enabled():
+        # A driven turn, or a turn it started: what the driver path does not
+        # offer (each tool's own declaration) is not offered here either.
+        tools = [t for t in tools if not tool_registry.driver_refusal((t.get("function") or {}).get("name"))]
     return tools
 
 
@@ -740,6 +747,14 @@ async def _run_tool_call(
     from app.agents.core import tool_registry as _tool_registry
 
     _spec = _tool_registry.get(name)
+    from app.agents import driver as _driver
+
+    _not_offered = _tool_registry.driver_refusal(name) if _driver.enabled() else ""
+    if _not_offered:
+        # A driven turn, or a turn it started (delegate_to_agent runs its
+        # sub-agent on this path): the tool's own declaration refuses it here
+        # as on the driver loop, and nothing runs.
+        return {"name": name, "ok": False, "result": {"status": "error", "error": _not_offered}}
     if _spec is not None:
         return await _spec.handler(_tool_registry.ToolCall(
             agent=self, name=name, args=args, tool_call=tool_call, api_key=api_key,

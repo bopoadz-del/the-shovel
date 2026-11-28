@@ -1703,7 +1703,12 @@ def figure_provenance(
         for rec in ev.records:
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
-        told_vals = {n for rec in ev.records if rec.kind == "user_note" for n in _nums(rec.text)}
+        from app.core import llm_memory
+
+        # A told note's figures, read as every told check reads them
+        # (llm_memory.note_figures): its values, never its key names.
+        told_vals = {n for rec in ev.records if rec.kind == "user_note"
+                     for n in llm_memory.note_figures(json.loads(rec.text))}
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         # B11: the words of the ask a cited sentence must name when a chunk
         # carries competing figures in the same unit. Derived only on the

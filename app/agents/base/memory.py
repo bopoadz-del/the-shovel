@@ -30,7 +30,8 @@ NOTES_ARE = (
     "Your memory holds YOUR NOTES for this project: how to work in it (paths that "
     "worked, which tool answers which kind of question, what to ask the user first) "
     "and what the user tells you to remember about the project, in a note whose "
-    f'object carries "{llm_memory.TOLD_BY_USER}": true. A note is not verified until '
+    f'object carries "{llm_memory.TOLD_BY_USER}": true and holds only what the user wrote '
+    "(a figure the user did not write is refused). A note is not verified until "
     "the owner keeps it; an answer that uses a note says it comes from the notes and "
     "whether it is verified. A figure from a note the user told you is shown as told "
     "by the user, never as verified; calculated figures always come from the tools at "
@@ -99,6 +100,15 @@ def _label(written_at: str, review: str, told: bool) -> str:
     return f"Your own note, written {written_at[:10]}, {by}, {llm_memory.verified_words(review)}."
 
 
+def users_words(call: ToolCall) -> list:
+    """What the user wrote in the conversation the call belongs to: the
+    turn's message and the user's earlier messages. A note marked as told
+    by the user is checked against these, never against the model's text."""
+    said = [call.user_message] + [m.get("content") for m in (call.history or [])
+                                  if isinstance(m, dict) and m.get("role") == "user"]
+    return [t for t in said if isinstance(t, str) and t]
+
+
 @tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={
     "name": Param(label="note name", kind="text", required=True),
     "data": Param(label="note as JSON", kind="text", required=True),
@@ -107,7 +117,7 @@ async def handle_write_memory(call: ToolCall) -> dict:
     name, turn = call.args.get("name"), turn_of(call)
     try:
         done = await off_loop(llm_memory.write_retrying, call.project_id or "", name,
-                              call.args.get("data"), turn)
+                              call.args.get("data"), turn, users_words(call))
     except llm_memory.MemoryRefused as exc:
         return _refused(call, "write", str(exc), name)
     return {"name": call.name, "ok": True,

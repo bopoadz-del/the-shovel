@@ -84,13 +84,13 @@ def _tool_results(seen):
     return out
 
 
-def _run_one(client, monkeypatch, h, pid, name, args):
-    """One turn: the model makes one call, then answers. Returns the result
-    it received for that call."""
+def _run_one(client, monkeypatch, h, pid, name, args, message="go"):
+    """One turn: the user sends ``message``, the model makes one call, then
+    answers. Returns the result it received for that call."""
     seen = []
     _script(monkeypatch, [{"content": "", "tool_calls": [_call(name, args, "m1")]},
                           {"content": "Done."}], seen)
-    r = _turn(client, h, pid)
+    r = _turn(client, h, pid, message)
     assert r.status_code == 200, r.text
     return _tool_results(seen)["m1"], seen
 
@@ -594,13 +594,13 @@ def test_a_write_that_loses_the_insert_race_replaces_the_winners_note(monkeypatc
     real = llm_memory.write
     calls = []
 
-    def racing(project_id, name, data, turn=""):
+    def racing(project_id, name, data, turn="", told_from=()):
         calls.append(turn)
         if len(calls) == 1:
             # Another writer stores the same new note first; this insert collides.
             real(project_id, name, json.dumps(first), "other#1")
             raise IntegrityError("INSERT", {}, Exception("duplicate key"))
-        return real(project_id, name, data, turn)
+        return real(project_id, name, data, turn, told_from)
 
     monkeypatch.setattr(llm_memory, "write", racing)
     done = llm_memory.write_retrying(pid, "race", json.dumps(second), "mine#2")
@@ -1065,7 +1065,8 @@ def test_a_new_conversation_starts_with_the_notes_index_not_their_content(client
     h = _user(client, "idx")
     pid = _project(client, h, f"Index {name}")
     other = _project(client, h, f"Index other {name}")
-    _run_one(client, monkeypatch, h, pid, "write_memory", {"name": name, "data": json.dumps(data)})
+    _run_one(client, monkeypatch, h, pid, "write_memory", {"name": name, "data": json.dumps(data)},
+             message=f"Remember this: {data}")
     seen = []
     _script(monkeypatch, [{"content": "ok"}], seen)
     assert _turn(client, h, pid).status_code == 200
@@ -1231,7 +1232,7 @@ def test_a_read_returns_the_owners_mark_and_the_told_mark_in_its_label(decision,
 
     from app.agents.base import memory
     pid = f"mem-lbl-{uuid.uuid4().hex[:8]}"
-    llm_memory.write(pid, "n", json.dumps(data), "c#1")
+    llm_memory.write(pid, "n", json.dumps(data), "c#1", told_from=[f"Remember this: {data}"])
     if decision:
         note = llm_memory.listing(pid, with_review=True)[0]
         llm_memory.review(pid, "n", decision, note["version"])
@@ -1262,7 +1263,9 @@ def test_every_sentence_about_notes_is_the_one_text(pid_tag):
 def test_a_figure_the_user_told_comes_back_with_its_source_in_a_new_chat(client, monkeypatch, told, shown, other):
     h = _user(client, "told")
     pid = _project(client, h, f"Recall {uuid.uuid4().hex[:6]}")
-    _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "site", "data": json.dumps(told)})
+    done, _ = _run_one(client, monkeypatch, h, pid, "write_memory", {"name": "site", "data": json.dumps(told)},
+                       message=f"Remember this: {told}")
+    assert done["ok"] is True, done
     seen = []
     answer = f"Per my notes (told by you, not verified by the owner), it is {shown}."
     _script(monkeypatch, [{"content": "", "tool_calls": [_call("read_memory", {"name": "site"}, "m1")]},
@@ -1302,7 +1305,8 @@ def test_a_figure_in_a_note_not_marked_as_told_is_still_withheld(client, monkeyp
 def test_a_told_figure_is_kept_when_the_turns_only_tool_failed(client, monkeypatch, failing_tool, figure):
     h = _user(client, "toldfail")
     pid = _project(client, h, f"Recall fail {uuid.uuid4().hex[:6]}")
-    llm_memory.write(pid, "site", json.dumps({"kerb_m": int(figure), "told_by_user": True}), "c#1")
+    llm_memory.write(pid, "site", json.dumps({"kerb_m": int(figure), "told_by_user": True}), "c#1",
+                     told_from=[f"The kerb is {figure} m long."])
     seen = []
     _script(monkeypatch, [{"content": "", "tool_calls": [_call(failing_tool, {}, "f1"),
                                                          _call("read_memory", {"name": "site"}, "m1")]},
@@ -1386,3 +1390,319 @@ def test_told_note_records_take_the_reads_own_mark(result, records):
 def test_told_note_records_skip_what_is_not_a_read_result(content):
     from app.agents.citation_provenance import _told_note_records
     assert _told_note_records(content) == []
+
+
+# -- 144c8c0 verdicts: the told mark is checked against the user's words;
+# -- told figures are compared by value; a delegated turn keeps the flag ----
+
+@pytest.mark.parametrize("ask,note,answer,figure", [
+    ("What is the pile capacity?", {"pile_capacity": "1850 kN"}, "The pile capacity is 1850 kN.", "1850 kN"),
+    ("How much concrete for the raft?", {"raft_concrete": "412 m3"}, "The raft needs 412 m3.", "412 m3"),
+])
+def test_a_told_note_holding_a_figure_the_user_never_wrote_is_refused_and_backs_nothing(
+        client, monkeypatch, ask, note, answer, figure):
+    h = _user(client, "launder")
+    pid = _project(client, h, f"Launder {uuid.uuid4().hex[:6]}")
+    seen = []
+    told = {**note, "told_by_user": True}
+    _script(monkeypatch, [
+        {"content": "", "tool_calls": [_call("write_memory", {"name": "site", "data": json.dumps(told)}, "w1")]},
+        {"content": "", "tool_calls": [_call("read_memory", {"name": "site"}, "r1")]},
+        {"content": answer}], seen)
+    r = _turn(client, h, pid, ask)
+    assert r.status_code == 200, r.text
+    got = _tool_results(seen)
+    assert got["w1"]["ok"] is False
+    assert f"the user did not write {figure.split()[0]} in this conversation" in got["w1"]["result"]["error"]
+    assert got["r1"]["ok"] is False
+    with pytest.raises(llm_memory.MemoryRefused):
+        llm_memory.read(pid, "site")
+    assert figure not in _streamed_text(r)
+    assert all(e.get("source") != "user_note" for e in _end_event(r).get("provenance") or [])
+
+
+@pytest.mark.parametrize("said,note,untold", [
+    ("The slab is 200 mm thick over 50 m2.", {"slab_mm": 200, "area_m2": 50, "volume_m3": 10}, "10"),
+    ("The slab is 250 mm thick over 80 m2.", {"slab_mm": 250, "area_m2": 80, "volume_m3": 20}, "20"),
+])
+def test_a_figure_worked_out_from_what_the_user_said_is_refused_in_a_told_note(said, note, untold):
+    pid = f"mem-calc-{uuid.uuid4().hex[:8]}"
+    with pytest.raises(llm_memory.MemoryRefused) as exc:
+        llm_memory.write(pid, "slab", json.dumps({**note, "told_by_user": True}), "c#1", told_from=[said])
+    assert f"did not write {untold} in this conversation; nothing was written" in str(exc.value)
+    with pytest.raises(llm_memory.MemoryRefused):
+        llm_memory.read(pid, "slab")
+    # The same note without the worked-out figure is the user's, and is kept.
+    given = {k: v for k, v in note.items() if k != "volume_m3"}
+    llm_memory.write(pid, "slab", json.dumps({**given, "told_by_user": True}), "c#1", told_from=[said])
+    assert llm_memory.read(pid, "slab")["data"] == {**given, "told_by_user": True}
+
+
+@pytest.mark.parametrize("said,note", [
+    ("The pile capacity is 1,850 kN.", {"pile_kN": 1850}),
+    ("Groundwater is at 4.10 m.", {"gwl_m": 4.1}),
+])
+def test_a_told_figure_the_user_wrote_another_way_is_accepted(said, note):
+    pid = f"mem-way-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "site", json.dumps({**note, "told_by_user": True}), "c#1", told_from=[said])
+    assert llm_memory.read(pid, "site")["data"] == {**note, "told_by_user": True}
+
+
+@pytest.mark.parametrize("note", [{"volume_m3": 10}, {"told_by_user": False, "rate": 412}])
+def test_a_note_not_marked_as_told_is_not_checked_against_the_users_words(note):
+    pid = f"mem-plain-{uuid.uuid4().hex[:8]}"
+    assert llm_memory.write(pid, "n", json.dumps(note), "c#1", told_from=[])["created"] is True
+    assert llm_memory.read(pid, "n")["data"] == note
+
+
+@pytest.mark.parametrize("first_said,first,second_said,second,untold", [
+    ("The datum is +2.35 m and we work Saturday to Thursday.",
+     {"datum": "+2.35 m", "week": "Saturday to Thursday"},
+     "Correction: we work Sunday to Thursday.",
+     {"datum": "+2.35 m", "week": "Sunday to Thursday"}, "2.35"),
+    ("The slab is 275 mm.", {"slab_mm": 275},
+     "Also the cover is 40 mm.", {"slab_mm": 275, "cover_mm": 40}, "275"),
+])
+def test_a_rewrite_keeps_the_figures_its_earlier_told_version_was_checked_on(first_said, first, second_said,
+                                                                            second, untold):
+    mark = {"told_by_user": True}
+    pid = f"mem-fix-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(pid, "site", json.dumps({**first, **mark}), "c#1", told_from=[first_said])
+    llm_memory.write(pid, "site", json.dumps({**second, **mark}), "d#1", told_from=[second_said])
+    assert llm_memory.read(pid, "site")["data"] == {**second, **mark}
+    # An earlier version not marked as told backs nothing: its figures were never checked.
+    plain = f"mem-fix-plain-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(plain, "site", json.dumps(first), "c#1", told_from=[first_said])
+    with pytest.raises(llm_memory.MemoryRefused) as exc:
+        llm_memory.write(plain, "site", json.dumps({**second, **mark}), "d#1", told_from=[second_said])
+    assert f"did not write {untold} in this conversation" in str(exc.value)
+    assert llm_memory.read(plain, "site")["data"] == first
+    # A version the owner discarded backs nothing either.
+    gone = f"mem-fix-gone-{uuid.uuid4().hex[:8]}"
+    llm_memory.write(gone, "site", json.dumps({**first, **mark}), "c#1", told_from=[first_said])
+    llm_memory.review(gone, "site", "discard", llm_memory.listing(gone, with_review=True)[0]["version"])
+    with pytest.raises(llm_memory.MemoryRefused) as exc:
+        llm_memory.write(gone, "site", json.dumps({**second, **mark}), "d#1", told_from=[second_said])
+    assert f"did not write {untold} in this conversation" in str(exc.value)
+
+
+@pytest.mark.parametrize("figure", ["3.10", "418"])
+def test_only_the_users_own_words_back_a_told_figure(figure):
+    import asyncio
+
+    from app.agents.base import memory
+    from app.agents.core.tool_registry import ToolCall
+
+    data = json.dumps({"level": f"{figure} m", "told_by_user": True})
+    words = f"The level is {figure} m."
+
+    def write(pid, **said):
+        return asyncio.run(memory.handle_write_memory(ToolCall(
+            agent=None, name="write_memory", args={"name": "n", "data": data}, project_id=pid,
+            conversation_id="conv-a", **said)))
+
+    said_by_model = write(f"mem-who-{uuid.uuid4().hex[:8]}", history=[{"role": "assistant", "content": words}])
+    assert said_by_model["ok"] is False
+    assert f"did not write {figure.rstrip('0').rstrip('.')} " in said_by_model["result"]["error"]
+    assert write(f"mem-who-{uuid.uuid4().hex[:8]}", history=[{"role": "user", "content": words}])["ok"] is True
+    assert write(f"mem-who-{uuid.uuid4().hex[:8]}", user_message=words)["ok"] is True
+
+
+@pytest.mark.parametrize("history,message,words", [
+    ([{"role": "user", "content": "datum +2.35"}, {"role": "assistant", "content": "3.10"}], "go",
+     ["go", "datum +2.35"]),
+    ([{"role": "user", "content": ["not text"]}, "junk", {"role": "user", "content": ""}], None, []),
+])
+def test_users_words_are_the_users_messages_only(history, message, words):
+    from app.agents.base import memory
+    from app.agents.core.tool_registry import ToolCall
+
+    call = ToolCall(agent=None, name="write_memory", args={}, user_message=message, history=history)
+    assert memory.users_words(call) == words
+
+
+@pytest.mark.parametrize("text,values", [
+    ("1,850 kN and 4.10 m", {1850.0, 4.1}),
+    ("level 2 at +2.35, 2026-11-28", {2.0, 2.35, 2026.0, 11.0, 28.0}),
+    ("412 m3 in bay B2", {412.0}),
+    ("", set()),
+    (None, set()),
+])
+def test_figure_values_reads_figures_by_value(text, values):
+    assert llm_memory.figure_values(text) == values
+
+
+@pytest.mark.parametrize("data,values", [
+    ({"level_2": "basement", "ok": True, "told_by_user": True}, set()),
+    ({"a": [4.1, "1,850 kN"], "b": {"c": 7}}, {4.1, 1850.0, 7.0}),
+    (10 ** 400, {float("inf")}),
+    (None, set()),
+])
+def test_note_figures_reads_values_never_key_names(data, values):
+    assert llm_memory.note_figures(data) == values
+
+
+@pytest.mark.parametrize("value,said,before,untold", [
+    ({"a": 10, "told_by_user": True}, ["10"], None, []),
+    ({"a": 10, "told_by_user": True}, ["11"], None, [10.0]),
+    ({"a": 10, "b": 3, "told_by_user": True}, ["3"], {"a": "10", "told_by_user": True}, []),
+    ({"a": 10, "told_by_user": True}, [], {"a": 10}, [10.0]),
+    ({"a": 10}, [], None, []),
+])
+def test_untold_figures_names_what_the_user_did_not_write(value, said, before, untold):
+    assert llm_memory.untold_figures(value, said, before) == untold
+
+
+@pytest.mark.parametrize("key,figure", [("level_250", "250"), ("zone_418", "418")])
+def test_a_figure_only_in_a_told_notes_key_name_is_still_withheld(client, monkeypatch, key, figure):
+    h = _user(client, "keyname")
+    pid = _project(client, h, f"Key {uuid.uuid4().hex[:6]}")
+    llm_memory.write(pid, "site", json.dumps({key: "north side", "told_by_user": True}), "c#1")
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call("read_memory", {"name": "site"}, "m1")]},
+                          {"content": f"It is {figure} m."}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert f"{figure} m" not in _streamed_text(r)
+    assert all(e.get("source") != "user_note" for e in _end_event(r).get("provenance") or [])
+
+
+@pytest.mark.parametrize("stored,said,answer,other", [
+    (4.1, "Groundwater is at 4.10 m.", "Your notes say the groundwater is at 4.10 m.", "5.20 m"),
+    (1850, "The pile capacity is 1,850 kN.", "Your notes say the pile capacity is 1,850 kN.", "1,900 kN"),
+])
+def test_a_told_figure_is_kept_by_value_when_the_turns_only_tool_failed(client, monkeypatch, failing_tool,
+                                                                        stored, said, answer, other):
+    h = _user(client, "toldval")
+    pid = _project(client, h, f"Told value {uuid.uuid4().hex[:6]}")
+    llm_memory.write(pid, "site", json.dumps({"value": stored, "told_by_user": True}), "c#1", told_from=[said])
+    calls = [_call(failing_tool, {}, "f1"), _call("read_memory", {"name": "site"}, "m1")]
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": calls}, {"content": answer}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert answer in _streamed_text(r)
+    # Negative: a figure the note does not hold is still cut.
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": calls}, {"content": f"Your notes say {other}."}], seen)
+    r = _turn(client, h, pid)
+    assert other not in _streamed_text(r)
+
+
+@pytest.mark.parametrize("said,answer,other", [
+    ("The kerb is 4.1 m.", "So the kerb is 4.10 m.", "So the kerb is 4.20 m."),
+    ("Use 12500 kN.", "So 12,500 kN it is.", "So 12,600 kN it is."),
+])
+def test_the_users_own_figure_written_another_way_is_kept_when_the_turns_only_tool_failed(
+        client, monkeypatch, failing_tool, said, answer, other):
+    h = _user(client, "userval")
+    pid = _project(client, h, f"User value {uuid.uuid4().hex[:6]}")
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call(failing_tool, {}, "f1")]},
+                          {"content": answer}], seen)
+    r = _turn(client, h, pid, said)
+    assert r.status_code == 200, r.text
+    assert answer in _streamed_text(r)
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call(failing_tool, {}, "f1")]},
+                          {"content": other}], seen)
+    r = _turn(client, h, pid, said)
+    assert other not in _streamed_text(r)
+
+
+def _two_agents():
+    from app.agents.runtime import AGENT_REGISTRY
+    from app.core.privileges import caller_may_use_agent
+
+    return sorted(n for n, a in AGENT_REGISTRY.items() if caller_may_use_agent(a))[:2]
+
+
+@pytest.mark.parametrize("pick", [0, 1])
+def test_a_turn_the_driver_path_delegates_to_neither_offers_nor_runs_the_facts_tool(client, monkeypatch, pick):
+    from app.agents.runtime import get_agent
+    from app.core import agent_memory
+
+    stored = []
+    monkeypatch.setattr(agent_memory, "set_agent_fact", lambda *a, **k: stored.append(a))
+    target = _two_agents()[pick]
+    sub = get_agent(target)
+    inside = {}
+
+    async def chat(message, api_key=None, project_id=None, _depth=0, _call_stack=None, **_):
+        # The delegated turn, as its own path builds it: the tools it would
+        # offer and what a facts call would do there.
+        inside["tools"] = [t["function"]["name"] for t in sub.tool_definitions(project_id)]
+        inside["call"] = await sub._run_tool_call(
+            _call("remember_fact", {"key": "datum", "value": "+2.35 m"}, "s1"),
+            project_id=project_id, _depth=_depth)
+        return {"answer": "noted", "status": "success"}
+
+    monkeypatch.setattr(sub, "chat", chat)
+    h = _user(client, "deleg")
+    pid = _project(client, h, f"Delegate {uuid.uuid4().hex[:6]}")
+    seen = []
+    _script(monkeypatch, [
+        {"content": "", "tool_calls": [_call("delegate_to_agent", {"agent_name": target, "message": "keep it"}, "d1")]},
+        {"content": "Done."}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert _tool_results(seen)["d1"]["ok"] is True
+    assert inside["tools"] and "remember_fact" not in inside["tools"]
+    assert inside["call"]["ok"] is False
+    assert inside["call"]["result"]["error"].endswith("Use write_memory instead.")
+    assert stored == []
+
+
+@pytest.mark.parametrize("pick", [0, 1])
+def test_the_facts_tool_stays_on_a_turn_that_is_not_driven_and_goes_on_one_that_is(client, monkeypatch, pick):
+    import asyncio
+    import contextvars
+
+    from app.agents import driver
+    from app.agents.runtime import get_agent
+    from app.core import agent_memory
+
+    stored = []
+    monkeypatch.setattr(agent_memory, "set_agent_fact", lambda *a, **k: stored.append(a))
+    sub = get_agent(_two_agents()[pick])
+    pid = f"mem-plainpath-{uuid.uuid4().hex[:8]}"
+    call = _call("remember_fact", {"key": "datum", "value": "+2.35 m"}, "s1")
+
+    def run():
+        names = [t["function"]["name"] for t in sub.tool_definitions(pid)]
+        return names, asyncio.run(sub._run_tool_call(call, project_id=pid))
+
+    names, got = contextvars.copy_context().run(run)
+    assert "remember_fact" in names and got["ok"] is True and len(stored) == 1
+
+    def driven():
+        driver.mark_request({driver.REQUEST_HEADER: "on"})
+        return run()
+
+    names, got = contextvars.copy_context().run(driven)
+    assert "remember_fact" not in names and got["ok"] is False and len(stored) == 1
+
+
+@pytest.mark.parametrize("answer", ["I will keep these 2 facts in my notes instead.", "I found 3 items to note."])
+def test_a_refused_facts_call_is_not_a_failed_tool_and_the_answer_stays_whole(client, monkeypatch, answer):
+    from app.core import agent_memory
+
+    monkeypatch.setattr(agent_memory, "set_agent_fact", lambda *a, **k: None)
+    h = _user(client, "refusedok")
+    pid = _project(client, h, f"Refused {uuid.uuid4().hex[:6]}")
+    seen = []
+    _script(monkeypatch, [
+        {"content": "", "tool_calls": [_call("remember_fact", {"key": "k", "value": "v"}, "m1")]},
+        {"content": answer}], seen)
+    r = _turn(client, h, pid)
+    assert r.status_code == 200, r.text
+    assert _streamed_text(r).strip() == answer
+    assert (_end_event(r).get("exit_check") or {}).get("figures_removed", []) == []
+
+
+def test_every_tool_named_instead_is_one_the_driver_path_offers():
+    from app.agents.core import tool_registry
+
+    tool_registry.load()
+    named = {s.driver_instead for s in tool_registry._TOOLS.values() if s.driver_instead}
+    assert named and named <= set(tool_registry.driver_tools())

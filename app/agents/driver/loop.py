@@ -15,7 +15,7 @@ from app.agents.core.computed_answer import has_words
 from app.agents.core import tool_registry
 from app.agents.core.tool_registry import is_notes
 from app.agents.driver import catalogue, context, llm, render, routes, sheet, sources, tools, trace_record, trace_store
-from app.core import turn_progress
+from app.core import llm_memory, turn_progress
 from app.core.llm_memory import nested_deeper_than
 from app.core.offload import off_loop
 
@@ -25,7 +25,6 @@ _LOG = logging.getLogger(__name__)
 #: sentence's closing mark, or at a line break (list items, table rows).
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n")
 _HEADING = re.compile(r"^\s*#{1,6}\s+\S")
-_NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 
 #: How much of one tool result the model is given.
 _TOOL_RESULT_CHARS = 20000
@@ -360,9 +359,11 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
     model_answered = False
     failed: List[tuple] = []  # (tool, its own error) of every run that failed
     succeeded = False  # any tool run this turn came back ok
-    user_numbers = set(_NUMBER.findall(user_message or ""))
-    # Figures of notes read back this turn that the note's own record marks
-    # as told by the user: the user's numbers too, from an earlier chat.
+    # The user's figures, by value (llm_memory.figure_values), and the
+    # figures of notes read back this turn that the note's own record marks
+    # as told by the user (checked against the user's words when written):
+    # the user's figures too, from an earlier chat.
+    user_numbers = llm_memory.figure_values(user_message or "")
     told_numbers: set = set()
     evidence: List[Dict[str, Any]] = []  # tool results, whole, for the exit check
     exports: List[Dict[str, Any]] = []
@@ -416,7 +417,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 return None
             sent.append(piece)
             return {"type": "token", "content": piece}
-        if model_text and failed and not succeeded and set(_NUMBER.findall(piece)) - user_numbers - told_numbers:
+        if model_text and failed and not succeeded and llm_memory.figure_values(piece) - user_numbers - told_numbers:
             # Every tool this turn failed: nothing backs a number the user
             # did not write, bare counts included ("0 items were found").
             if opening or not has_words("".join(sent)):
@@ -657,7 +658,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             yield {"type": "tool_result", "tool": name, "name": name, "ok": ok}
             told = result_of_call.get("result") if ok and is_notes(name) else None
             if isinstance(told, dict) and told.get("told_by_user") is True:
-                told_numbers.update(_NUMBER.findall(json.dumps(told.get("data"), ensure_ascii=False)))
+                told_numbers |= llm_memory.note_figures(told.get("data"))
             full = json.dumps(result_of_call, default=str)
             tool_msg = {"role": "tool", "name": name, "tool_call_id": call.get("id") or name}
             # The model gets at most _TOOL_RESULT_CHARS of a result; the exit

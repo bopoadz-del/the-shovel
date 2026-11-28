@@ -29,7 +29,7 @@ import os
 import re
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import func, inspect, select, update
 from sqlalchemy import text as sql_text
@@ -168,6 +168,61 @@ def told_by_user(data: Any) -> bool:
     return isinstance(data, dict) and data.get(TOLD_BY_USER) is True
 
 
+#: A figure: digits not glued to a letter before them, so the 3 of "m3"
+#: and the 2 of "B2" are part of a unit or a name, not figures.
+_FIGURE = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
+
+
+def figure_values(text: Any) -> Set[float]:
+    """The figures written in ``text``, by value: "1,850" and "1850" are one
+    figure, and so are "4.10" and "4.1". Every check that compares a told
+    figure with what was written reads figures through this one function."""
+    out: Set[float] = set()
+    for token in _FIGURE.findall(text if isinstance(text, str) else ""):
+        try:
+            out.add(float(token.replace(",", "")))
+        except ValueError:
+            continue  # "1,,": digits with no figure in them
+    return out
+
+
+def note_figures(data: Any) -> Set[float]:
+    """The figures a note's values hold, by value: a JSON number as it is,
+    figures written inside text as ``figure_values`` reads them. Key names
+    and true/false are not figures."""
+    if isinstance(data, bool):
+        return set()
+    if isinstance(data, (int, float)):
+        # Through its text, so a number past what a float holds reads as a
+        # written one does (inf), never as an error.
+        return {float(str(data))}
+    if isinstance(data, str):
+        return figure_values(data)
+    if isinstance(data, dict):
+        return set().union(*(note_figures(v) for v in data.values()))
+    if isinstance(data, list):
+        return set().union(*(note_figures(v) for v in data))
+    return set()
+
+
+def untold_figures(value: Any, told_from: Iterable[str], before: Any = None) -> List[float]:
+    """The figures of a note marked as told by the user that the user did
+    not write: not in ``told_from`` (the user's own words in the writing
+    conversation) and not in ``before``, the note's earlier version when
+    that version was itself told (each of its figures was checked when it
+    was written). Empty for a note not marked as told."""
+    if not told_by_user(value):
+        return []
+    backed = set().union(*(figure_values(t) for t in told_from))
+    if told_by_user(before):
+        backed |= note_figures(before)
+    return sorted(note_figures(value) - backed)
+
+
+def _shown(value: float) -> str:
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
 def parse_data(data: Any) -> Tuple[str, Any]:
     """``(json_text, value)`` for a document: a JSON object or array, given
     as such or as JSON text. Anything else is refused."""
@@ -206,15 +261,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, Any]:
+def write(project_id: str, name: Any, data: Any, turn: str = "",
+          told_from: Iterable[str] = ()) -> Dict[str, Any]:
     """Replace the whole document ``name`` of ``project_id`` in one
     transaction. Refused (nothing written) for a bad name, data that is not a
-    JSON object/array, a document over the size limit, or a new document past
-    the per-project count."""
+    JSON object/array, a document over the size limit, a new document past
+    the per-project count, or a note marked as told by the user holding a
+    figure the user did not write (``told_from``: the user's own words in
+    the conversation that writes it; see ``untold_figures``)."""
     if not project_id:
         raise MemoryRefused("memory needs a project; this conversation has none")
     stem = clean_name(name)
-    text, _value = parse_data(data)
+    text, value = parse_data(data)
+    told_from = [t for t in told_from if isinstance(t, str)]
     size = len(text.encode("utf-8"))
     if size > max_bytes():
         raise MemoryRefused(f"document is {size} bytes; the limit is {max_bytes()} bytes. "
@@ -230,6 +289,7 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
             # comes first: on SQLite it takes the one writer's lock, so the
             # count below is the count the insert is made against.
             revived = 0
+            _check_told(s, project_id, stem, value, told_from)
             done = _replace(s, project_id, stem, row)
             if not done:
                 _one_new_note_at_a_time(s, project_id)
@@ -252,6 +312,23 @@ def write(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, An
                     s.add(LlmMemory(project_id=project_id, name=stem, **row))
         created = not (done or revived)
     return {"name": stem, "bytes": size, "written_at": row["written_at"], "created": created}
+
+
+def _check_told(session: Any, project_id: str, stem: str, value: Any, told_from: List[str]) -> None:
+    """Refuse a note marked as told by the user that holds a figure the user
+    did not write. The mark is the model's word; this is the check on it,
+    against the note's earlier version in the model's sight (read in the
+    write's own transaction) and the user's words."""
+    if not told_by_user(value):
+        return
+    row = session.get(LlmMemory, (project_id, stem))
+    before = json.loads(row.data) if row is not None and row.review != DISCARDED else None
+    untold = untold_figures(value, told_from, before)
+    if untold:
+        raise MemoryRefused(
+            f"this note is marked {TOLD_BY_USER} but the user did not write "
+            f"{', '.join(_shown(v) for v in untold)} in this conversation; nothing was written. "
+            f"Keep in a told note only figures the user gave, or write it without the mark")
 
 
 def _replace(session: Any, project_id: str, stem: str, row: Dict[str, Any]) -> int:
@@ -283,13 +360,15 @@ def _one_new_note_at_a_time(session: Any, project_id: str) -> None:
                         {"project": f"llm_memory:{project_id}"})
 
 
-def write_retrying(project_id: str, name: Any, data: Any, turn: str = "") -> Dict[str, Any]:
+def write_retrying(project_id: str, name: Any, data: Any, turn: str = "",
+                   told_from: Iterable[str] = ()) -> Dict[str, Any]:
     """``write``; when a concurrent write inserted the same new document
     first, this one replaces it (the last whole document wins)."""
+    told_from = list(told_from)
     try:
-        return write(project_id, name, data, turn)
+        return write(project_id, name, data, turn, told_from)
     except IntegrityError:
-        return write(project_id, name, data, turn)
+        return write(project_id, name, data, turn, told_from)
 
 
 def verified_words(review: str) -> str:
