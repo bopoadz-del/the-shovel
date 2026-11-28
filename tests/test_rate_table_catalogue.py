@@ -6,6 +6,7 @@ unit against that row's. No row is chosen from a description."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import os
 
 import pytest
@@ -278,21 +279,43 @@ def test_a_quantity_without_a_written_unit_is_left_to_the_range_check(value, uni
     assert conv == [] and rejected == []
 
 
-def test_a_conversion_into_quantity_unit_is_reported():
+@pytest.mark.parametrize("written,unit,want", [
+    ("2000 sq ft", "m2", [("quantity", "sq ft", "m2")]),
+    ("10 ft2", "M2", [("quantity", "ft2", "M2")]),
+    ("600 m2", "m2", []),
+    ("1,200 m2", "M2", []),
+])
+def test_a_conversion_into_quantity_unit_is_reported(written, unit, want):
     _values, conv, _rej = fr.convert_written_units(
         "crew_days_from_rate_row",
-        {"work_item": "blockwork walls", "quantity": "2000 sq ft", "quantity_unit": "m2"})
-    assert [(c["parameter"], c["from_unit"], c["to_unit"]) for c in conv] == [("quantity", "sq ft", "m2")]
-    _values, conv, _rej = fr.convert_written_units(
-        "crew_days_from_rate_row",
-        {"work_item": "blockwork walls", "quantity": "600 m2", "quantity_unit": "m2"})
-    assert conv == []
+        {"work_item": "blockwork walls", "quantity": written, "quantity_unit": unit})
+    assert [(c["parameter"], c["from_unit"], c["to_unit"]) for c in conv] == want
 
 
-def test_the_sibling_unit_declaration_reaches_the_parameter_spec():
+@pytest.mark.parametrize("key,want", [("quantity", "quantity_unit"), ("work_item", ""), ("quantity_unit", "")])
+def test_the_sibling_unit_declaration_reaches_the_parameter_spec(key, want):
     params = fr.parameters(fr.get("crew_days_from_rate_row"))
-    assert params["quantity"].unit_from == "quantity_unit"
-    assert params["work_item"].unit_from == ""
+    assert params[key].unit_from == want
+
+
+@pytest.mark.parametrize("extra", ["not_in_signature", "quantity_per_floor"])
+def test_parameters_lists_only_inputs_the_function_takes(extra):
+    # A declared input the function does not take is not an input.
+    spec = fr.get("crew_days_from_rate_row")
+    odd = replace(spec, params={**spec.params, extra: fr.Param("-", unit_from="quantity_unit")})
+    params = fr.parameters(odd)
+    assert extra not in params
+    assert sorted(params) == ["quantity", "quantity_unit", "work_item"]
+
+
+@pytest.mark.parametrize("name,values", [
+    ("no_such_formula", {"quantity": "600 m2", "quantity_unit": "m2"}),
+    ("crew_days_from_rate_rows", {"quantity": "30 m3"}),
+])
+def test_an_unknown_formula_leaves_the_values_as_given(name, values):
+    out, conv, rejected = fr.convert_written_units(name, values)
+    assert out == values and out is not values
+    assert conv == [] and rejected == []
 
 
 @pytest.mark.parametrize("item,bare,want_days", [
