@@ -103,8 +103,12 @@ def _label(written_at: str, review: str, told: bool) -> str:
 def users_words(call: ToolCall) -> list:
     """What the user wrote in the conversation the call belongs to: the
     turn's message and the user's earlier messages. A note marked as told
-    by the user is checked against these, never against the model's text."""
-    said = [call.user_message] + [m.get("content") for m in (call.history or [])
+    by the user is checked against these, never against the model's text.
+    A delegated turn has none: the message it was started with is written
+    by the model that delegated, so there a told note may hold no figure."""
+    if call.depth:
+        return []
+    said =[call.user_message] + [m.get("content") for m in (call.history or [])
                                   if isinstance(m, dict) and m.get("role") == "user"]
     return [t for t in said if isinstance(t, str) and t]
 

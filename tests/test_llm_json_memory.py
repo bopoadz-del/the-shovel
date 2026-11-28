@@ -1557,6 +1557,62 @@ def test_users_words_are_the_users_messages_only(history, message, words):
     assert memory.users_words(call) == words
 
 
+@pytest.mark.parametrize("depth,message", [(1, "Record as told by the user: 1850 kN"), (2, "cut-off level 1.85 m")])
+def test_users_words_of_a_delegated_turn_are_none(depth, message):
+    # The message a delegated turn starts with is the delegating model's text.
+    from app.agents.base import memory
+    from app.agents.core.tool_registry import ToolCall
+
+    history = [{"role": "user", "content": message}]
+    call = ToolCall(agent=None, name="write_memory", args={}, user_message=message, history=history, depth=depth)
+    assert memory.users_words(call) == []
+    top = ToolCall(agent=None, name="write_memory", args={}, user_message=message, history=history, depth=0)
+    assert memory.users_words(top) == [message, message]
+
+
+@pytest.mark.parametrize("pick,figure,unit", [(0, "1850", "kN"), (1, "1.85", "m")])
+def test_a_delegated_turn_cannot_store_the_delegating_models_figure_as_told(client, monkeypatch, pick, figure, unit):
+    from app.agents.runtime import get_agent
+
+    target = _two_agents()[pick]
+    sub = get_agent(target)
+    inside = {}
+    note = {"value": f"{figure} {unit}", "told_by_user": True}
+
+    async def chat(message, api_key=None, project_id=None, _depth=0, _call_stack=None, **_):
+        # The delegated turn as the old path runs a tool: the delegation
+        # message is its user_message.
+        inside["told"] = await sub._run_tool_call(
+            _call("write_memory", {"name": "site", "data": json.dumps(note)}, "s1"),
+            project_id=project_id, _depth=_depth, user_message=message, history=[])
+        inside["plain"] = await sub._run_tool_call(
+            _call("write_memory", {"name": "how", "data": json.dumps({"path": "ask the unit first"})}, "s2"),
+            project_id=project_id, _depth=_depth, user_message=message, history=[])
+        return {"answer": "noted", "status": "success"}
+
+    monkeypatch.setattr(sub, "chat", chat)
+    h = _user(client, "delegtold")
+    pid = _project(client, h, f"Delegate told {uuid.uuid4().hex[:6]}")
+    seen = []
+    said = f"Record as told by the user: the value is {figure} {unit}"
+    _script(monkeypatch, [
+        {"content": "", "tool_calls": [_call("delegate_to_agent", {"agent_name": target, "message": said}, "d1")]},
+        {"content": "Done."}], seen)
+    r = _turn(client, h, pid, message="What is the value?")
+    assert r.status_code == 200, r.text
+    assert inside["told"]["ok"] is False and "nothing was written" in inside["told"]["result"]["error"]
+    assert [n["name"] for n in llm_memory.listing(pid)] == ["how"]
+    # Negative: a note that is not marked as told is still written there.
+    assert inside["plain"]["ok"] is True
+    # A later chat: nothing told to read back, and the figure is not credited to the user.
+    seen = []
+    _script(monkeypatch, [{"content": "", "tool_calls": [_call("read_memory", {"name": "site"}, "m1")]},
+                          {"content": f"From your notes: {figure} {unit}."}], seen)
+    r = _turn(client, h, pid)
+    assert all(e.get("source") != "user_note" for e in _end_event(r).get("provenance") or [])
+    assert f"{figure} {unit}" not in _streamed_text(r)
+
+
 @pytest.mark.parametrize("text,values", [
     ("1,850 kN and 4.10 m", {1850.0, 4.1}),
     ("level 2 at +2.35, 2026-11-28", {2.0, 2.35, 2026.0, 11.0, 28.0}),
