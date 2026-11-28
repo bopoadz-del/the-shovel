@@ -851,17 +851,38 @@ def test_given_check_reads_a_unit_followed_by_a_word_that_is_also_a_unit(message
     ("It is 33 m—that is all.", 33.0, "m"),
     ("A waste of 25%.", 25.0, "%"),
     ("An output of 3 m3/day.", 3.0, "m3/day"),
-    ("A 40 m-long trench.", 40.0, "m-long"),
+    ("A 40 m-long trench.", 40.0, "m"),                      # a word joined to the unit by a hyphen is not the unit
+    ("A 15 m-long wall.", 15.0, "m"),
+    ("About 120 m3-worth of spoil.", 120.0, "m3"),
+    ("A 15 mm-long gap.", 15.0, "mm"),
+    ("A moment of 12 kN-m.", 12.0, "kN-m"),                  # a unit joined to a unit stays whole
     ("It costs $8,040 in total.", 8040.0, "currency"),          # money: the currency stands before the figure
     ("It costs AED 450/m2 laid.", 450.0, "currency/m2"),
     ("It costs AED 450 per m2 laid.", 450.0, "currency/m2"),
     ("It costs AED 450 per square metre.", 450.0, "currency"),  # per what is in words the converter cannot read
+    ("It costs AED 450/m2-rate laid.", 450.0, "currency/m2"),   # a word joined to what money is per is not part of it
+    ("It costs AED 30 per m3-load here.", 30.0, "currency/m3"),
 ])
 def test_unit_written_with_reads_the_unit_a_figure_is_written_with(text, number, unit):
     from app.agents.citation_provenance import _figure_mentions, _unit_written_with
 
     mention = next(m for m, value in _figure_mentions(text) if value == number)
     assert _unit_written_with(text, mention) == unit
+
+
+@pytest.mark.parametrize("token,unit", [
+    ("m-long", "m"), ("m3-worth", "m3"), ("mm-deep", "mm"), ("kN/m2-load", "kN/m2"),
+    ("m-long-ish", "m"),                     # the longest part the converter reads, before any joined word
+    ("m", "m"), ("m3", "m3"),                # no hyphen: the token
+    ("kN-m", "kN-m"), ("m-s", "m-s"),        # a part after the hyphen is a unit too: the token, not a cut
+    ("man-days", "man-days"),                # the converter reads no part of it: the token
+    ("long", "long"), ("", ""),
+    ("m-2", "m-2"),                          # a hyphen before a digit joins no word
+])
+def test_unit_before_word_drops_a_word_joined_to_the_unit_by_a_hyphen(token, unit):
+    from app.agents.citation_provenance import _unit_before_word
+
+    assert _unit_before_word(token) == unit
 
 
 @pytest.mark.parametrize("value,written,size,unit,pure,expected", [

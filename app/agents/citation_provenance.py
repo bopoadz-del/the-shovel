@@ -1938,6 +1938,28 @@ def _magnitude_written(text: str, mention: re.Match) -> tuple[float, int]:
     return factor, word.end() - mention.end("num")
 
 
+#: A hyphen that joins a unit to a word after it: "-long" of "m-long".
+_HYPHEN_WORD = re.compile(r"-(?=[A-Za-z])")
+
+
+def _unit_before_word(token: str) -> str:
+    """The unit of a ``token`` read after a figure, without the words joined
+    to it by a hyphen ("m" of "m-long", "m3" of "m3-worth", "mm" of
+    "mm-deep"): when the converter does not read the whole token, the part
+    before the first such hyphen, if the converter reads that. The token as
+    it is when the converter reads it whole, does not read the part before
+    the hyphen, or reads a part after a hyphen as a unit too ("kN-m" is a
+    unit joined to a unit, not to a word)."""
+    cuts = [m.start() for m in _HYPHEN_WORD.finditer(token)]
+    if _unit_kind(token) is not None or not cuts:
+        return token
+    words = [token[cut + 1:end] for cut, end in zip(cuts, cuts[1:] + [len(token)])]
+    head = token[:cuts[0]]
+    if any(_unit_kind(word) is not None for word in words) or _unit_kind(head) is None:
+        return token
+    return head
+
+
 def _unit_written_with(text: str, mention: re.Match) -> str:
     """The unit the figure ``mention`` found in ``text`` is written with.
 
@@ -1947,13 +1969,15 @@ def _unit_written_with(text: str, mention: re.Match) -> str:
     figure: the whole unit token that follows the number ("m3" of
     "120 m3;", "m*m" of "48 m*m.", "kN/m3" of "5 kN/m3"), not only the part
     the figure pattern knows -- without the sentence's full stop or markdown
-    marks after it. "" when nothing of the kind follows."""
+    marks after it, and without a word joined to the unit by a hyphen ("m"
+    of "15 m-long", "currency/m2" of "AED 450/m2-rate"). "" when nothing of
+    the kind follows."""
     start = mention.end("num") + _magnitude_written(text, mention)[1]
     tail = text[start:start + 48]
     token = _UNIT_TOKEN.match(tail)
-    unit = token.group(1).rstrip(".*-/^") if token else ""
+    unit = _unit_before_word(token.group(1).rstrip(".*-/^")) if token else ""
     per = _PER_AFTER_MONEY.match(tail)
-    rate = f"{_MONEY}/{per.group(1).rstrip('.*')}" if per else ""
+    rate = f"{_MONEY}/{_unit_before_word(per.group(1).rstrip('.*-'))}" if per else ""
     money = rate if _unit_kind(rate) is not None else _MONEY
     return money if mention.group("pre") and not mention.group("post") else unit
 

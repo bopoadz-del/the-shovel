@@ -1543,6 +1543,26 @@ def test_a_step_result_is_credited_only_to_a_figure_whose_unit_agrees_with_it(mo
     assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
 
 
+@pytest.mark.parametrize("level,rise,said,credited", [
+    (12, 3, "one 15 m-long run", True), (12, 3, "a 15m-long wall", True), (12, 3, "a 15 m-high wall", True),
+    (1.5, 1, "a 2.5 m-deep trench", True), (1.5, 1, "a 2,500 mm-deep trench", True),
+    (12, 3, "a 15 mm-long wall", False), (1.5, 1, "a 2.5 mm-deep trench", False),
+    (12, 3, "a 15 km-long run", False), (1.5, 1, "a 2.5 m2-wide strip", False),
+])
+def test_a_result_written_with_its_unit_and_a_hyphenated_word_is_credited(monkeypatch, level, rise, said, credited):
+    """A unit joined to a word by a hyphen ("15 m-long") is written in that
+    unit: credited when it is the step's quantity, withheld in another unit
+    or at another scale."""
+    _level_script(monkeypatch, level, rise, f"You need {said}.")
+    conv = f"hyphen-said-{level}-{said}"
+    shown = _text(_run(user_message=f"The wall is {level} m. Add {rise} m: how long is it?",
+                       conversation_id=conv, sheet_mode=True))
+    row = trace_store.records(_today(), conv)[0]
+    assert row["sheet"]["steps"][0]["result"]["value"] == float(level + rise)
+    assert (said in shown) is credited
+    assert [f.get("step") for f in row["figures"]] == (["s1"] if credited else [])
+
+
 @pytest.mark.parametrize("said,credited", [
     ("72 m3", True), ("72 m³", True), ("72,000 L", True), ("**72 m³**", True),
     ("72 m2", False), ("72 m", False), ("0.072 m3", False), ("72 kg", False),
