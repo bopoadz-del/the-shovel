@@ -406,6 +406,7 @@ def test_every_round_tells_the_model_which_round_of_its_budget_it_is(monkeypatch
     for i, note in enumerate(notes, start=1):
         rules = note.split("\n", 1)[0]
         assert f"round {i} of {rounds} " in rules
+        assert f"no tool round starts after round {rounds} or once the seconds" in rules
         assert all(f"round {j} of" not in rules for j in range(1, rounds + 2) if j != i)
     assert all(isinstance(_sheet_in(s["messages"]), dict) for s in seen[:rounds])
     assert len(seen) == rounds + 1  # the ceiling did not move
@@ -1569,3 +1570,63 @@ def test_the_panel_fixtures_are_real_end_events(monkeypatch, name):
     # Code's own check on each given is what the panel shows as its source:
     # a figure the user typed is marked "user"; one the model wrote is not.
     assert [g.get("checked") for g in end["sheet"]["givens"]] == marks
+
+
+@pytest.mark.parametrize("seconds,elapsed,left,whole", [
+    ("150", 0.0, 150, 150),
+    ("150", 140.0, 10, 150),
+    ("150", 0.4, 149, 150),     # rounded down: never more than is left
+    ("10.5", 3.0, 7, 10),       # 7.5 left of 10.5: both rounded down
+    ("10", 10.0, 0, 10),        # exactly spent
+    ("10", 12.5, 0, 10),        # past the ceiling: never a negative figure
+])
+def test_sheet_note_states_the_seconds_left_of_the_seconds_ceiling(monkeypatch, seconds, elapsed, left, whole):
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "7")
+    from app.agents.driver import sheet
+
+    work = sheet.new_sheet("n@1", "q", None)
+    rules = loop._sheet_note(work, 3, elapsed).split("\n", 1)[0]
+    assert f"round 3 of 7 for this turn, with {left} of {whole} seconds left;" in rules
+    assert "no tool round starts after round 7 or once the seconds have run out" in rules
+
+
+@pytest.mark.parametrize("pause,seconds,rounds,tool_rounds", [
+    (20.0, "150", "12", 8),   # the seconds end the turn at round 8 of 12
+    (3.0, "10", "40", 4),     # the seconds end it at round 4 of 40
+    (0.1, "10", "5", 5),      # negative: the rounds run out first, the seconds stay nearly whole
+])
+def test_every_round_states_the_seconds_the_loop_will_still_allow(monkeypatch, pause, seconds, rounds, tool_rounds):
+    """The note offered with tools each round states the seconds the loop's own
+    clock leaves; the round whose note says 0 seconds or the last round is the
+    last one that runs, so no note promises a round the loop will not start."""
+    import time as real_time
+    import types
+
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", rounds)
+    clock = {"now": 0.0}
+    monkeypatch.setattr(loop, "time", types.SimpleNamespace(monotonic=lambda: clock["now"], time=real_time.time))
+    notes = []
+
+    async def slow(agent, messages, offered, model="", timeout=120.0):
+        if offered:
+            notes.append(next(m["content"] for m in messages
+                              if m["role"] == "system" and m["content"].startswith("Working sheet")))
+        clock["now"] += pause
+        return {"status": "success", "message": {"content": "", "tool_calls": [
+            _call("sheet_update", {"givens": [{"id": "g1", "value": len(notes), "unit": "m"}]}, f"c{len(notes)}")]}}
+
+    monkeypatch.setattr(llm, "call", slow)
+    conv = f"sl-{pause}-{rounds}"
+    _run(user_message="q", conversation_id=conv, sheet_mode=True)
+    assert trace_store.records(_today(), conv)[0]["ended"] == "ceiling"
+    assert len(notes) == tool_rounds
+    whole, spent = int(float(seconds)), 0.0
+    for i, note in enumerate(notes, start=1):
+        left = max(0, int(float(seconds) - spent))
+        spent += pause
+        assert f"round {i} of {rounds} for this turn, with {left} of {whole} seconds left;" in note.split("\n", 1)[0]
+    # The last round run: the next round's start would be past the seconds,
+    # or there is no next round.
+    assert tool_rounds * pause > float(seconds) or tool_rounds == int(rounds)

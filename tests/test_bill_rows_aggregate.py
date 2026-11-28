@@ -301,3 +301,21 @@ def test_statement_skips_an_entry_that_is_not_a_bill_object(tmp_path, junk):
                         ask="how much is it")
     stated = bill_rows_statement({"bills": [junk, {"status": "success", **out}]})
     assert [(s.basis, s.figure) for s in stated] == [("count", 1.0), ("sum", 50.0)]
+
+
+@pytest.mark.parametrize("terms, within, status", [
+    (["topsoil"], ["earthworks"], "success"),
+    (["kerb", "edging"], ["works"], "error"),
+])
+def test_statement_names_the_words_of_a_bill_with_no_terms_applied_field(terms, within, status):
+    """A bill result written before the field existed (no ``terms_applied``
+    key), success or error, still states its words: only an explicit False
+    hides them."""
+    from app.agents.base.tools import bill_rows_statement
+
+    bill = {"status": status, "filename": "b.xlsx", "terms": terms, "section_terms": within,
+            "rows": [], "reason": "no_derived_bill_sheet"}
+    stated = bill_rows_statement({"bills": [bill]})
+    assert [(s.terms, s.within) for s in stated] == [(tuple(terms), tuple(within))]
+    hidden = bill_rows_statement({"bills": [{**bill, "terms_applied": False}]})
+    assert [(s.terms, s.within) for s in hidden] == [((), ())]
