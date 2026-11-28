@@ -70,9 +70,8 @@ class ToldRefused(MemoryRefused):
     do not back: ``untold`` names them, as they are shown. Whoever answers
     the call says why in the words that are true where it was made."""
 
-    def __init__(self, message: str, untold: List[str]):
-        super().__init__(message)
-        self.untold = list(untold)
+    #: The refused figures, as shown; set where the refusal is raised.
+    untold: List[str] = []
 
 
 def _setting(env: str, default: int) -> int:
@@ -218,6 +217,20 @@ def note_figures(data: Any) -> Set[float]:
     return set()
 
 
+def figures_below_zero(data: Any) -> Set[float]:
+    """The sizes of the JSON numbers below zero in a note's values: for -2.35
+    the 2.35 ``note_figures`` reads it as. A figure check compares sizes;
+    whoever shows a told figure says with this what the note itself holds.
+    (True and false are not below zero, so they give nothing.)"""
+    if isinstance(data, (int, float)):
+        return note_figures(data) if data < 0 else set()
+    if isinstance(data, dict):
+        return set().union(*(figures_below_zero(v) for v in data.values()))
+    if isinstance(data, list):
+        return set().union(*(figures_below_zero(v) for v in data))
+    return set()
+
+
 def untold_figures(value: Any, told_from: Iterable[str], before: Any = None) -> List[float]:
     """The figures of the note ``value`` that the user did not write: not in
     ``told_from`` (the user's own words in the writing conversation) and
@@ -339,10 +352,12 @@ def _check_told(session: Any, project_id: str, stem: str, value: Any, told_from:
     untold = untold_figures(value, told_from, before)
     if untold:
         shown = [_shown(v) for v in untold]
-        raise ToldRefused(
+        refusal = ToldRefused(
             f"this note is marked {TOLD_BY_USER} but the user did not write "
             f"{', '.join(shown)} in this conversation; nothing was written. "
-            f"Keep in a told note only figures the user gave, or write it without the mark", shown)
+            f"Keep in a told note only figures the user gave, or write it without the mark")
+        refusal.untold = shown
+        raise refusal
 
 
 def _replace(session: Any, project_id: str, stem: str, row: Dict[str, Any]) -> int:

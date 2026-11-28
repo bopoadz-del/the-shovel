@@ -116,11 +116,12 @@ def users_words(call: ToolCall) -> list:
 def told_on_a_delegated_turn(figures: list) -> str:
     """The refusal a delegated turn reads when it writes figures into a note
     marked as told by the user: what was refused and why, with the one thing
-    that works. It does not say the user did not give them."""
+    that works at any depth of delegation. It does not say the user did not
+    give them."""
     return (f"this note is marked {llm_memory.TOLD_BY_USER} and holds {', '.join(figures)}; a turn another "
             "turn delegated cannot see the user's own words, so it cannot keep a figure as told by the user; "
-            "nothing was written. Say so in your reply and give the figures back: the turn that delegated "
-            "to you writes the note")
+            "nothing was written. Say so in your reply and give the figures back: only the turn the user "
+            "wrote to, the one no turn delegated, can write this note")
 
 
 @tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={

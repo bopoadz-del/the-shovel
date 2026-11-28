@@ -1278,7 +1278,11 @@ def test_a_figure_the_user_told_comes_back_with_its_source_in_a_new_chat(client,
     end = _end_event(r)
     credited = [e for e in end.get("provenance") or [] if e.get("figure") == shown]
     assert credited and credited[0]["source"] == "user_note"
-    assert credited[0]["doc_name"] == "Told by the user, from the project notes"
+    # Figures are matched by size: where the note holds the figure below
+    # zero the credit shows the note's own figure.
+    below = [f"{v:g}" for v in told.values() if isinstance(v, (int, float)) and not isinstance(v, bool) and v < 0]
+    assert credited[0]["doc_name"] == "Told by the user, from the project notes" + (
+        f"; the note holds {below[0]}" if below else "")
     assert shown not in (end.get("exit_check") or {}).get("figures_removed", [])
     # Negative: a figure in no note and no document is still withheld.
     seen = []
@@ -1605,7 +1609,7 @@ def test_a_delegated_turn_cannot_store_the_delegating_models_figure_as_told(clie
     # user's words. It never says the user did not give the figure, and it
     # does not send the figure into a note without the mark.
     why = inside["told"]["result"]["error"]
-    assert figure in why and "delegated" in why and "the turn that delegated to you writes the note" in why
+    assert figure in why and "delegated" in why and "only the turn the user wrote to" in why
     assert "did not write" not in why and "without the mark" not in why
     assert [n["name"] for n in llm_memory.listing(pid)] == ["how"]
     # Negative: a note that is not marked as told is still written there.
@@ -1848,3 +1852,109 @@ def test_a_told_refusal_carries_the_figures_it_refused(untold):
         llm_memory.write(pid, "n", json.dumps(note), "c#1", told_from=["nothing here"])
     assert sorted(info.value.untold) == sorted(untold)
     assert isinstance(info.value, llm_memory.MemoryRefused)
+
+
+# -- 86311f0 verdicts: the delegated refusal is true at any depth; a told
+# -- figure the note holds below zero is credited with the note's own figure --
+
+@pytest.mark.parametrize("note,figures", [
+    ({"value": "1850 kN"}, ["1850"]),
+    ({"v0": 1850, "v1": 412}, ["1850", "412"]),
+    ({"levels": [-2.35, 4.1, 77]}, ["2.35", "4.1", "77"]),
+])
+def test_the_delegated_refusal_holds_at_every_depth_and_the_top_turn_can_do_what_it_says(note, figures):
+    import asyncio
+
+    from app.agents.core.tool_registry import ToolCall
+    from app.agents.base import memory
+
+    pid = f"mem-deep-{uuid.uuid4().hex[:8]}"
+    data = json.dumps({**note, "told_by_user": True})
+    said = "Keep these as mine: " + ", ".join(figures)
+    for depth in (3, 2, 1):
+        call = ToolCall(agent=None, name="write_memory", project_id=pid, depth=depth, user_message=said,
+                        args={"name": "site", "data": data})
+        why = asyncio.run(memory.handle_write_memory(call))
+        assert why["ok"] is False
+        text = why["result"]["error"]
+        # Every figure is named, and the remedy names a turn that can write.
+        assert all(f in text for f in figures)
+        assert "only the turn the user wrote to" in text and "nothing was written" in text
+        assert "the turn that delegated to you writes" not in text
+        assert "did not write" not in text and "without the mark" not in text
+    assert llm_memory.listing(pid) == []
+    top = ToolCall(agent=None, name="write_memory", project_id=pid, depth=0, user_message=said,
+                   args={"name": "site", "data": data})
+    assert asyncio.run(memory.handle_write_memory(top))["ok"] is True
+    assert [n["name"] for n in llm_memory.listing(pid)] == ["site"]
+
+
+@pytest.mark.parametrize("depth,mark", [(1, "yes"), (2, 1), (0, "true")])
+def test_a_refusal_that_is_not_about_told_figures_keeps_its_own_words_on_any_turn(depth, mark):
+    import asyncio
+
+    from app.agents.core.tool_registry import ToolCall
+    from app.agents.base import memory
+
+    pid = f"mem-mark-{uuid.uuid4().hex[:8]}"
+    call = ToolCall(agent=None, name="write_memory", project_id=pid, depth=depth, user_message="it is 1850",
+                    args={"name": "site", "data": json.dumps({"v": 1850, "told_by_user": mark})})
+    got = asyncio.run(memory.handle_write_memory(call))
+    assert got["ok"] is False and "must be true or false" in got["result"]["error"]
+    assert "delegated" not in got["result"]["error"]
+
+
+@pytest.mark.parametrize("data,below", [
+    (-2.35, {2.35}),
+    (2.35, set()),
+    ({"cut_off": -4.1, "top": 4.1, "told_by_user": True}, {4.1}),
+    ({"levels": [-2, {"deep": -1850}], "n": 7}, {2.0, 1850.0}),
+    ({"v": "-2.35 m"}, set()),
+    (True, set()),
+    (None, set()),
+    (0, set()),
+])
+def test_figures_below_zero_are_the_sizes_of_the_numbers_a_note_holds_below_zero(data, below):
+    assert llm_memory.figures_below_zero(data) == below
+
+
+@pytest.mark.parametrize("value,below,label", [
+    (2.35, {2.35}, "Told by the user, from the project notes; the note holds -2.35"),
+    (2.35, {2350.0}, "Told by the user, from the project notes; the note holds -2350"),
+    (4.1, {2.35}, "Told by the user, from the project notes"),
+    (4.1, set(), "Told by the user, from the project notes"),
+])
+def test_told_label_says_what_the_note_holds_where_it_holds_the_figure_below_zero(value, below, label):
+    from app.agents import citation_provenance as cp
+    assert cp._told_label(value, below) == label
+
+
+@pytest.mark.parametrize("held,answer,figure,label", [
+    (-2.35, "The pile cut-off level is +2.35 m (above datum).", "2.35 m",
+     "Told by the user, from the project notes; the note holds -2.35"),
+    (-4.1, "The formation level is 4.10 m above datum.", "4.10 m",
+     "Told by the user, from the project notes; the note holds -4.1"),
+    (4.1, "The formation level is 4.10 m above datum.", "4.10 m", "Told by the user, from the project notes"),
+])
+def test_figure_provenance_shows_the_notes_own_figure_when_the_note_holds_it_below_zero(held, answer, figure, label):
+    from app.agents import citation_provenance as cp
+    told = _tool_msg("read_memory", {"status": "success", "told_by_user": True, "data": {"level_m": held}})
+    user = {"role": "user", "content": "what level is it?"}
+    out, trail = cp.figure_provenance(answer, None, [user, told], enforce=True, tool_passages=True)
+    assert out == answer
+    assert [(e["figure"], e["source"], e["doc_name"]) for e in trail] == [(figure, "user_note", label)]
+
+
+@pytest.mark.parametrize("held,answer,kept", [
+    (2.5, "The span is 2500 mm.", True),
+    (2400, "It weighs 2.4 t.", True),
+    (2400, "It weighs 2.5 t.", False),
+    (3600, "It weighs 3.7 t.", False),
+])
+def test_figure_provenance_credits_a_told_figure_written_a_thousand_times_larger_or_smaller(held, answer, kept):
+    from app.agents import citation_provenance as cp
+    told = _tool_msg("read_memory", {"status": "success", "told_by_user": True, "data": {"v": held}})
+    user = {"role": "user", "content": "what is it?"}
+    out, trail = cp.figure_provenance(answer, None, [user, told], enforce=True, tool_passages=True)
+    assert (out == answer) is kept
+    assert [e["source"] for e in trail] == (["user_note"] if kept else [])
