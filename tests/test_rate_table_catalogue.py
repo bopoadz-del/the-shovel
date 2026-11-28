@@ -526,7 +526,7 @@ def test_a_wrong_given_on_the_sheet_fails_with_the_reason(value, unit, reason):
     assert reason in step["error"] and "could not run" not in step["error"], step
 
 
-def _declare(kind, unit_from, tag):
+def _probe_fn(kind):
     from typing import List
 
     def probe_series(qs: List[float], qs_unit: str = "") -> dict:
@@ -535,28 +535,49 @@ def _declare(kind, unit_from, tag):
     def probe_one(qs: float, qs_unit: str = "") -> dict:
         return {"total": 0.0}
 
-    fn = probe_series if kind == "series" else probe_one
+    return probe_series if kind == "series" else probe_one
+
+
+def _decorator(unit_from, tag):
     # formula(...) returns the registry's _register, which checks the
     # declaration against the signature before it registers anything.
-    _register = fr.formula(owner="planning", display_name="probe", description="probe",
-                           name=f"probe_unit_from_{tag}",
-                           inputs={"qs": fr.Param("-", unit_from=unit_from), "qs_unit": fr.Param("-")},
-                           outputs={"total": "-"})
-    return _register(fn)
+    return fr.formula(owner="planning", display_name="probe", description="probe",
+                      name=f"probe_unit_from_{tag}",
+                      inputs={"qs": fr.Param("-", unit_from=unit_from), "qs_unit": fr.Param("-")},
+                      outputs={"total": "-"})
 
 
 @pytest.mark.parametrize("unit_from", ["qs_unit", "other_unit"])
 def test_a_series_cannot_declare_unit_from(unit_from):
+    _register = _decorator(unit_from, f"series_{unit_from}")
     with pytest.raises(ValueError, match="series input 'qs'"):
-        _declare("series", unit_from, f"series_{unit_from}")
+        _register(_probe_fn("series"))
     assert fr.get(f"probe_unit_from_series_{unit_from}") is None
 
 
 @pytest.mark.parametrize("kind,unit_from", [("number", "qs_unit"), ("series", "")])
 def test_a_single_figure_or_a_series_without_unit_from_registers(kind, unit_from):
     tag = f"{kind}_{unit_from or 'none'}"
-    _declare(kind, unit_from, tag)
+    _register = _decorator(unit_from, tag)
+    fn = _probe_fn(kind)
     try:
-        assert fr.get(f"probe_unit_from_{tag}") is not None
+        assert _register(fn) is fn
+        assert fr.get(f"probe_unit_from_{tag}").fn is fn
+        # The same function declared again is the same formula, not a clash.
+        assert _register(fn) is fn
+    finally:
+        fr._REGISTRY.pop(f"probe_unit_from_{tag}", None)
+
+
+@pytest.mark.parametrize("kind", ["number", "series"])
+def test_another_function_under_a_registered_name_is_refused(kind):
+    tag = f"twice_{kind}"
+    _register = _decorator("", tag)
+    first = _probe_fn(kind)
+    try:
+        _register(first)
+        with pytest.raises(ValueError, match="declared twice"):
+            _register(_probe_fn(kind))
+        assert fr.get(f"probe_unit_from_{tag}").fn is first
     finally:
         fr._REGISTRY.pop(f"probe_unit_from_{tag}", None)
