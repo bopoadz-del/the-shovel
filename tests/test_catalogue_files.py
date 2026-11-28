@@ -149,6 +149,8 @@ def test_index_lines_and_index_block_show_the_approved_purpose(shipped, copy_dir
         line = _line_of(lines, entry_id)
         assert line.endswith(" | " + text) and line in block
         assert line != _line_of(before, entry_id)
+        # The full entry the model reads with catalogue_lookup says the same.
+        assert catalogue.lookup([entry_id])["entries"][0]["for"] == text
     for entry_id in (unapproved_id, stale_id):
         assert _line_of(lines, entry_id) == _line_of(before, entry_id)
         assert _line_of(before, entry_id) in block
