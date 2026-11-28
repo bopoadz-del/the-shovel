@@ -204,7 +204,13 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
             labels.extend(n for n in needs if n not in labels)
             continue
         labels.append(label)
-        if reason == "wrong_unit":
+        if reason == "refused":
+            # The calculator's own reason for refusing a value it was given.
+            detail = str(row.get("detail") or "").strip().rstrip(".")
+            sentence = (detail[:1].upper() + detail[1:] + ".") if detail else                 f"The {display} calculator did not accept the {label} given."
+            if sentence not in sentences:
+                sentences.append(sentence)
+        elif reason == "wrong_unit":
             expected = row.get("expected_dimension")
             wanted = unit_words(row.get("unit") or "")
             sentences.append(

@@ -581,3 +581,50 @@ def test_another_function_under_a_registered_name_is_refused(kind):
         assert fr.get(f"probe_unit_from_{tag}").fn is first
     finally:
         fr._REGISTRY.pop(f"probe_unit_from_{tag}", None)
+
+
+@pytest.mark.parametrize("item,qty,unit,said,field", [
+    # A value the caller GAVE and the calculator refused: the question the
+    # user reads carries the calculator's own reason, not "needs the ...".
+    ("acrylic emulsion ceilings", "300 linear metres", "linear metres", "linear metres", "quantity_unit"),
+    ("blockwork walls", 40, "kg", "kg", "quantity_unit"),
+    ("granite cladding", 30, "m2", "not a planner template row", "work_item"),
+])
+def test_a_refused_given_value_is_asked_again_with_the_calculators_reason(item, qty, unit, said, field):
+    out = _run(item, qty, unit)
+    assert out["status"] == "error", out
+    assert out["missing"] == [field], out
+    question = out["question"]
+    assert said in question and "does not apply" in question or "not a planner template row" in question, out
+    assert "calculator needs the" not in question, out
+    assert question.endswith("should I use?"), out
+    assert question.count(said) == 1 and out["error"].count(said) == 1, out
+
+
+@pytest.mark.parametrize("unit", ["-", "", None])
+def test_an_absent_unit_is_asked_for_without_a_refusal_reason(unit):
+    # Negative: nothing was given, so nothing was refused.
+    out = _run("ceiling plaster", 25, unit)
+    assert out["status"] == "needs_input", out
+    assert "calculator needs the" in out["question"], out
+    assert "does not apply" not in out["question"], out
+
+
+@pytest.mark.parametrize("detail,label_word,want", [
+    ("row 'x' is measured in m2; the quantity is in kg.", "unit", "Row 'x' is measured in m2; the quantity is in kg."),
+    ("the quantity is not a finite number", "quantity", "The quantity is not a finite number."),
+    ("", "quantity", "did not accept the quantity"),
+])
+def test_input_question_states_a_refused_value_by_its_reason(detail, label_word, want):
+    from app.lib.source_labels import input_question
+
+    field = "quantity_unit" if label_word == "unit" else "quantity"
+    q = input_question("crew_days_from_rate_row",
+                       [{"parameter": field, "value": 1, "reason": "refused", "detail": detail}])
+    assert want in q and q.count(want) == 1, q
+    assert label_word in q.rsplit(".", 1)[-1] and q.endswith("should I use?"), q
+    # Two inputs refused for one reason: the reason is said once, both are asked.
+    two = input_question("crew_days_from_rate_row",
+                         [{"parameter": "quantity", "value": 1, "reason": "refused", "detail": detail},
+                          {"parameter": "quantity_unit", "value": "kg", "reason": "refused", "detail": detail}])
+    assert two.count(want) == 1 and "What values should I use" in two, two

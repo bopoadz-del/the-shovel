@@ -3698,11 +3698,22 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
                                   "and no value is assumed.")
     if _result_is_failure(result):
         if isinstance(result.get("needs_input"), list) and result["needs_input"]:
-            env = _input_rejection_envelope(str(name), [], list(result["needs_input"]))
+            # An input the caller GAVE and the calculator refused (it names it
+            # in ``required``) is asked again with the calculator's own reason;
+            # only an absent input is asked as "needs the ...".
+            given = set(result["required"]) if isinstance(result.get("required"), list) else set()
+            refused = [{"parameter": p, "value": (params or {}).get(p), "reason": "refused",
+                        "detail": str(result.get("error") or "").strip()}
+                       for p in result["needs_input"] if p in given]
+            env = _input_rejection_envelope(
+                str(name), refused, [p for p in result["needs_input"] if p not in given])
+            # Every input to give again stays listed, given or absent.
+            env["missing"] = list(result["needs_input"])
             # The calculator's own reason (e.g. "-120 was given") comes first:
             # the user sees why the value is asked for again.
             reason = str(result.get("error") or "").strip()
-            if reason and reason not in str(env.get("error") or ""):
+            # A refused given value already says it in the question.
+            if reason and not refused and reason not in str(env.get("error") or ""):
                 env["error"] = f"{reason} {env.get('error') or ''}".strip()
             # A value the caller GAVE but the calculator rejected as out of its
             # domain (negative where only positive is physical) keeps status
