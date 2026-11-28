@@ -1013,6 +1013,11 @@ def aggregate(
     ``without_page``: it cannot be placed by page, so it is in no sum, and it
     is named rather than lost.
 
+    Every listed row carries both its quantity and its amount, and
+    ``other_measure`` totals the measure not asked over the same rows
+    (:func:`measure_totals`, the same summing), so a question that wants both
+    is answered by one call. The rows are selected for ``measure`` alone.
+
     With ``ask``, a size, a depth band, a bill or a dimension the ask totals
     governs the row set (:func:`ask_scope`): those are read as numbers and as
     the row's own structural cells, so the same ask selects the same rows
@@ -1041,8 +1046,6 @@ def aggregate(
         scope = None
     if scope is None and not want and not where:
         raise ValueError("give description terms or a section to match")
-    used, without = [], []
-    sums: dict[str, float] = {}
     joined = items
     kinds = row_kinds(items, ranges)
     others = [(row, kind) for row, kind in zip(items, kinds) if kind != ROW_ITEM]
@@ -1068,23 +1071,20 @@ def aggregate(
         selected = fullest_sections(scope, [row for row in items if admitted(row)])
     else:
         selected = [row for row in items if admitted(row)]
-    for row in selected:
-        value = row.figure(measure)
-        entry = {
-            "ref": row.ref,
-            "pages": row.pages,
-            "section": list(row.path),
-            "description": row.description,
-            "unit": row.unit,
-            measure: value,
-        }
-        used.append(entry)
-        if value is None:
-            without.append({"ref": row.ref, "pages": row.pages, "description": row.description})
-            continue
-        key = row.unit if measure == MEASURE_QUANTITY else ""
-        sums[key] = sums.get(key, 0.0) + value
-    single = len(sums) <= 1
+    # Each row carries both of its figures, whichever measure was asked, and
+    # the other measure is totalled over the same rows (``other_measure``):
+    # one call answers a question that wants the quantity and the amount.
+    used = [{
+        "ref": row.ref,
+        "pages": row.pages,
+        "section": list(row.path),
+        "description": row.description,
+        "unit": row.unit,
+        MEASURE_QUANTITY: row.figure(MEASURE_QUANTITY),
+        MEASURE_AMOUNT: row.figure(MEASURE_AMOUNT),
+    } for row in selected]
+    asked = measure_totals(selected, measure)
+    other = next(m for m in MEASURES if m != measure)
     return {
         "measure": measure,
         "terms": sorted(want),
@@ -1103,12 +1103,57 @@ def aggregate(
         "not_items": not_items,
         "bill_checks": bill_checks(joined, scope.bills if scope is not None else (), ranges),
         "count": len(used),
+        "sum": asked["sum"],
+        "unit": asked["unit"],
+        "sum_by_unit": asked["sum_by_unit"],
+        "without_figure": asked["without_figure"],
+        "without_page": without_page,
+        # Before the rows: past the tool-result cap the message keeps the
+        # head of the result, and the other measure's total must survive it.
+        "other_measure": other_measure_totals(selected, other),
+        "rows": used,
+    }
+
+
+def other_measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
+    """:func:`measure_totals` of the measure not asked, over the rows already
+    selected. Each row already carries its own figure (or none), so the rows
+    without it are counted, not listed again. When no row carries the figure
+    there is no total to state: ``sum`` is ``None``, never a 0 read off
+    nothing."""
+    totals = measure_totals(rows, measure)
+    missing = len(totals.pop("without_figure"))
+    if rows and missing == len(rows):
+        totals.update(sum=None, unit=None)
+    return {"measure": measure, **totals, "rows_without_figure": missing}
+
+
+def measure_totals(rows: Sequence[SheetRow], measure: str) -> dict[str, Any]:
+    """The total of ``measure`` over ``rows``, the one place a bill result's
+    sums are made.
+
+    Quantities are summed per unit (adding cubic metres to metres is not a
+    total): a single unit gives ``sum`` and ``unit``, mixed units give
+    ``sum_by_unit`` and no single ``sum``. Amounts are one sum. A row without
+    the figure adds nothing and is named in ``without_figure``.
+    """
+    if measure not in MEASURES:
+        raise ValueError(f"measure must be one of {MEASURES}")
+    sums: dict[str, float] = {}
+    without = []
+    for row in rows:
+        value = row.figure(measure)
+        if value is None:
+            without.append({"ref": row.ref, "pages": row.pages, "description": row.description})
+            continue
+        key = row.unit if measure == MEASURE_QUANTITY else ""
+        sums[key] = sums.get(key, 0.0) + value
+    single = len(sums) <= 1
+    return {
         "sum": (next(iter(sums.values()), 0.0) if single else None),
         "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
         "sum_by_unit": ({u: s for u, s in sums.items()} if measure == MEASURE_QUANTITY else None),
         "without_figure": without,
-        "without_page": without_page,
-        "rows": used,
     }
 
 
