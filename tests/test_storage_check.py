@@ -496,7 +496,7 @@ def test_an_epoch_creation_date_is_read(epoch_of):
     assert _check_points(stale, "fs-0aaa", NOW, 26)[1] is False
 
 
-@pytest.mark.parametrize("raw", [True, float("nan"), {"t": 1}, 1e300])
+@pytest.mark.parametrize("raw", [True, float("nan"), float("inf"), -float("inf"), {"t": 1}, 1e300])
 def test_a_date_that_is_not_a_time_is_undated_not_failed(raw):
     _, ok, detail = _check_points([{"CreationDate": raw, "Status": "COMPLETED"}], "fs-0aaa", NOW, 26)
     assert ok is None and "undated=1" in detail

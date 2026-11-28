@@ -252,8 +252,6 @@ def _parse_when(raw: Any) -> datetime:
     Raises TypeError or ValueError for anything else.
     """
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-        if not math.isfinite(raw):
-            raise ValueError("not a finite epoch")
         return datetime.fromtimestamp(raw, tz=timezone.utc)
     if not isinstance(raw, str):
         raise TypeError("not a time")
