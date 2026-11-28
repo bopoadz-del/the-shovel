@@ -1591,6 +1591,43 @@ def test_sheet_note_states_the_seconds_left_of_the_seconds_ceiling(monkeypatch, 
     assert "no tool round starts after round 7 or once the seconds have run out" in rules
 
 
+@pytest.mark.parametrize("seconds,elapsed", [("inf", 0.0), ("1e309", 40.0), ("Infinity", 1e9)])
+def test_sheet_note_states_only_the_rounds_when_the_setting_leaves_no_seconds_ceiling(monkeypatch, seconds, elapsed):
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "7")
+    from app.agents.driver import sheet
+
+    work = sheet.new_sheet("n@1", "q", None)
+    rules = loop._sheet_note(work, 3, elapsed).split("\n", 1)[0]
+    assert "This is round 3 of 7 for this turn; no tool round starts after round 7, so write" in rules
+    assert "seconds" not in rules.split("This is round 3 of 7")[1]
+
+
+@pytest.mark.parametrize("seconds,answer", [("inf", "I need the slab size to work that out."), ("1e309", "Nothing to add.")])
+def test_a_sheet_turn_runs_when_the_setting_leaves_no_seconds_ceiling(monkeypatch, seconds, answer):
+    # The whole turn, through the loop's own door: the note is built before
+    # the first model call, so a note that cannot be built ends every turn.
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "7")
+    seen = _scripted(monkeypatch, [{"content": answer}])
+    events = _run(user_message="how much concrete?", conversation_id=f"ws-inf-{seconds}", sheet_mode=True)
+    assert _text(events) == answer and len(seen) == 1
+    note = [m["content"] for m in seen[0]["messages"] if m["role"] == "system" and m["content"].startswith("Working sheet")]
+    assert len(note) == 1 and "round 1 of 7 for this turn; no tool round starts after round 7" in note[0]
+
+
+@pytest.mark.parametrize("seconds,left,whole", [("nan", 1, 1), ("-5", 1, 1), ("0", 1, 1), ("soon", 150, 150)])
+def test_sheet_note_states_the_ceiling_the_loop_falls_back_to_for_a_setting_that_is_no_duration(
+        monkeypatch, seconds, left, whole):
+    monkeypatch.setenv("DRIVER_SHEET_MAX_SECONDS", seconds)
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", "7")
+    from app.agents.driver import sheet
+
+    work = sheet.new_sheet("n@1", "q", None)
+    rules = loop._sheet_note(work, 3, 0.0).split("\n", 1)[0]
+    assert f"round 3 of 7 for this turn, with {left} of {whole} seconds left;" in rules
+
+
 @pytest.mark.parametrize("pause,seconds,rounds,tool_rounds", [
     (20.0, "150", "12", 8),   # the seconds end the turn at round 8 of 12
     (3.0, "10", "40", 4),     # the seconds end it at round 4 of 40

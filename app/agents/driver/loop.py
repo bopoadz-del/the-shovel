@@ -268,6 +268,12 @@ def _sheet_note(work: Dict[str, Any], round_no: int, elapsed: float) -> str:
     than is left). It is stated, never enforced here: the model plans its own
     rounds; the ceilings stay where they are."""
     rounds, seconds = driver.sheet_max_rounds(), driver.sheet_max_seconds()
+    if math.isinf(seconds):
+        # A setting that leaves no seconds ceiling: the loop's own check
+        # (elapsed > seconds) never ends the turn, so only the rounds do.
+        budget = (f"This is round {round_no} of {rounds} for this turn; no tool round starts after round "
+                  f"{rounds}, so write what you found onto the sheet as you go.")
+        return _SHEET_RULES + " " + budget + "\n" + sheet.render(work)
     left = max(0, math.floor(seconds - elapsed))
     budget = (f"This is round {round_no} of {rounds} for this turn, with {left} of {math.floor(seconds)} "
               f"seconds left; no tool round starts after round {rounds} or once the seconds have run "
