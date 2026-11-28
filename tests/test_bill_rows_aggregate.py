@@ -277,7 +277,13 @@ def test_statement_names_no_words_when_the_question_scope_chose_the_rows(tmp_pat
                         measure=agg.MEASURE_AMOUNT, ask="What is the total amount of Bill No. 2?")
     assert out["terms_applied"] is False and out["count"] == 2
     stated = bill_rows_statement({"bills": [{"status": "success", **out}]})
-    assert stated and all(s.terms == () and s.within == () for s in stated)
+    # The words stay on the statement, marked as not what chose the rows, and
+    # what the answer shows for the statement names none of them.
+    from app.agents.core import computed_answer as ca
+
+    assert stated and all(s.words_matched is False and s.terms == (terms,) for s in stated)
+    shown = [ca._what(s, ca.labels_for("en")) for s in stated]
+    assert all(terms not in line and "earthworks" not in line for line in shown)
 
 
 @pytest.mark.parametrize("terms, count", [("topsoil", 1), ("levels", 1)])
@@ -317,5 +323,8 @@ def test_statement_names_the_words_of_a_bill_with_no_terms_applied_field(terms, 
             "rows": [], "reason": "no_derived_bill_sheet"}
     stated = bill_rows_statement({"bills": [bill]})
     assert [(s.terms, s.within) for s in stated] == [(tuple(terms), tuple(within))]
+    assert all(s.words_matched for s in stated)
+    # An explicit False: the words stay on the statement (they name the part
+    # of the question it is for) and are marked as not what matched.
     hidden = bill_rows_statement({"bills": [{**bill, "terms_applied": False}]})
-    assert [(s.terms, s.within) for s in hidden] == [((), ())]
+    assert [(s.terms, s.within, s.words_matched) for s in hidden] == [(tuple(terms), tuple(within), False)]
