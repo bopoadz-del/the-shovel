@@ -304,8 +304,9 @@ def test_a_backend_other_than_efs_still_fails(backend):
     ("/app/data", "/app/data/", True),
     ("/srv/store", " /srv/store ", True),
     ("/srv/store", "/srv//store/.", True),
-    ("/app/data", "/app/data/sub", False),
+    ("/app/data", "/app/data/sub", True),
     ("/app/data", "/app", False),
+    ("/app/data", "/app/database", False),
 ])
 def test_the_root_is_compared_as_a_path(mount, root, ok):
     d = _described(mount=mount, env=_env(root=root))
@@ -639,3 +640,251 @@ def test_a_resource_arn_with_a_trailing_slash_is_still_own(fs_id):
     point = _point(NOW - timedelta(hours=1), arn=_arn(fs_id) + "/")
     _, ok, detail = _check_points([point], fs_id, NOW, 26)
     assert ok is True and "own=1" in detail
+
+
+# --- First grade of #779: every input read, or not checked (encoding, env files, root, pages) ---
+
+def _write_bytes(tmp_path, name, data: bytes) -> str:
+    p = tmp_path / name
+    p.write_bytes(data)
+    return str(p)
+
+
+def _argv(paths: dict) -> list:
+    return [paths["described"], "--backup-policy", paths["backup-policy"],
+            "--recovery-points", paths["recovery-points"], "--now", NOW.isoformat()]
+
+
+@pytest.mark.parametrize("which", ["described", "backup-policy", "recovery-points"])
+@pytest.mark.parametrize("encode,reason", [
+    (lambda t: b"\xff\xfe\xe9" + b"\x00", "not_json"),
+    (lambda t: t.encode("utf-8").replace(b"{", b"{\xe9", 1), "not_utf8_text"),
+    (lambda t: b"\xff\xfe" + b"\x00\xd8", "not_utf16_text"),
+])
+def test_cli_a_file_that_does_not_decode_is_not_checked_not_a_crash(tmp_path, capsys, which, encode, reason):
+    fs_id = "fs-0aaa"
+    objs = {"described": _described(fs_id=fs_id), "backup-policy": _ENABLED,
+            "recovery-points": _fresh(fs_id)}
+    paths = {k: _write(tmp_path, f"{k}.json", v) for k, v in objs.items()}
+    paths[which] = _write_bytes(tmp_path, f"bad-{which}.json", encode(json.dumps(objs[which])))
+    assert main(_argv(paths)) == 2
+    captured = capsys.readouterr()
+    assert f"unreadable_input {which} " in captured.err and "=FAIL" not in captured.out
+    assert f"not_checked={which}:{reason}" in captured.out
+
+
+@pytest.mark.parametrize("reason,data", [
+    ("not_utf8_text", b'{"taskDefinition": "\xe9"}'),
+    ("not_utf16_text", b"\xfe\xff\xd8\x00"),
+])
+def test_an_undecodable_file_names_its_encoding(tmp_path, reason, data):
+    from scripts.storage_check import NotRead, _load
+    p = tmp_path / "x.json"
+    p.write_bytes(data)
+    assert _load(p) == NotRead(reason)
+
+
+@pytest.mark.parametrize("encoding,bom", [
+    ("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff"), ("utf-8", b"\xef\xbb\xbf")])
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0bbb"])
+def test_cli_a_file_in_the_encoding_its_mark_declares_is_read(tmp_path, capsys, encoding, bom, fs_id):
+    objs = {"described": _described(fs_id=fs_id), "backup-policy": _ENABLED,
+            "recovery-points": _fresh(fs_id)}
+    paths = {k: _write_bytes(tmp_path, f"{k}.json", bom + json.dumps(v).encode(encoding))
+             for k, v in objs.items()}
+    assert main(_argv(paths)) == 0
+    assert "verdict=ok failed=none" in capsys.readouterr().out
+    # Negative: the same encoding still carries a failing answer through.
+    paths["backup-policy"] = _write_bytes(
+        tmp_path, "off.json", bom + json.dumps({"BackupPolicy": {"Status": "DISABLED"}}).encode(encoding))
+    assert main(_argv(paths)) == 1
+    assert "backup_policy=FAIL" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("depth", [100_000, 200_000])
+def test_json_nested_past_the_parser_limit_is_not_json(tmp_path, depth):
+    from scripts.storage_check import NotRead, _load
+    p = tmp_path / "deep.json"
+    p.write_text("[" * depth + "]" * depth, encoding="utf-8")
+    assert _load(p) == NotRead("not_json")
+
+
+def _with_env_file(described: dict, keep: dict) -> dict:
+    c = described["taskDefinition"]["containerDefinitions"][0]
+    c["environment"] = [{"name": k, "value": v} for k, v in keep.items()]
+    c["environmentFiles"] = [{"type": "s3", "value": "arn:aws:s3:::bucket/app.env"}]
+    return described
+
+
+@pytest.mark.parametrize("keep,hidden", [
+    ({}, ["DOCUMENT_BYTE_STORE=<env_file>", "DOCUMENT_STORE_ROOT=<env_file>",
+          "REQUIRE_DURABLE_DOCUMENT_STORE=<env_file>"]),
+    ({"DOCUMENT_BYTE_STORE": "efs"}, ["DOCUMENT_STORE_ROOT=<env_file>",
+                                      "REQUIRE_DURABLE_DOCUMENT_STORE=<env_file>"]),
+])
+def test_settings_left_to_an_environment_file_are_unverified_not_unset(keep, hidden):
+    _, ok, detail = check_durable_store(_with_env_file(_described(), keep))
+    assert ok is None and "<unset>" not in detail
+    assert all(h in detail for h in hidden)
+
+
+@pytest.mark.parametrize("keep,wrong", [
+    ({"DOCUMENT_BYTE_STORE": "local"}, "DOCUMENT_BYTE_STORE=local"),
+    ({"REQUIRE_DURABLE_DOCUMENT_STORE": "0"}, "REQUIRE_DURABLE_DOCUMENT_STORE=0 (off)"),
+])
+def test_a_wrong_plain_value_beside_an_environment_file_still_fails(keep, wrong):
+    _, ok, detail = check_durable_store(_with_env_file(_described(), keep))
+    assert ok is False and wrong in detail
+
+
+@pytest.mark.parametrize("mount", ["/app/data", "/srv/store"])
+def test_plain_values_beside_an_environment_file_are_judged(mount):
+    env = {"DOCUMENT_BYTE_STORE": "efs", "DOCUMENT_STORE_ROOT": mount,
+           "REQUIRE_DURABLE_DOCUMENT_STORE": "1"}
+    assert check_durable_store(_with_env_file(_described(mount=mount), env))[1] is True
+
+
+@pytest.mark.parametrize("files,reason", [
+    ("s3://b/app.env", "environmentFiles_not_a_list"),
+    (["s3://b/app.env"], "environmentFiles_not_an_object"),
+])
+def test_an_environment_files_field_of_the_wrong_shape_is_not_read(files, reason):
+    d = _described()
+    d["taskDefinition"]["containerDefinitions"][0]["environmentFiles"] = files
+    assert check_durable_store(d) == ("durable_store", None, f"not_checked=described:{reason}")
+    # An empty list is no file: the plain settings decide.
+    d["taskDefinition"]["containerDefinitions"][0]["environmentFiles"] = []
+    assert check_durable_store(d)[1] is True
+
+
+@pytest.mark.parametrize("mount,root", [("/app/data", "/app/data/docs"), ("/srv/store", "/srv/store/a/b")])
+def test_a_root_under_the_mount_is_on_the_mount(mount, root):
+    _, ok, detail = check_durable_store(_described(mount=mount, env=_env(root=root)))
+    assert ok is True and f"mount={mount}" in detail
+
+
+@pytest.mark.parametrize("mount,root", [("/app/data", "/app/datafile"), ("/srv/store", "/tmp/store")])
+def test_a_root_outside_the_mount_fails(mount, root):
+    _, ok, detail = check_durable_store(_described(mount=mount, env=_env(root=root)))
+    assert ok is False and "on=<container_disk>" in detail and f"mount={mount}" in detail
+
+
+@pytest.mark.parametrize("mount,inner", [("/app/data", "/app/data/cache"), ("/srv/store", "/srv/store/tmp")])
+def test_a_root_on_a_deeper_non_efs_mount_is_not_on_efs(mount, inner):
+    d = _described(mount=mount, env=_env(root=inner + "/docs"))
+    d["taskDefinition"]["volumes"].append({"name": "scratch"})
+    d["taskDefinition"]["containerDefinitions"][0]["mountPoints"].append(
+        {"sourceVolume": "scratch", "containerPath": inner})
+    _, ok, detail = check_durable_store(d)
+    assert ok is False and f"on={inner}" in detail
+    # Negative: a root beside that inner mount, still under EFS, is on EFS.
+    d2 = _described(mount=mount, env=_env(root=mount + "/docs"))
+    d2["taskDefinition"]["volumes"].append({"name": "scratch"})
+    d2["taskDefinition"]["containerDefinitions"][0]["mountPoints"].append(
+        {"sourceVolume": "scratch", "containerPath": inner})
+    assert check_durable_store(d2)[1] is True
+
+
+@pytest.mark.parametrize("mount", ["/app/data", "/srv/store"])
+def test_a_root_on_a_path_two_mounts_share_is_unverified(mount):
+    d = _described(mount=mount)
+    d["taskDefinition"]["volumes"].append({"name": "scratch"})
+    d["taskDefinition"]["containerDefinitions"][0]["mountPoints"].append(
+        {"sourceVolume": "scratch", "containerPath": mount + "/"})
+    _, ok, detail = check_durable_store(d)
+    assert ok is None and f"mounts_on_one_path={mount}" in detail
+
+
+@pytest.mark.parametrize("mount", ["/app/data", "/srv/store"])
+def test_an_unset_root_falls_back_to_data_dir_like_the_app(mount):
+    env = {"DOCUMENT_BYTE_STORE": "efs", "DATA_DIR": mount, "REQUIRE_DURABLE_DOCUMENT_STORE": "1"}
+    _, ok, detail = check_durable_store(_described(mount=mount, env=env))
+    assert ok is True
+    # Negative: DATA_DIR off the mount fails, and names both settings.
+    env["DATA_DIR"] = "/var/lib/other"
+    _, ok, detail = check_durable_store(_described(mount=mount, env=env))
+    assert ok is False and "DOCUMENT_STORE_ROOT=<unset> DATA_DIR=/var/lib/other" in detail
+
+
+@pytest.mark.parametrize("root,data_dir,want", [
+    ("/a", "/b", "/a"), (" /c ", None, "/c"), ("", "/d", "/d"), ("  ", None, "./data"), (None, "", "")])
+def test_the_checker_and_the_app_share_one_root_reading(monkeypatch, root, data_dir, want):
+    from app.core.byte_store import resolve_store_root, store_root
+    for name, value in (("DOCUMENT_STORE_ROOT", root), ("DATA_DIR", data_dir)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert store_root() == resolve_store_root(root, data_dir) == want
+
+
+@pytest.mark.parametrize("workdir,rel,ok", [
+    ("/app", "data", True), ("/app", "./data/docs", True), ("/srv", "data", False)])
+def test_a_relative_root_is_joined_to_the_working_directory(workdir, rel, ok):
+    d = _described(mount="/app/data", env=_env(root=rel))
+    d["taskDefinition"]["containerDefinitions"][0]["workingDirectory"] = workdir
+    assert check_durable_store(d)[1] is ok
+
+
+@pytest.mark.parametrize("env", [
+    {"DOCUMENT_BYTE_STORE": "efs", "DOCUMENT_STORE_ROOT": "data", "REQUIRE_DURABLE_DOCUMENT_STORE": "1"},
+    {"DOCUMENT_BYTE_STORE": "efs", "REQUIRE_DURABLE_DOCUMENT_STORE": "1"},
+])
+def test_a_relative_root_without_a_working_directory_is_unverified(env):
+    _, ok, detail = check_durable_store(_described(env=env))
+    assert ok is None and "workingDirectory=<not_in_task_definition>" in detail
+
+
+@pytest.mark.parametrize("hidden", ["secrets", "environmentFiles"])
+def test_an_unset_root_with_a_hidden_data_dir_is_unverified(hidden):
+    env = {"DOCUMENT_BYTE_STORE": "efs", "REQUIRE_DURABLE_DOCUMENT_STORE": "1"}
+    d = _described(env=env)
+    c = d["taskDefinition"]["containerDefinitions"][0]
+    if hidden == "secrets":
+        c["secrets"] = [{"name": "DATA_DIR", "valueFrom": "arn:aws:ssm:x:0:parameter/p"}]
+        want = "DATA_DIR=<secret>"
+    else:
+        c["environmentFiles"] = [{"type": "s3", "value": "arn:aws:s3:::b/app.env"}]
+        want = "DOCUMENT_STORE_ROOT=<env_file>"
+    _, ok, detail = check_durable_store(d)
+    assert ok is None and want in detail
+
+
+@pytest.mark.parametrize("age_h", [30, 191])
+def test_one_page_of_a_longer_listing_without_a_fresh_point_is_unverified(age_h):
+    points = {"RecoveryPoints": [_point(NOW - timedelta(hours=age_h), arn=_arn("fs-0aaa"))],
+              "NextToken": "abc"}
+    name, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
+    assert ok is None and "more_pages=not_read" in detail
+    # Negative: the same stale page with no NextToken is complete, and fails.
+    del points["NextToken"]
+    assert check_recovery_point(points, "fs-0aaa", NOW, 26)[1] is False
+
+
+@pytest.mark.parametrize("token", ["abc", "eyJuZXh0IjoxfQ=="])
+def test_a_fresh_point_on_one_page_is_enough(token):
+    points = {"RecoveryPoints": [_point(NOW - timedelta(hours=2), arn=_arn("fs-0bbb"))], "NextToken": token}
+    assert check_recovery_point(points, "fs-0bbb", NOW, 26)[1] is True
+
+
+@pytest.mark.parametrize("token", [None, "", "  "])
+def test_an_empty_next_token_is_a_complete_listing(token):
+    points = {"RecoveryPoints": [], "NextToken": token}
+    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
+    assert ok is False and "more_pages" not in detail
+
+
+@pytest.mark.parametrize("token", [5, ["abc"]])
+def test_a_next_token_that_is_not_text_is_not_read(token):
+    points = {"RecoveryPoints": [], "NextToken": token}
+    assert check_recovery_point(points, "fs-0aaa", NOW, 26) == (
+        "recovery_point", None, "file_system=fs-0aaa not_checked=recovery-points:NextToken_not_text")
+
+
+@pytest.mark.parametrize("workdir", ["app", "./srv", "   "])
+def test_a_relative_root_under_a_relative_working_directory_is_unverified(workdir):
+    # The image's own WORKDIR, which a relative one resolves against, is not in the file.
+    d = _described(mount="/app/data", env=_env(root="data"))
+    d["taskDefinition"]["containerDefinitions"][0]["workingDirectory"] = workdir
+    _, ok, detail = check_durable_store(d)
+    assert ok is None and "workingDirectory=<not_in_task_definition>" in detail

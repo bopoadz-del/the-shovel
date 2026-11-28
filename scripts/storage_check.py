@@ -16,12 +16,17 @@ Checks, one ``STORAGE_CHECK`` line each, then a verdict line:
 
   * ``durable_store``  the container that mounts the EFS volume read-write
     keeps the document store on it with the startup guard on
-    (``DOCUMENT_BYTE_STORE=efs``, ``DOCUMENT_STORE_ROOT`` = the mount,
+    (``DOCUMENT_BYTE_STORE=efs``, the store root on the EFS mount,
     ``REQUIRE_DURABLE_DOCUMENT_STORE`` on). Each setting is read the way the
-    app reads it: the backend stripped and lowercased, the root compared as a
-    normalised path, the guard on only for a value the app takes as on.
+    app reads it: the backend stripped and lowercased; the root resolved by
+    the app's own ``resolve_store_root`` (``DOCUMENT_STORE_ROOT``, else
+    ``DATA_DIR``, else its default), a relative root joined to the
+    container's ``workingDirectory``, and the root on the EFS mount when that
+    mount is the closest one covering it (the mount path itself or any
+    directory under it); the guard on only for a value the app takes as on.
   * ``backup_policy``  the EFS file system the task mounts has automatic
-    backups ``ENABLED``.
+    backups ``ENABLED``. Any other status (``ENABLING``, ``DISABLING``,
+    ``DISABLED``) fails: none of them is a volume being backed up now.
   * ``recovery_point`` that same file system has a ``COMPLETED`` recovery
     point no older than ``--max-age-hours``. A recovery point that names a
     different file system is not counted: a backup vault can hold another
@@ -30,21 +35,32 @@ Checks, one ``STORAGE_CHECK`` line each, then a verdict line:
 
 Every input is either read and understood, or the checks that need it say
 ``UNVERIFIED`` with ``not_checked=<input>:<reason>``. An input the checker
-cannot read (missing, empty, not JSON, the wrong shape, the wrong command's
-output) is never a pass and never a fail. The same holds inside an input: a
-setting held as a secret (its running value is not in the task definition),
-a task where more than one container mounts EFS read-write, an EFS volume
-naming no file system, and a recovery point whose date cannot be read or
-lies ahead of ``--now`` are each reported, not judged.
+cannot read (missing, empty, not text in the encoding it declares, not
+JSON, the wrong shape, the wrong command's output) is never a pass and never
+a fail. A file is read as UTF-8 (a UTF-8 byte-order mark is allowed) unless
+it opens with a UTF-16 byte-order mark, as Windows PowerShell 5.1 writes a
+redirected file. The same holds inside an input: a setting whose running
+value is not in the task definition (held as a secret, or left to the
+container's ``environmentFiles``, which a plain ``environment`` value
+overrides), a relative store root with no ``workingDirectory``, a task where
+more than one container mounts EFS read-write, a store root on a path two
+mounts share, an EFS volume naming no file system, a recovery point whose
+date cannot be read or lies ahead of ``--now``, and a recovery-point listing
+that says it has more pages (``NextToken``) without a fresh point on this
+one are each reported, not judged.
 
 Exit 0 only when every check is ``ok``; 1 when any check fails; 2 when no
 check failed and one is ``UNVERIFIED``, or ``--now`` cannot be read. It
-never prints a secret: only setting names, the file system id, counts and
-timestamps.
+never prints a secret: a setting held as a secret or in an environment file
+prints as ``<secret>`` / ``<env_file>``. It prints the file system id,
+counts, timestamps, mount paths and the plain values of the store settings
+it judges (``DOCUMENT_BYTE_STORE``, ``DOCUMENT_STORE_ROOT``, ``DATA_DIR``,
+``REQUIRE_DURABLE_DOCUMENT_STORE``).
 """
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import math
 import posixpath
@@ -56,10 +72,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.byte_store import guard_value_on
+from app.core.byte_store import guard_value_on, resolve_store_root
 from scripts.durable_store_rollout import BACKEND, GUARD, ROOT
 
 _PREFIX = "STORAGE_CHECK"
+
+#: The app's fallback store setting when DOCUMENT_STORE_ROOT is unset.
+DATA_DIR = "DATA_DIR"
 
 #: One day of automatic-backup cadence plus slack for the backup window.
 DEFAULT_MAX_AGE_HOURS = 26.0
@@ -168,17 +187,80 @@ def mounted_file_system(described: dict) -> str:
     return fs_id
 
 
-def _settings(container: dict) -> tuple[dict[str, str], set]:
+@dataclass(frozen=True)
+class _Hidden:
+    """A setting whose running value is not in the task definition."""
+
+    shown: str
+
+
+@dataclass(frozen=True)
+class _Settings:
+    plain: dict[str, str]
+    secrets: frozenset[str]
+    env_files: int
+
+    def read(self, name: str) -> str | None | _Hidden:
+        """The value the container runs with; None when it is unset.
+
+        A secret twin hides a plain value (the file cannot show which one
+        runs). A plain value overrides ``environmentFiles``; with no plain
+        value, a container that loads an environment file may set it there.
+        """
+        if name in self.secrets:
+            return _Hidden(f"{name}=<secret>")
+        if name in self.plain:
+            return self.plain[name]
+        if self.env_files:
+            return _Hidden(f"{name}=<env_file>")
+        return None
+
+
+def _settings(container: dict) -> _Settings:
     env = {}
     for e in _objects(container.get("environment"), "environment"):
         env[_text(e.get("name"), "environment_name")] = _text(e.get("value"), "environment_value")
     secrets = {_text(s.get("name"), "secret_name") for s in _objects(container.get("secrets"), "secrets")}
-    return env, secrets
+    files = _objects(container.get("environmentFiles"), "environmentFiles")
+    return _Settings(env, frozenset(secrets), len(files))
 
 
-def _same_path(a: str, b: str) -> bool:
-    a, b = (a or "").strip(), (b or "").strip()
-    return bool(a) and bool(b) and posixpath.normpath(a) == posixpath.normpath(b)
+def _store_root(settings: _Settings, container: dict) -> tuple[str, str] | _Hidden:
+    """(shown, absolute root) the app writes under, or what hides it."""
+    configured = settings.read(ROOT)
+    if isinstance(configured, _Hidden):
+        return configured
+    data_dir = None
+    shown = f"{ROOT}={(configured or '').strip()}"
+    if not (configured or "").strip():
+        data_dir = settings.read(DATA_DIR)
+        if isinstance(data_dir, _Hidden):
+            return _Hidden(f"{ROOT}=<unset> {data_dir.shown}")
+        shown = f"{ROOT}=<unset> {DATA_DIR}={'<unset>' if data_dir is None else data_dir}"
+    root = resolve_store_root(configured, data_dir)
+    if not root.startswith("/"):
+        workdir = _text(container.get("workingDirectory"), "workingDirectory").strip()
+        if not workdir.startswith("/"):
+            return _Hidden(f"{shown} workingDirectory=<not_in_task_definition>")
+        root = posixpath.join(workdir, root)
+    return shown, posixpath.normpath(root)
+
+
+def _covering_mounts(container: dict, root: str) -> list[str]:
+    """The container's mount points closest above ``root`` (ties all kept)."""
+    best: list[str] = []
+    for m in _objects(container.get("mountPoints"), "mountPoints"):
+        path = _text(m.get("containerPath"), "containerPath").strip()
+        if not path.startswith("/"):
+            continue
+        mp = posixpath.normpath(path)
+        if not (mp == "/" or root == mp or root.startswith(mp + "/")):
+            continue
+        if not best or len(mp) > len(best[0]):
+            best = [mp]
+        elif len(mp) == len(best[0]):
+            best.append(mp)
+    return best
 
 
 def _not_checked(name: str, reason: str, fs_id: str = "") -> Check:
@@ -202,20 +284,33 @@ def check_durable_store(described: Input) -> Check:
     mount = mounts[0]
     if not mount.path.startswith("/"):
         return (name, False, "efs_mount_not_absolute")
+    efs_path = posixpath.normpath(mount.path)
     try:
-        env, secrets = _settings(mount.container)
+        settings = _settings(mount.container)
+        root = _store_root(settings, mount.container)
+        covering = [] if isinstance(root, _Hidden) else _covering_mounts(mount.container, root[1])
     except _Unreadable as exc:
         return _not_checked(name, f"described:{exc.reason}")
     wrong: list[str] = []
-    # A setting held as a secret runs with a value this file does not show,
-    # even when a plain value of the same name is also there.
-    unread = [f"{n}=<secret>" for n in (BACKEND, ROOT, GUARD) if n in secrets]
-    if BACKEND not in secrets and env.get(BACKEND, "").strip().lower() != "efs":
-        wrong.append(f"{BACKEND}={env.get(BACKEND) or '<unset>'}")
-    if ROOT not in secrets and not _same_path(env.get(ROOT, ""), mount.path):
-        wrong.append(f"{ROOT}={env.get(ROOT) or '<unset>'} mount={mount.path}")
-    if GUARD not in secrets and not guard_value_on(env.get(GUARD, "")):
-        shown = env.get(GUARD, "").strip()
+    unread: list[str] = []
+    backend = settings.read(BACKEND)
+    if isinstance(backend, _Hidden):
+        unread.append(backend.shown)
+    elif (backend or "").strip().lower() != "efs":
+        wrong.append(f"{BACKEND}={backend or '<unset>'}")
+    if isinstance(root, _Hidden):
+        unread.append(root.shown)
+    elif len(covering) > 1:
+        # Which of two mounts on one path the app sees is not in the file.
+        unread.append(f"{root[0]} mounts_on_one_path={covering[0]}")
+    elif covering != [efs_path]:
+        on = covering[0] if covering else "<container_disk>"
+        wrong.append(f"{root[0]} root={root[1]} on={on} mount={efs_path}")
+    guard = settings.read(GUARD)
+    if isinstance(guard, _Hidden):
+        unread.append(guard.shown)
+    elif not guard_value_on(guard or ""):
+        shown = (guard or "").strip()
         wrong.append(f"{GUARD}={shown + ' (off)' if shown else '<unset>'}")
     if wrong:
         return (name, False, " ".join(wrong + unread))
@@ -280,6 +375,8 @@ def check_recovery_point(
             raise _Unreadable("no_RecoveryPoints")
         listed = _objects(points["RecoveryPoints"], "RecoveryPoints")
         own = [p for p in listed if _names_file_system(p, fs_id)]
+        # A NextToken means this is one page of a longer listing.
+        more_pages = bool(_text(points.get("NextToken"), "NextToken").strip())
     except _Unreadable as exc:
         return _not_checked(name, f"recovery-points:{exc.reason}", fs_id)
     completed: list[datetime] = []
@@ -300,6 +397,7 @@ def check_recovery_point(
     detail = (
         f"file_system={fs_id} own={len(own)} completed={len(completed)} "
         f"undated={undated} ahead={ahead} other_volumes={len(listed) - len(own)}"
+        f"{' more_pages=not_read' if more_pages else ''}"
     )
     if completed:
         newest = max(completed)
@@ -309,8 +407,8 @@ def check_recovery_point(
             return (name, True, detail)
     else:
         detail += " newest=<none>"
-    if undated or ahead:
-        # A point this check could not date may be the fresh one.
+    if undated or ahead or more_pages:
+        # A point this check could not date, or did not see, may be the fresh one.
         return (name, None, detail)
     return (name, False, detail)
 
@@ -341,14 +439,19 @@ def _load(path: Path | None) -> Input:
     if path is None:
         return None
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        raw = path.read_bytes()
     except OSError as exc:
         return NotRead(f"unreadable_file_{type(exc).__name__}")
+    utf16 = raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+    try:
+        text = raw.decode("utf-16" if utf16 else "utf-8-sig").strip()
+    except UnicodeDecodeError:
+        return NotRead("not_utf16_text" if utf16 else "not_utf8_text")
     if not text:
         return NotRead("empty_file")
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return NotRead("not_json")
     if not isinstance(data, dict):
         return NotRead("not_an_object")

@@ -114,12 +114,21 @@ def backend_name() -> str:
     return raw
 
 
-def store_root() -> str:
-    """Directory that new document bytes are written under."""
-    configured = os.getenv("DOCUMENT_STORE_ROOT", "").strip()
+#: Where document bytes go when neither DOCUMENT_STORE_ROOT nor DATA_DIR is set.
+DEFAULT_DATA_DIR = "./data"
+
+
+def resolve_store_root(document_store_root: str | None, data_dir: str | None) -> str:
+    """The store root from the two settings' raw values (None = unset)."""
+    configured = (document_store_root or "").strip()
     if configured:
         return configured
-    return os.getenv("DATA_DIR", "./data")
+    return DEFAULT_DATA_DIR if data_dir is None else data_dir
+
+
+def store_root() -> str:
+    """Directory that new document bytes are written under."""
+    return resolve_store_root(os.getenv("DOCUMENT_STORE_ROOT"), os.getenv("DATA_DIR"))
 
 
 def _is_production() -> bool:
