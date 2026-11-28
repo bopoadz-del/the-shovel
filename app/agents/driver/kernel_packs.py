@@ -78,17 +78,52 @@ def _entries() -> Dict[str, Dict[str, Any]]:
     return out
 
 
+#: The fields of a catalogue entry that are not what its id is or does: the
+#: stamps and the gap list kept ABOUT the entry.
+NOT_FACTS = ("stamps", "gaps")
+
+
+def procedure_behind(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The procedure an entry stands for, whole, as its hat's manifest holds
+    it (steps, refusals and every other field); None for an entry whose code
+    names no procedure. A named procedure the hats do not have raises
+    ``KernelPackError``."""
+    code = entry.get("code") or {}
+    if "procedure" not in code:
+        return None
+    from app.agents import catalog
+
+    for hat in catalog.list_hats():
+        if hat.discipline.value != code.get("hat") or not hat.playbook:
+            continue
+        for proc in hat.playbook.procedures or []:
+            if proc.id == code["procedure"]:
+                return proc.model_dump(mode="json")
+    raise KernelPackError(f"{entry['id']}: the hats hold no procedure {code['procedure']!r} "
+                          f"of {code.get('hat')!r}")
+
+
 def code_facts(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """What a line about ``entry`` is written against: for a formula,
-    knowledge entry or kernel the facts of its catalogue file; for anything
-    else the entry's name, purpose, inputs, outputs, call and source."""
+    """What a line about ``entry`` is written against, so that nothing a line
+    can restate is left out: for a formula, knowledge entry or kernel the
+    facts of its catalogue file, for anything else the entry's name, purpose,
+    inputs, outputs, call and source; and for every kind, under
+    ``catalogue``, the whole entry the catalogue shows for the id (when to
+    use it, when not, its standard, its examples; all but ``NOT_FACTS``)
+    and, under ``procedure``, the procedure behind it where its code names
+    one."""
     from app.agents.driver import catalogue_files
 
     kind = entry["kind"]
     if kind in ("formula", "knowledge", "kernel"):
-        return catalogue_files.facts(kind, entry)
-    keys = ("name", "for", "inputs", "outputs", "code", "source")
-    return json.loads(json.dumps({k: entry.get(k) for k in keys}, allow_nan=False))
+        out = catalogue_files.facts(kind, entry)
+    else:
+        out = {k: entry.get(k) for k in ("name", "for", "inputs", "outputs", "code", "source")}
+    out["catalogue"] = {k: v for k, v in entry.items() if k not in NOT_FACTS}
+    behind = procedure_behind(entry)
+    if behind is not None:
+        out["procedure"] = behind
+    return json.loads(json.dumps(out, allow_nan=False))
 
 
 def fingerprint(entries: Dict[str, Dict[str, Any]], ids: List[str],

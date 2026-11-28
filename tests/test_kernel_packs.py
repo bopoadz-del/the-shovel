@@ -291,6 +291,124 @@ def test_a_line_whose_facts_changed_is_stale_and_drops_back(pack, entries, targe
     assert stale_line not in kp.approved_lines(pack, changed), "a re-stamp clears approved"
 
 
+def _changed_field(entries, target, field, value):
+    changed = dict(entries)
+    entry = copy.deepcopy(entries[target])
+    entry[field] = value
+    changed[target] = entry
+    return changed
+
+
+@pytest.mark.parametrize("target,field,value,stale_line", [
+    # what a skill line restates: when the skill is not to be used
+    ("skill:quantities.q2", "when_not", "nothing; it re-measures every quantity itself.",
+     "skills/skill:quantities.q2"),
+    ("skill:quantities.q5", "when_to_use", "another use.", "skills/skill:quantities.q5"),
+    # the same fields of a formula and of a knowledge entry
+    ("formula:rebar_weight", "when_not", "never.", "formulas/formula:rebar_weight"),
+    ("formula:rebar_weight", "when_to_use", "another use.", "formulas/formula:rebar_weight"),
+    ("formula:rebar_weight", "standard", "another standard", "formulas/formula:rebar_weight"),
+    ("formula:rebar_weight", "examples", [{"said": "x"}], "formulas/formula:rebar_weight"),
+    ("knowledge:boq_units_of_measurement", "when_not", "never.", "knowledge/knowledge:boq_units_of_measurement"),
+    # what feeds what is a fact of the id, for a skill as it already is for a formula
+    ("skill:quantities.q2", "fed_by", ["formula:a_new_formula"], "skills/skill:quantities.q2"),
+    ("skill:quantities.q5", "feeds", ["formula:a_new_formula"], "skills/skill:quantities.q5"),
+])
+def test_a_line_goes_stale_when_anything_the_catalogue_shows_for_its_id_changes(pack, entries, target, field,
+                                                                                value, stale_line):
+    _approve_all(pack)
+    assert entries[target][field] != value
+    changed = _changed_field(entries, target, field, value)
+    assert stale_line in kp.stale(pack, changed)
+    assert stale_line not in kp.approved_lines(pack, changed)
+    assert stale_line in kp.approved_lines(pack, entries)
+    assert stale_line in kp.stamp(pack, changed), "a re-stamp clears approved"
+    assert stale_line not in kp.approved_lines(pack, changed)
+
+
+@pytest.mark.parametrize("target,field,value", [
+    # kept ABOUT the entry: a line is not unapproved by them
+    ("formula:rebar_weight", "stamps", {"verified": "x", "tested": "y", "approved": "z"}),
+    ("formula:rebar_weight", "gaps", ["another gap"]),
+    ("skill:quantities.q2", "stamps", {"verified": "x", "tested": None, "approved": None}),
+    ("skill:quantities.q5", "gaps", []),
+])
+def test_a_line_stays_approved_when_only_what_is_kept_about_its_id_changes(pack, entries, target, field, value):
+    _approve_all(pack)
+    assert entries[target][field] != value
+    changed = _changed_field(entries, target, field, value)
+    assert kp.stale(pack, changed) == []
+    assert kp.approved_lines(pack, changed) == kp.approved_lines(pack, entries)
+
+
+def _procedure(hat_name, proc_id):
+    from app.agents import catalog
+
+    for hat in catalog.list_hats():
+        if hat.discipline.value == hat_name:
+            for proc in hat.playbook.procedures:
+                if proc.id == proc_id:
+                    return proc
+    raise AssertionError((hat_name, proc_id))
+
+
+@pytest.mark.parametrize("skill,field,value", [
+    ("q2", "steps", ["re-measure every item from the drawings"]),
+    ("q2", "done_when", "never."),
+    ("q5", "steps", []),
+    ("q5", "refusals", "nothing; it corrects every row itself."),
+])
+def test_a_skill_line_goes_stale_when_the_procedure_behind_it_changes(monkeypatch, pack, entries, skill, field,
+                                                                     value):
+    """The manifest's procedure holds more than the catalogue entry shows
+    (its steps, when it is done); a skill line restates them."""
+    _approve_all(pack)
+    where = f"skills/skill:quantities.{skill}"
+    proc = _procedure("quantities", skill)
+    assert getattr(proc, field) != value and kp.stale(pack, entries) == []
+    monkeypatch.setattr(proc, field, value)
+    assert kp.stale(pack, entries) == [where]
+    assert where not in kp.approved_lines(pack, entries)
+    assert kp.stamp(pack, entries) == [where]
+    assert where not in kp.approved_lines(pack, entries), "a re-stamp clears approved"
+
+
+@pytest.mark.parametrize("entry,behind", [
+    ({"id": "skill:quantities.q2", "code": {"hat": "quantities", "procedure": "q2"}}, "q2"),
+    ({"id": "skill:quantities.q5", "code": {"hat": "quantities", "procedure": "q5"}}, "q5"),
+    ({"id": "formula:rebar_weight", "code": {"tool": "construction_calc"}}, None),
+    ({"id": "x", "code": None}, None),
+    ({"id": "x"}, None),
+])
+def test_procedure_behind_is_the_manifests_procedure_whole_or_none(entry, behind):
+    found = kp.procedure_behind(entry)
+    if behind is None:
+        assert found is None
+    else:
+        proc = _procedure("quantities", behind)
+        assert found == proc.model_dump(mode="json")
+        assert found["id"] == behind and found["steps"] and found["refusals"]
+
+
+@pytest.mark.parametrize("code", [{"hat": "quantities", "procedure": "no_such_procedure"},
+                                  {"hat": "no_such_hat", "procedure": "q2"},
+                                  {"procedure": "q2"}])
+def test_procedure_behind_refuses_a_procedure_the_hats_do_not_hold(code):
+    with pytest.raises(kp.KernelPackError, match="the hats hold no procedure"):
+        kp.procedure_behind({"id": "skill:x", "code": code})
+
+
+@pytest.mark.parametrize("target", ["formula:rebar_weight", "skill:quantities.q2",
+                                    "knowledge:boq_units_of_measurement", "kernel:quantities"])
+def test_code_facts_hold_everything_the_catalogue_shows_for_the_id(entries, target):
+    entry = entries[target]
+    facts = kp.code_facts(entry)
+    assert set(facts["catalogue"]) == set(entry) - set(kp.NOT_FACTS)
+    assert all(facts["catalogue"][k] == json.loads(json.dumps(entry[k])) for k in facts["catalogue"])
+    assert ("procedure" in facts) == (entry["kind"] == "skill")
+    assert facts["inputs"] == json.loads(json.dumps(entry["inputs"]))
+
+
 def test_a_chain_goes_stale_when_any_of_its_formulas_changes(pack, entries):
     changed = _changed_facts(entries, "formula:cost_buildup_rebar")
     gone = kp.stale(pack, changed)
