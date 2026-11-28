@@ -11,7 +11,7 @@ import math
 import re
 from typing import Any
 
-from app.lib.formula_registry import Param, formula
+from app.lib.formula_registry import Param, formula, in_declared_range
 
 _BENCHMARK_PROVENANCE = (
     "benchmark, unverified, owner-supplied planner template "
@@ -181,6 +181,12 @@ def _refusal(reason: str, field: str, given: bool = True) -> dict:
     return out
 
 
+#: The quantity input. Its range holds in the row's unit: the quantity is
+#: checked against it after it is put into that unit, on every path.
+_QUANTITY = Param("-", lo=0.0, hi=1e12, label="quantity of the work item",
+                  unit_from="quantity_unit")
+
+
 @formula(
     owner="planning",
     display_name="Production duration from a planner template row",
@@ -203,8 +209,7 @@ def _refusal(reason: str, field: str, given: bool = True) -> dict:
         # reads the unit the figure is in. A unit written in the value
         # arrives here as quantity_unit (or is refused at the front door),
         # never dropped.
-        "quantity": Param("-", lo=0.0, hi=1e12, label="quantity of the work item",
-                          unit_from="quantity_unit"),
+        "quantity": _QUANTITY,
         "quantity_unit": Param("-", label="unit the quantity is measured in"),
     },
     outputs={
@@ -247,6 +252,13 @@ def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str)
         quantity, converted = _into_row_unit(quantity, quantity_unit, unit)
     except ValueError as exc:
         return _refusal(f"row {key!r} {exc}", "quantity_unit")
+    if not in_declared_range(_QUANTITY, quantity):
+        # Checked in the row's unit, the unit the quantity is divided in,
+        # whatever unit it was written in.
+        shown = converted or f"{float(quantity):.10g} {unit}"
+        return _refusal(f"the quantity of the work item, {shown}, is outside what this "
+                        f"calculator accepts ({_QUANTITY.lo:g} to {_QUANTITY.hi:g} {unit})",
+                        "quantity")
     not_covered = next(nc for item, _u, _c, _r, _f, nc in template_rows()
                        if _normalise_work_item(item) == key)
     return {

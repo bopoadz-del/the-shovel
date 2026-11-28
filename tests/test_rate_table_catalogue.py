@@ -595,7 +595,7 @@ def test_a_refused_given_value_is_asked_again_with_the_calculators_reason(item, 
     assert out["status"] == "error", out
     assert out["missing"] == [field], out
     question = out["question"]
-    assert said in question and "does not apply" in question or "not a planner template row" in question, out
+    assert said in question and ("does not apply" in question or "not a planner template row" in question), out
     assert "calculator needs the" not in question, out
     assert question.endswith("should I use?"), out
     assert question.count(said) == 1 and out["error"].count(said) == 1, out
@@ -659,3 +659,90 @@ def test_run_calculation_with_no_params_asks_for_every_input(raw):
     out = cf.run_calculation("crew_days_from_rate_row", raw)
     assert out["status"] == "needs_input", out
     assert {"work_item", "quantity"} <= set(out["missing"]), out
+
+
+
+# ── the quantity's range holds in the row's unit, on every path ──────────
+# The declared range (0 to 1e12) is read in the unit the quantity is
+# divided in, the row's. A number in another unit is held to it only after
+# it is put into that unit, whatever path it came by.
+
+@pytest.mark.parametrize("item,written,unit,want_days", [
+    # In range once converted, though the number as written is above 1e12.
+    ("blockwork walls", "1.2e12 cm2", "m2", 1.2e8 / 12),
+    ("ceiling plaster", 1.2e12, "mm2", 1.2e6 / 20),
+    ("blockwork walls", "1.2e12 cm2", "", 1.2e8 / 12),
+    ("ceiling plaster", "1.2e12 cm2", "sq ft", 1.2e8 / 20),
+])
+def test_a_quantity_in_range_in_the_rows_unit_runs(item, written, unit, want_days):
+    out = _run(item, written, unit)
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("item,written,unit,shown", [
+    # Out of range once converted, though the number as written is below 1e12.
+    ("blockwork walls", "2e11 ha", "m2", "2e+11 ha = 2e+15 m2"),
+    ("ceiling plaster", "5e11 km2", "m2", "5e+11 km2 = 5e+17 m2"),
+    ("blockwork walls", "2e11 ha", "", "2e+11 ha = 2e+15 m2"),
+    ("ceiling plaster", "2e11 ha", "-", "2e+11 ha = 2e+15 m2"),
+    # Already in the row's unit: held as it is.
+    ("blockwork walls", 1.2e12, "m2", "1.2e+12 m2"),
+    ("ceiling plaster", "-5 m2", "m2", "-5 m2"),
+])
+def test_a_quantity_out_of_range_in_the_rows_unit_is_asked_again(item, written, unit, shown):
+    out = _run(item, written, unit)
+    assert out["status"] == "error", out
+    assert out["missing"] == ["quantity"], out
+    question = out["question"]
+    assert shown in question and "0 to 1e+12 m2" in question, question
+    assert question.endswith("should I use?"), question
+    assert "duration_crew_days" not in (out.get("result") or {})
+
+
+@pytest.mark.parametrize("item,qty,unit,ok", [
+    # The bound itself is inside (hi is inclusive); just above it is not.
+    ("blockwork walls", 1e12, "m2", True),
+    ("ceiling plaster", 1e12 * (1 + 1e-9), "m2", False),
+    ("blockwork walls", 1e16, "mm2", True),
+    ("ceiling plaster", 2e11, "ha", False),
+])
+def test_the_calculator_checks_the_range_after_converting(item, qty, unit, ok):
+    if ok:
+        res = pb.crew_days_from_rate_row(item, qty, unit)
+        assert "duration_crew_days" in res, res
+    else:
+        msg = _refused(item, qty, unit)
+        assert "outside" in msg and "1e+12 m2" in msg, msg
+
+
+@pytest.mark.parametrize("value,unit,ok", [
+    (1.2e12, "cm2", True),
+    (2e11, "ha", False),
+])
+def test_the_range_is_held_in_the_rows_unit_on_the_sheet(value, unit, ok):
+    step = _sheet_step(value, unit, {"work_item": "blockwork walls", "quantity": "g1",
+                                     "quantity_unit": "m2"})
+    if ok:
+        assert step["status"] == "done", step
+        assert float(step["result"]["value"]) == pytest.approx(1.2e8 / 12)
+    else:
+        assert step["status"] != "done", step
+        assert "outside" in json.dumps(step), step
+
+
+@pytest.mark.parametrize("values,refused", [
+    # A unit given beside the figure: the front door does not hold the
+    # range against the number in that unit; the calculator does, in its own.
+    ({"quantity": 2e12, "quantity_unit": "mm2"}, False),
+    ({"quantity": 2e12, "quantity_unit": "ha"}, False),
+    # No unit at all: the front door still holds the range.
+    ({"quantity": 2e12}, True),
+    ({"quantity": 2e12, "quantity_unit": "-"}, True),
+    ({"quantity": -1, "quantity_unit": " "}, True),
+])
+def test_the_front_door_holds_the_range_only_on_a_number_with_no_unit(values, refused):
+    _out, rejected = fr.check_inputs("crew_days_from_rate_row", values)
+    assert bool(rejected) is refused, rejected
+    if refused:
+        assert rejected[0]["reason"] == "out_of_range", rejected

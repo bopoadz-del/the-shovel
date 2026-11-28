@@ -207,7 +207,8 @@ def input_question(calculation: str, rejected: List[Dict[str, Any]],
         if reason == "refused":
             # The calculator's own reason for refusing a value it was given.
             detail = str(row.get("detail") or "").strip().rstrip(".")
-            sentence = (detail[:1].upper() + detail[1:] + ".") if detail else                 f"The {display} calculator did not accept the {label} given."
+            sentence = ((detail[:1].upper() + detail[1:] + ".") if detail
+                        else f"The {display} calculator did not accept the {label} given.")
             if sentence not in sentences:
                 sentences.append(sentence)
         elif reason == "wrong_unit":
