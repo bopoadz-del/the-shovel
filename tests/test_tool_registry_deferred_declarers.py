@@ -553,3 +553,50 @@ def test_a_name_declared_by_another_thread_meanwhile_is_not_overwritten(invented
     assert tool_registry._RESULTS[name].display_name == other_label
     assert (declarer in tool_registry._DEFERRED) is conflicts
     assert (declarer in tool_registry._RETRY_AT) is conflicts
+
+
+# --- The ``driver`` flag a tool declares where it is defined --------------
+
+@pytest.fixture
+def invented_tools():
+    made: list[str] = []
+
+    def make(name, *, driver=True, fn=None):
+        made.append(name)
+
+        async def handler(call, agent, ctx):  # never called by these tests
+            return {}
+
+        return tool_registry.tool(name, owner="base", display_name=f"Invented {name}",
+                                  driver=driver)(fn or handler)
+
+    yield make
+    for n in made:
+        tool_registry._TOOLS.pop(n, None)
+
+
+@pytest.mark.parametrize("name", ["invented_offered_a", "invented_offered_b"])
+def test_a_tool_is_offered_to_the_driver_unless_it_declares_otherwise(invented_tools, name):
+    invented_tools(name)
+    invented_tools(name + "_not", driver=False)
+    names = tool_registry.driver_tools()
+    assert name in names
+    assert name + "_not" not in names
+    assert tool_registry.get(name).driver is True
+    assert tool_registry.get(name + "_not").driver is False
+
+
+@pytest.mark.parametrize("name", ["invented_twice_a", "invented_twice_b"])
+def test_a_second_handler_under_one_name_is_refused_and_the_first_kept(invented_tools, name):
+    first = invented_tools(name, driver=False)
+
+    async def other(call, agent, ctx):
+        return {}
+
+    with pytest.raises(ValueError, match="registered twice"):
+        invented_tools(name, fn=other)
+    kept = tool_registry.get(name)
+    assert kept.handler is first
+    assert kept.driver is False
+    # The same handler registered again is not a second registration.
+    assert invented_tools(name, fn=first, driver=False) is first

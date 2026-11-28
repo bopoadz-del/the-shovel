@@ -18,6 +18,12 @@ SOURCE_USER = "user_input"
 SOURCE_PROJECT = "project_document"
 SOURCE_GENERAL = "general_knowledge"
 SOURCE_CALCULATOR = "calculator"
+#: A figure the user told in an earlier chat, read back this turn from a
+#: project note that the note itself marks as told by the user. Never a
+#: verified source: shown with what it is, as a document figure is shown
+#: with its document.
+SOURCE_USER_NOTE = "user_note"
+USER_NOTE_LABEL = "Told by the user, from the project notes"
 
 #: Provenance of the answer just finished in this task (read by the message
 #: store so the record is saved with the assistant message).

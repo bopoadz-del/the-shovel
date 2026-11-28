@@ -8,6 +8,7 @@ question; the model searches with tools when it needs to.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -59,6 +60,30 @@ def project_profile(project_id: Optional[str], user_id: Optional[str]) -> str:
     return "Project profile\n" + "\n".join(lines) if lines else f"Project {project_id}: no profile on record."
 
 
+def notes_index(project_id: Optional[str]) -> str:
+    """The index of the model's own notes in this project, one line each
+    (name | size | date written | whether the owner kept it), as the
+    catalogue index is given: names only, never a note's content. The model
+    decides whether to read one; nothing here picks a note for the question.
+    Discarded notes are not listed. Empty when there is no project or no note."""
+    if not project_id:
+        return ""
+    from app.core import llm_memory
+
+    try:
+        notes = llm_memory.listing(project_id, with_review=True)
+    except Exception:  # noqa: BLE001 -- the index never blocks the turn
+        logging.getLogger(__name__).warning("notes index unavailable for this turn", exc_info=True)
+        return ""
+    lines = [f"- {n['name']} | {n['bytes']} bytes | written {str(n['written_at'])[:10]} | "
+             f"{llm_memory.verified_words(n['review'])}"
+             for n in notes if n.get("review") != llm_memory.DISCARDED]
+    if not lines:
+        return ""
+    return ("Your notes in this project (name | size | written | verified). Read one in full "
+            "with read_memory; write_memory with the same name replaces it.\n" + "\n".join(lines))
+
+
 def system_message(project_id: Optional[str], user_id: Optional[str], hat: Optional[str]) -> Dict[str, Any]:
     hat_lines = "\n".join(f"- {h['discipline']}: {h['description']}" for h in hats())
     # 6b static-prefix-first (ORDERS_31OCT_1525Z): the STATIC lead -- intro,
@@ -83,6 +108,10 @@ def system_message(project_id: Optional[str], user_id: Optional[str], hat: Optio
     if guidance:
         parts.append(f"You are wearing the {hat} hat.\n{guidance}")
     parts.append(project_profile(project_id, user_id))
+    # Per project and per write, so it goes after the profile, last.
+    index = notes_index(project_id)
+    if index:
+        parts.append(index)
     return {"role": "system", "content": "\n\n".join(parts)}
 
 

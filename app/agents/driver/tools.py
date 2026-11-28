@@ -34,7 +34,9 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
 
     # Every package's tools, whichever hat is worn (or none): a hat is focus,
     # never access. A tool the turn needs is never out of reach.
-    names = {n for owner in tool_registry.OWNERS for n in tool_registry.tools_of(owner)}
+    # A tool that declares it is not for this path is left out where it is
+    # defined (``driver=False``), never by a list of names here.
+    names = set(tool_registry.driver_tools())
     # The package tools' schemas are written next to the construction block's
     # in tool_definitions and emitted only when that block is allowed; in
     # driver mode the registry, not the agent's block list, decides.

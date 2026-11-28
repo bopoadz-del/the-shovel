@@ -435,6 +435,22 @@ def _working_document_records(text: str) -> list[EvidenceRecord]:
     return records
 
 
+def _told_note_records(content: Any) -> list[EvidenceRecord]:
+    """One record for a notes tool result whose own result says it is told
+    by the user (``told_by_user``), holding the note's data; none otherwise."""
+    try:
+        payload = json.loads(content or "")
+    except (TypeError, ValueError):
+        # Not a tool result this module can read: it backs nothing.
+        _LOG.debug("a notes tool message that is not JSON backs no figure", exc_info=True)
+        return []
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict) or result.get("told_by_user") is not True or "data" not in result:
+        return []
+    return [EvidenceRecord(kind="user_note", text=json.dumps(result["data"], ensure_ascii=False),
+                           source_class="user_note")]
+
+
 def _is_notes(name: Any) -> bool:
     from app.agents.core.tool_registry import is_notes
 
@@ -462,7 +478,11 @@ def _message_records(messages: Iterable[dict[str, Any]] | None) -> list[Evidence
         elif role == "tool":
             name = m.get("name") or None
             if _is_notes(name):
-                # The model's own notes are never evidence for a figure.
+                # The model's own notes are never evidence for a figure, save
+                # what the user told: a note the read's own result marks as
+                # told by the user backs the figures it holds as the user's,
+                # from the notes (never as a document or a calculation).
+                records.extend(_told_note_records(m.get("content")))
                 continue
             tid = str(m.get("tool_call_id") or "")
             text = str(m.get("content") or "")
@@ -1458,8 +1478,10 @@ def _figure_mentions(text: str) -> list[tuple[re.Match, float]]:
 
 
 def _nums(text: str) -> list[float]:
+    from app.core.llm_memory import FIGURE
+
     out = []
-    for tok in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+    for tok in FIGURE.findall(text or ""):
         try:
             out.append(float(tok.replace(",", "")))
         except ValueError:
@@ -1469,6 +1491,26 @@ def _nums(text: str) -> list[float]:
 
 def _match(value: float, pool: Iterable[float]) -> bool:
     return any(_close(value, p) for p in pool)
+
+
+def _told_words(value: float, notes: Iterable[Any]) -> str:
+    """What the told notes hold of the figure matched, in the notes' own
+    words: every value of ``notes`` that holds a figure of that size, under
+    the name the note keeps it by, exactly as the note holds it. Figures are
+    matched by size and no code reads a sign out of a note's text; the reader
+    is shown the user's own words next to the answer's figure."""
+    from app.core import llm_memory
+
+    lines: list[str] = []
+    for note in notes:
+        for name, held in llm_memory.note_entries(note):
+            if not _match(value, _rescaled(llm_memory.note_figures(held))):
+                continue
+            words = llm_memory.as_written(held)
+            line = f"{name}: {words}" if name else words
+            if line not in lines:
+                lines.append(line)
+    return "; ".join(lines)
 
 
 def _rescaled(values: Iterable[float]) -> set[float]:
@@ -1683,6 +1725,12 @@ def figure_provenance(
         for rec in ev.records:
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
+        from app.core import llm_memory
+
+        # A told note's figures, read as every told check reads them
+        # (llm_memory.note_figures): its values, never its key names.
+        told_notes = [json.loads(rec.text) for rec in ev.records if rec.kind == "user_note"]
+        told_vals = {n for note in told_notes for n in llm_memory.note_figures(note)}
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         # B11: the words of the ask a cited sentence must name when a chunk
         # carries competing figures in the same unit. Derived only on the
@@ -1854,6 +1902,9 @@ def figure_provenance(
                         break
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
+            if entry is None and _match(value, _rescaled(told_vals)):
+                entry = {"figure": fig, "source": pt.SOURCE_USER_NOTE, "doc_name": pt.USER_NOTE_LABEL,
+                         "sentence": _told_words(value, told_notes)}
             if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:
