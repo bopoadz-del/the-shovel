@@ -219,3 +219,21 @@ def test_a_bare_quantity_with_its_unit_beside_it_computes(item, bare, want_days)
     out = _run(item, bare, "m2")
     assert out["status"] == "success", out
     assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("item,qty,ok", [
+    # The declared range starts at 0 inclusive (as crew_sizing's quantity):
+    # no work takes no crew-days, a true figure. Below 0 is refused.
+    ("blockwork walls", 0, True),
+    ("ceiling plaster", "0", True),
+    ("blockwork walls", -5, False),
+    ("ceiling plaster", -0.5, False),
+])
+def test_the_quantitys_lower_bound_is_zero_inclusive(item, qty, ok):
+    out = _run(item, qty, "m2")
+    if ok:
+        assert out["status"] == "success", out
+        assert out["result"]["duration_crew_days"] == 0.0
+    else:
+        assert out["status"] != "success", out
+        assert "duration_crew_days" not in (out.get("result") or {})

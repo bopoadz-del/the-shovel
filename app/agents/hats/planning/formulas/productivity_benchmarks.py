@@ -169,8 +169,7 @@ def _same_unit(a: Any, b: Any) -> bool:
         # row-unit check below reads the unit the figure is in. A unit
         # written in the value itself is refused at the front door, not
         # dropped (the same declaration the arithmetic step's values use).
-        "quantity": Param(BARE_NUMBER, lo=0.0, hi=1e12, above_lo=True,
-                          label="quantity of the work item"),
+        "quantity": Param(BARE_NUMBER, lo=0.0, hi=1e12, label="quantity of the work item"),
         "quantity_unit": Param("-", label="unit the quantity is measured in"),
     },
     outputs={
