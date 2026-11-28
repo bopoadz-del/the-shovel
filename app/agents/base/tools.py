@@ -331,18 +331,23 @@ def bill_rows_statement(result: dict) -> list[Statement]:
         if not isinstance(bill, dict):
             continue
         source = str(bill.get("filename") or bill.get("document_id") or "")
+        # The words are shown as what matched the rows only when they did:
+        # a result whose question scope chose the rows says its terms were
+        # not applied. The statement still carries them (they name the part
+        # of the question the figure is for) and says they did not match.
+        applied = bill.get("terms_applied") is not False
         terms = tuple(str(t) for t in bill.get("terms") or [])
         within = tuple(str(t) for t in bill.get("section_terms") or [])
         if bill.get("status") != "success":
             out.append(Statement(figure=None, what="", source=source, basis="count",
-                                 terms=terms, within=within,
+                                 terms=terms, within=within, words_matched=applied,
                                  failure=str(bill.get("reason") or bill.get("error") or "")))
             continue
         rows = [r for r in bill.get("rows") or [] if isinstance(r, dict)]
         measure = str(bill.get("measure") or "quantity")
         out.append(Statement(figure=float(len(rows)), what=measure, source=source,
                              rows=tuple(_row_label(r) for r in rows), count=len(rows),
-                             basis="count", terms=terms, within=within))
+                             basis="count", terms=terms, within=within, words_matched=applied))
         if not rows:
             continue
         by_unit = bill.get("sum_by_unit")
@@ -355,7 +360,7 @@ def bill_rows_statement(result: dict) -> list[Statement]:
                       and (measure != "quantity" or str(r.get("unit") or "") == unit)]
             out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
                                  source=source, rows=tuple(_row_label(r) for r in behind),
-                                 basis="sum", terms=terms, within=within,
+                                 basis="sum", terms=terms, within=within, words_matched=applied,
                                  row_figures=tuple(float(r[measure]) for r in behind)))
     return out
 
