@@ -228,6 +228,12 @@ CASES: Dict[str, Case] = {
         ({"activities": _CPM_ACTIVITIES, "near_critical_band_days": "1 working week",
           "days_per_week": 5},
          {"project_duration": 8, "near_critical": ["B"], "near_critical_band_days": 5})),
+    # The planner template's blockwork row: 12 m2 per crew-day, so 600 m2
+    # takes 600 / 12 = 50 crew-days. The quantity is a bare number with its
+    # unit beside it, so there is no unit case.
+    "crew_days_from_rate_row": Case(
+        {"work_item": "blockwork walls", "quantity": 600, "quantity_unit": "m2"},
+        {"duration_crew_days": 50.0, "rate_per_crew_day": 12.0}, "quantity", None),
     # 2 cranes x 6 months; per crane per month 10000 + 2000 + 3000 = 15000;
     # hire 2*6*15000 = 180000; mobilisation 50 % of one month's dry hire per
     # crane = 2*5000 = 10000; demobilisation 75 % of that = 7500;

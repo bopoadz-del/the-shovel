@@ -1,0 +1,28 @@
+[
+  {
+    "formula": "crew_days_from_rate_row",
+    "inputs": {
+      "work_item": "blockwork walls",
+      "quantity": 600,
+      "quantity_unit": "m2"
+    },
+    "expect": {
+      "duration_crew_days": 50,
+      "rate_per_crew_day": 12
+    },
+    "working": "The planner template row for blockwork walls is 12 m2 per crew-day; duration = quantity / rate = 600 / 12 = 50 crew-days."
+  },
+  {
+    "formula": "crew_days_from_rate_row",
+    "inputs": {
+      "work_item": "internal wall plaster",
+      "quantity": 350,
+      "quantity_unit": "m2"
+    },
+    "expect": {
+      "duration_crew_days": 17.5,
+      "rate_per_crew_day": 20
+    },
+    "working": "The planner template row for internal wall plaster is 20 m2 per crew-day; duration = 350 / 20 = 17.5 crew-days."
+  }
+]

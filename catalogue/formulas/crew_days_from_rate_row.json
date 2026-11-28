@@ -1,0 +1,118 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "formula:crew_days_from_rate_row",
+  "kind": "formula",
+  "facts": {
+    "name": "Production duration from a planner template row",
+    "described_as": "Crew-days to do a quantity of one finishing-trade work item at the planner template's rate: duration = quantity / rate per crew-day. The work item is one template row, named exactly as the row is (see the productivity.* knowledge entries for each row's unit and crew). The quantity's unit goes in quantity_unit; a quantity written with a unit of its own is converted into quantity_unit when it is the same kind and refused, naming both, when it is not. A quantity in another unit of the row's kind (sq ft for an m2 row) is converted into the row's unit and the conversion reported in unit_conversion; another kind is refused, naming both. Unverified owner-supplied template: never a project figure.",
+    "inputs": [
+      {
+        "name": "work_item",
+        "label": "planner template row (work item, as the row names it)",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "quantity",
+        "label": "quantity of the work item",
+        "type": "number",
+        "unit": "",
+        "range": [
+          0.0,
+          1000000000000.0
+        ],
+        "required": true,
+        "basis": ""
+      },
+      {
+        "name": "quantity_unit",
+        "label": "unit the quantity is measured in",
+        "type": "text",
+        "unit": "",
+        "range": null,
+        "required": true,
+        "basis": ""
+      }
+    ],
+    "outputs": [
+      {
+        "name": "duration_crew_days",
+        "unit": "d",
+        "main": true
+      },
+      {
+        "name": "work_item",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "unit",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "crew",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "rate_per_crew_day",
+        "unit": "count/d",
+        "main": false
+      },
+      {
+        "name": "not_covered",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "unit_conversion",
+        "unit": "",
+        "main": false
+      },
+      {
+        "name": "provenance",
+        "unit": "",
+        "main": false
+      }
+    ],
+    "call": {
+      "tool": "construction_calc",
+      "arguments": {
+        "calculation": "crew_days_from_rate_row"
+      },
+      "inputs_as": "params"
+    },
+    "cites": {
+      "standard": null,
+      "credit": "Production duration from a planner template row"
+    },
+    "source": {
+      "registry": "formula",
+      "owner": "planning",
+      "file": "app/agents/hats/planning/formulas/productivity_benchmarks.py"
+    },
+    "required_groups": [],
+    "feeds": [
+      "formula:crew_sizing"
+    ],
+    "fed_by": []
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "Crew-days for a quantity of one finishing-trade work item at a planner template row's rate. You name the row (the productivity.* knowledge entries list each row's unit, crew and what it does not cover); the calculator checks the quantity's unit against the row's.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:productivity_benchmark",
+        "difference": "productivity_benchmark only reads a row's rate; crew_days_from_rate_row also takes the quantity and its unit, checks the unit against the row and gives the crew-days."
+      },
+      {
+        "id": "formula:productivity_manpower_duration",
+        "difference": "productivity_manpower_duration takes a rate you already have (stated in the project's documents); crew_days_from_rate_row takes the template row's rate."
+      }
+    ]
+  }
+}
