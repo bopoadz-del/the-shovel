@@ -91,3 +91,8 @@ def test_an_exponent_past_float_range_is_refused_naming_the_input(length):
                                                  "thickness_m": "0.1", "waste_factor": 0})
     assert env.get("status") != "success", env
     assert "length" in str(env.get("error") or env).lower()
+
+
+@pytest.mark.parametrize("value", [12, 2.5e3, True, None, [3, 4]])
+def test_coerce_scalar_leaves_a_value_that_is_not_text_as_given(value):
+    assert cf._coerce_scalar(value) is value

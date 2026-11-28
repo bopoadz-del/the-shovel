@@ -1668,8 +1668,8 @@ def _annotation_wants_list(annotation: Any) -> bool:
     return origin in (list, List)
 
 def _coerce_scalar(val: Any) -> Any:
-    if isinstance(val, bool) or val is None or isinstance(val, (int, float)):
-        return val
+    # Only text is read: a number, a bool, None or anything else is the
+    # caller's value as given.
     if not isinstance(val, str):
         return val
     text = val.strip()
