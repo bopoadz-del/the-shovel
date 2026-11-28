@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "kernel-pack/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kernel", "formulas", "knowledge", "skills", "chains"],
+  "definitions": {
+    "id": {"type": "string", "pattern": "^[a-z_]+:[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{16}$"},
+    "text": {"type": "string", "minLength": 1},
+    "neighbour": {
+      "type": "object", "additionalProperties": false, "required": ["id", "difference"],
+      "properties": {"id": {"$ref": "#/definitions/id"}, "difference": {"$ref": "#/definitions/text"}}
+    },
+    "line": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "fingerprint", "approved", "purpose", "not_to_be_confused_with"],
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "fingerprint": {"$ref": "#/definitions/fingerprint"},
+        "approved": {"type": "boolean"},
+        "purpose": {"$ref": "#/definitions/text"},
+        "not_to_be_confused_with": {"type": "array", "items": {"$ref": "#/definitions/neighbour"}}
+      }
+    },
+    "value": {
+      "oneOf": [
+        {"type": "number"}, {"type": "string"}, {"type": "boolean"},
+        {"type": "object", "additionalProperties": false, "required": ["from"],
+         "properties": {"from": {"type": "object", "additionalProperties": false,
+                                 "required": ["step", "output"],
+                                 "properties": {"step": {"type": "integer", "minimum": 0},
+                                                "output": {"$ref": "#/definitions/text"}}}}}
+      ]
+    },
+    "chain": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "fingerprint", "approved", "purpose", "steps", "example"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "fingerprint": {"$ref": "#/definitions/fingerprint"},
+        "approved": {"type": "boolean"},
+        "purpose": {"$ref": "#/definitions/text"},
+        "steps": {
+          "type": "array", "minItems": 2,
+          "items": {"type": "object", "additionalProperties": false, "required": ["formula", "inputs"],
+                    "properties": {"formula": {"$ref": "#/definitions/id"},
+                                   "inputs": {"type": "object", "minProperties": 1,
+                                              "additionalProperties": {"$ref": "#/definitions/value"}}}}
+        },
+        "example": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "object", "additionalProperties": false, "required": ["step", "output", "value"],
+                    "properties": {"step": {"type": "integer", "minimum": 0},
+                                   "output": {"$ref": "#/definitions/text"},
+                                   "value": {"type": "number"}}}
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "kernel-pack/1"},
+    "kernel": {"$ref": "#/definitions/id"},
+    "formulas": {"type": "array", "items": {"$ref": "#/definitions/line"}},
+    "knowledge": {"type": "array", "items": {"$ref": "#/definitions/line"}},
+    "skills": {"type": "array", "items": {"$ref": "#/definitions/line"}},
+    "chains": {"type": "array", "minItems": 2, "items": {"$ref": "#/definitions/chain"}}
+  }
+}
