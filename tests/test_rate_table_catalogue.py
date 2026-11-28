@@ -746,3 +746,37 @@ def test_the_front_door_holds_the_range_only_on_a_number_with_no_unit(values, re
     assert bool(rejected) is refused, rejected
     if refused:
         assert rejected[0]["reason"] == "out_of_range", rejected
+
+
+
+@pytest.mark.parametrize("lo,hi,above_lo,number,inside", [
+    (0.0, 10.0, False, 0.0, True),
+    (0.0, 10.0, False, 10.0, True),
+    (0.0, 10.0, False, 10.5, False),
+    (0.0, 10.0, False, -1.0, False),
+    (0.0, 10.0, True, 0.0, False),
+    (0.0, 10.0, False, float("nan"), False),
+])
+def test_in_declared_range_reads_the_declared_bounds(lo, hi, above_lo, number, inside):
+    assert fr.in_declared_range(fr.Param("-", lo=lo, hi=hi, above_lo=above_lo), number) is inside
+
+
+@pytest.mark.parametrize("values", [{"quantity": 2e12}, {"x": "600 m2", "y": None}])
+def test_check_inputs_leaves_an_unknown_formulas_values_as_given(values):
+    out, rejected = fr.check_inputs("no_such_formula_here", values)
+    assert out == values and rejected == []
+
+
+@pytest.mark.parametrize("step_id", ["s9", "missing"])
+def test_run_step_on_a_step_not_in_the_plan_fails_naming_it(step_id):
+    from app.agents.driver import sheet as ws
+
+    s = ws.new_sheet("t-1", "q")
+    s, problems = ws.apply_update(s, {
+        "givens": [{"id": "g1", "value": 600, "unit": "m2"}],
+        "plan": [{"id": "s1", "entry": "formula:crew_days_from_rate_row",
+                  "inputs": {"work_item": "blockwork walls", "quantity": "g1",
+                             "quantity_unit": "m2"}, "output": "duration_crew_days"}]})
+    assert problems == [], problems
+    step = ws.run_step(s, step_id, "c1")["steps"][0]
+    assert step["status"] == "failed" and step_id in step["error"], step
