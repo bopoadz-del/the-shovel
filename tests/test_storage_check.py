@@ -854,7 +854,7 @@ def test_an_unset_root_with_a_hidden_data_dir_is_unverified(hidden):
 def test_one_page_of_a_longer_listing_without_a_fresh_point_is_unverified(age_h):
     points = {"RecoveryPoints": [_point(NOW - timedelta(hours=age_h), arn=_arn("fs-0aaa"))],
               "NextToken": "abc"}
-    name, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
+    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
     assert ok is None and "more_pages=not_read" in detail
     # Negative: the same stale page with no NextToken is complete, and fails.
     del points["NextToken"]
