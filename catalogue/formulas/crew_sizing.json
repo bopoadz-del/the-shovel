@@ -132,6 +132,7 @@
       "formula:productivity_manpower_duration"
     ],
     "fed_by": [
+      "formula:production_duration",
       "formula:productivity_benchmark"
     ]
   },

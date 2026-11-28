@@ -1,0 +1,52 @@
+{
+  "schema": "catalogue-file/1",
+  "id": "knowledge:productivity.wall_paint_primer_and_stucco",
+  "kind": "knowledge",
+  "facts": {
+    "name": "Production rate: wall paint primer and stucco",
+    "described_as": "Planner template production rate for wall paint primer and stucco: 45 m2 per crew-day (painter), on a 10-hour crew-day. Does not cover: demolition, removal or…",
+    "inputs": [],
+    "outputs": [],
+    "call": {
+      "tool": "construction_advisor",
+      "arguments": {
+        "rule_id": "productivity.wall_paint_primer_and_stucco"
+      }
+    },
+    "cites": {
+      "document": "app/knowledge/construction_kb.json",
+      "title": "Production rate: wall paint primer and stucco",
+      "entry": "productivity.wall_paint_primer_and_stucco",
+      "provenance": {
+        "source": "benchmark, unverified, owner-supplied planner template (GCC residential tower, finishing trades)",
+        "project": null,
+        "confidence": "benchmark",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    },
+    "source": {
+      "registry": "knowledge",
+      "file": "app/knowledge/construction_kb.json",
+      "entry": "productivity.wall_paint_primer_and_stucco",
+      "type": "reference_design",
+      "domain": "construction.buildings",
+      "sections": [
+        "statement",
+        "thresholds"
+      ],
+      "provenance": {
+        "source": "benchmark, unverified, owner-supplied planner template (GCC residential tower, finishing trades)",
+        "project": null,
+        "confidence": "benchmark",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3
+    }
+  },
+  "hints": {
+    "approved": false,
+    "purpose": "",
+    "not_to_be_confused_with": []
+  }
+}
