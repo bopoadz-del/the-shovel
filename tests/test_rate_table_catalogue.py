@@ -536,10 +536,13 @@ def _declare(kind, unit_from, tag):
         return {"total": 0.0}
 
     fn = probe_series if kind == "series" else probe_one
-    return fr.formula(owner="planning", display_name="probe", description="probe",
-                      name=f"probe_unit_from_{tag}",
-                      inputs={"qs": fr.Param("-", unit_from=unit_from), "qs_unit": fr.Param("-")},
-                      outputs={"total": "-"})(fn)
+    # formula(...) returns the registry's _register, which checks the
+    # declaration against the signature before it registers anything.
+    _register = fr.formula(owner="planning", display_name="probe", description="probe",
+                           name=f"probe_unit_from_{tag}",
+                           inputs={"qs": fr.Param("-", unit_from=unit_from), "qs_unit": fr.Param("-")},
+                           outputs={"total": "-"})
+    return _register(fn)
 
 
 @pytest.mark.parametrize("unit_from", ["qs_unit", "other_unit"])
