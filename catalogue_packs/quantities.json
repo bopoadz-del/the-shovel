@@ -4,7 +4,7 @@
   "formulas": [
     {
       "id": "formula:concrete_mix_proportions",
-      "fingerprint": "sha256:888f019c50160ba1",
+      "fingerprint": "sha256:44cee923f18f2ddb",
       "approved": false,
       "purpose": "Cement, sand and aggregate volumes for a wet concrete volume, from the caller's own mix proportions, a dry-volume factor and a waste share.",
       "not_to_be_confused_with": [
@@ -16,7 +16,7 @@
     },
     {
       "id": "formula:cost_buildup_concrete",
-      "fingerprint": "sha256:c86c0f8016a9776f",
+      "fingerprint": "sha256:0b8629fad423b1c8",
       "approved": false,
       "purpose": "Selling price per cubic metre of concrete and the value of a given volume, built from material prices and contents, per-m3 plant, labour, erection, power and indirect lines, waste, indirect share and markup.",
       "not_to_be_confused_with": [
@@ -32,7 +32,7 @@
     },
     {
       "id": "formula:cost_buildup_formwork",
-      "fingerprint": "sha256:6459bfde4eb637ea",
+      "fingerprint": "sha256:75578560ab619094",
       "approved": false,
       "purpose": "Selling price per square metre of formwork and the value of a given area, from shuttering supply, scaffold hire over the cycle, labour hours, crane time, indirect share and markup.",
       "not_to_be_confused_with": [
@@ -44,7 +44,7 @@
     },
     {
       "id": "formula:cost_buildup_rebar",
-      "fingerprint": "sha256:f7557f78c514daf0",
+      "fingerprint": "sha256:e82f6d87cb8473d5",
       "approved": false,
       "purpose": "Selling price per tonne of reinforcement and the value of a given mass in kg, from material price, waste, labour hours, crane hours, indirect share and markup.",
       "not_to_be_confused_with": [
@@ -56,7 +56,7 @@
     },
     {
       "id": "formula:crane_cost_estimate",
-      "fingerprint": "sha256:110b17ff799e2cec",
+      "fingerprint": "sha256:07031850332266c2",
       "approved": false,
       "purpose": "Hire cost of a number of cranes over a number of months: dry hire, optional operator and riggers, a remote-area factor, plus mobilisation and demobilisation.",
       "not_to_be_confused_with": [
@@ -68,7 +68,7 @@
     },
     {
       "id": "formula:cut_fill_balance",
-      "fingerprint": "sha256:568f9e0d3decb1b1",
+      "fingerprint": "sha256:fdf32477c5cc1dcd",
       "approved": false,
       "purpose": "Bank-volume balance of cut against fill (positive is surplus to export, negative is deficit to import) and the loose volume to haul after bulking.",
       "not_to_be_confused_with": [
@@ -80,7 +80,7 @@
     },
     {
       "id": "formula:interior_finishes_takeoff",
-      "fingerprint": "sha256:053d34ab7271e204",
+      "fingerprint": "sha256:1e710732a7b00135",
       "approved": false,
       "purpose": "Floor, ceiling, skirting and wall-finish quantities of a set of rooms from floor area, perimeter, room count and floor-to-ceiling height, less door and window openings.",
       "not_to_be_confused_with": [
@@ -92,7 +92,7 @@
     },
     {
       "id": "formula:material_consumption",
-      "fingerprint": "sha256:d451efdc5524e4eb",
+      "fingerprint": "sha256:45bcb3c012b3c9b8",
       "approved": false,
       "purpose": "Material required for a quantity of work: the quantity divided by the output per unit of material, times an optional waste factor or percentage.",
       "not_to_be_confused_with": [
@@ -104,7 +104,7 @@
     },
     {
       "id": "formula:mobilization_cost_estimate",
-      "fingerprint": "sha256:82802811e6b4510e",
+      "fingerprint": "sha256:3ce3fe513c7d582b",
       "approved": false,
       "purpose": "Site set-up cost from personnel count and months: monthly per-person rates for offices, camp, transport, safety and IT, one-off set-up costs and demobilisation, at the project's rates.",
       "not_to_be_confused_with": [
@@ -116,7 +116,7 @@
     },
     {
       "id": "formula:rebar_by_area",
-      "fingerprint": "sha256:9090bc56df5e533c",
+      "fingerprint": "sha256:4b7a39242cd5ebed",
       "approved": false,
       "purpose": "Bar length and mass of reinforcement over a slab or wall area from bar spacing and diameter, one way or both ways.",
       "not_to_be_confused_with": [
@@ -128,7 +128,7 @@
     },
     {
       "id": "formula:rebar_weight",
-      "fingerprint": "sha256:b873748c5e278343",
+      "fingerprint": "sha256:bb47e767fc1be9bd",
       "approved": false,
       "purpose": "Mass of reinforcing bars of one diameter from their total length (or a count of bars of that length), or the metres run a given mass of that diameter makes.",
       "not_to_be_confused_with": [
@@ -140,7 +140,7 @@
     },
     {
       "id": "formula:resource_line_cost",
-      "fingerprint": "sha256:77d6d4b16aa8e01f",
+      "fingerprint": "sha256:7b82815df456fea4",
       "approved": false,
       "purpose": "Labour, plant and material split of one estimate line: crew-days from the quantity and the daily output, labour at the day rate, plant as a share of labour, material at a rate per unit.",
       "not_to_be_confused_with": [
@@ -154,21 +154,21 @@
   "knowledge": [
     {
       "id": "knowledge:boq_units_of_measurement",
-      "fingerprint": "sha256:adb2e1b2cd125042",
+      "fingerprint": "sha256:e091e8a341eee0cd",
       "approved": false,
       "purpose": "The unit each kind of bill item is measured in under the civil and building measurement methods, to read before a quantity is extended against a rate.",
       "not_to_be_confused_with": []
     },
     {
       "id": "knowledge:earthworks.swelling_factor",
-      "fingerprint": "sha256:961828e8f84802cf",
+      "fingerprint": "sha256:9a93c58a0dfe3502",
       "approved": false,
       "purpose": "How a swelling factor is worked out from Proctor density, compaction and loose density, to read before choosing the bulking of cut to haul.",
       "not_to_be_confused_with": []
     },
     {
       "id": "knowledge:interior_finishes_process",
-      "fingerprint": "sha256:d7612f9266417e66",
+      "fingerprint": "sha256:96fe7dcde8b617f0",
       "approved": false,
       "purpose": "How interior quantities and their resource costs are derived on this platform, step by step, to read before an interior take-off is priced.",
       "not_to_be_confused_with": []
@@ -177,14 +177,14 @@
   "skills": [
     {
       "id": "skill:quantities.q2",
-      "fingerprint": "sha256:f7a70073dfd18d5e",
+      "fingerprint": "sha256:cae1502879ccb223",
       "approved": false,
       "purpose": "Review a produced take-off for one trade: revisions first, double counts, missed scope, measurement rules, arithmetic, one evidence field per check; it does not re-measure.",
       "not_to_be_confused_with": []
     },
     {
       "id": "skill:quantities.q5",
-      "fingerprint": "sha256:079cc42ae5dd43e9",
+      "fingerprint": "sha256:95d06c43e94f0a2b",
       "approved": false,
       "purpose": "Before a bill or bid is relied on, test the three identities of a priced schedule: quantity times rate equals amount, rows sum to subtotals, subtotals sum to the total; it corrects nothing.",
       "not_to_be_confused_with": []
@@ -193,7 +193,7 @@
   "chains": [
     {
       "id": "slab_concrete_to_price",
-      "fingerprint": "sha256:bef1c5d38eea6c6e",
+      "fingerprint": "sha256:338c8363b4b65bfb",
       "approved": false,
       "purpose": "Price the concrete of a rectangular slab: measure the volume with its waste, then build up the price of that volume.",
       "steps": [
@@ -259,7 +259,7 @@
     },
     {
       "id": "slab_rebar_to_price",
-      "fingerprint": "sha256:c12b80b03b9f1ecd",
+      "fingerprint": "sha256:39ba8c91c5bfb7d2",
       "approved": false,
       "purpose": "Price the reinforcement of a slab mesh: bar length over the area from the spacing, the mass of that length, then build up the price of that mass.",
       "steps": [

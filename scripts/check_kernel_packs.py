@@ -2,7 +2,8 @@
 """Check every kernel pack (``catalogue_packs/<kernel>.json``) against the code.
 
     python scripts/check_kernel_packs.py            # exit 1 on any fault or stale line
-    python scripts/check_kernel_packs.py --stamp    # re-stamp fingerprints; a changed line loses approved
+    python scripts/check_kernel_packs.py --stamp    # re-stamp fingerprints; a changed line loses approved;
+                                                    # any fault in any pack: listed, exit 1, nothing written
 
 The work is in ``app.agents.driver.kernel_packs``. A pack's words are
 hand-written; this only checks them and stamps fingerprints.
@@ -21,9 +22,25 @@ def main(argv: list[str] | None = None) -> int:
     from app.agents.driver import kernel_packs
 
     if "--stamp" in argv:
+        # every pack is checked before any file is written: a fault in one
+        # pack is listed and no pack is re-stamped
         root = kernel_packs.packs_dir()
-        for kernel, pack in kernel_packs.load(root).items():
-            changed = kernel_packs.stamp(pack)
+        try:
+            packs = kernel_packs.load(root)
+        except kernel_packs.KernelPackError as exc:
+            print(exc)
+            print("not stamped: a pack could not be loaded")
+            return 1
+        entries = kernel_packs._entries()
+        faults = [f"{kernel}: {p}" for kernel, pack in packs.items()
+                  for p in kernel_packs.problems(pack, entries)]
+        if faults:
+            for line in faults:
+                print(line)
+            print(f"{len(faults)} fault(s): no pack was stamped")
+            return 1
+        for kernel, pack in packs.items():
+            changed = kernel_packs.stamp(pack, entries)
             for line in changed:
                 print(f"{kernel}: re-stamped, no longer approved: {line}")
             if changed:
