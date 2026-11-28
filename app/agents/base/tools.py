@@ -320,7 +320,8 @@ def _row_label(row: dict) -> str:
 def bill_rows_statement(result: dict) -> list[Statement]:
     """What a ``bill_rows_aggregate`` result states: per bill, the count of
     the matching rows and the sum of the measure per unit, each with the
-    rows behind it. Two bills are never added together. A bill that did not
+    rows behind it, then the other measure's sum over the same rows where
+    any row carries that figure. Two bills are never added together. A bill that did not
     return is stated as not returned, with its reason, so a partial result is
     never read as complete; a bill with no matching row states a count of 0."""
     body = result if isinstance(result, dict) else {}
@@ -350,18 +351,35 @@ def bill_rows_statement(result: dict) -> list[Statement]:
                              basis="count", terms=terms, within=within, words_matched=applied))
         if not rows:
             continue
-        by_unit = bill.get("sum_by_unit")
-        if not isinstance(by_unit, dict) or not by_unit:
-            by_unit = {} if bill.get("sum") is None else {str(bill.get("unit") or ""): bill.get("sum")}
-        for unit, total in by_unit.items():
-            if total is None:
-                continue
-            behind = [r for r in rows if r.get(measure) is not None
-                      and (measure != "quantity" or str(r.get("unit") or "") == unit)]
-            out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
-                                 source=source, rows=tuple(_row_label(r) for r in behind),
-                                 basis="sum", terms=terms, within=within, words_matched=applied,
-                                 row_figures=tuple(float(r[measure]) for r in behind)))
+        out.extend(_bill_sum_statements(bill, measure, rows, source, terms, within, applied))
+        # The measure not asked, totalled by the same call over the same rows,
+        # is stated the same way (it has no total, so states none, when no
+        # row carries that figure).
+        other = bill.get("other_measure")
+        if isinstance(other, dict) and other.get("measure") and other.get("measure") != measure:
+            out.extend(_bill_sum_statements(other, str(other["measure"]), rows, source, terms, within,
+                                               applied))
+    return out
+
+
+def _bill_sum_statements(totals: dict, measure: str, rows: list[dict], source: str,
+                         terms: tuple[str, ...], within: tuple[str, ...],
+                         words_matched) -> list[Statement]:
+    """One sum statement per unit of ``measure`` in ``totals`` (a bill result,
+    or its ``other_measure``), each with the rows that carry that figure."""
+    out: list[Statement] = []
+    by_unit = totals.get("sum_by_unit")
+    if not isinstance(by_unit, dict) or not by_unit:
+        by_unit = {} if totals.get("sum") is None else {str(totals.get("unit") or ""): totals.get("sum")}
+    for unit, total in by_unit.items():
+        if total is None:
+            continue
+        behind = [r for r in rows if r.get(measure) is not None
+                  and (measure != "quantity" or str(r.get("unit") or "") == unit)]
+        out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
+                             source=source, rows=tuple(_row_label(r) for r in behind),
+                             basis="sum", terms=terms, within=within, words_matched=words_matched,
+                             row_figures=tuple(float(r[measure]) for r in behind)))
     return out
 
 

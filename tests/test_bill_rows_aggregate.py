@@ -300,13 +300,15 @@ def test_statement_names_the_words_when_they_chose_the_rows(tmp_path, terms, cou
 
 @pytest.mark.parametrize("junk", ["not a bill", ["a", "list"]])
 def test_statement_skips_an_entry_that_is_not_a_bill_object(tmp_path, junk):
-    """A malformed entry beside a good bill states nothing; the good bill is stated whole."""
+    """A malformed entry beside a good bill states nothing; the good bill is stated whole
+    (its count, the amount asked, and the quantity the same call totalled)."""
     from app.agents.base.tools import bill_rows_statement
 
     out = agg.aggregate(_sheet(tmp_path, BILL_NAMED), terms="topsoil", measure=agg.MEASURE_AMOUNT,
                         ask="how much is it")
     stated = bill_rows_statement({"bills": [junk, {"status": "success", **out}]})
-    assert [(s.basis, s.figure) for s in stated] == [("count", 1.0), ("sum", 50.0)]
+    assert [(s.basis, s.what, s.figure) for s in stated] == [
+        ("count", "amount", 1.0), ("sum", "amount", 50.0), ("sum", "quantity", 10.0)]
 
 
 @pytest.mark.parametrize("terms, within, status", [
