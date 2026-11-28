@@ -410,8 +410,9 @@ def test_an_approved_line_whose_words_change_drops_back_until_re_stamped(pack, e
     assert where in kp.approved_lines(pack, entries), "re-approved after it was read again"
 
 
-def test_check_names_a_line_whose_words_changed(tmp_path, pack):
-    where = _edit(pack, "purpose")
+@pytest.mark.parametrize("what", ["purpose", "difference"])
+def test_check_names_a_line_whose_words_changed(tmp_path, pack, what):
+    where = _edit(pack, what)
     found = kp.check(_write_root(tmp_path, [pack]))
     assert found == [f"kernel:quantities: {where}: stale (its words or the code facts it names "
                      "changed since it was stamped; read it again and re-stamp)"], found
@@ -512,11 +513,12 @@ def test_check_reports_an_unreadable_or_stray_file(tmp_path, shipped, name, body
         kp.load(root)
 
 
-def test_check_of_a_directory_with_no_pack_is_a_fault(tmp_path, shipped):
+@pytest.mark.parametrize("with_schema", [True, False])
+def test_check_of_a_directory_with_no_pack_is_a_fault(tmp_path, shipped, with_schema):
     empty, full = tmp_path / "empty", tmp_path / "full"
     empty.mkdir()
     full.mkdir()
-    root = _write_root(empty, [])
+    root = _write_root(empty, []) if with_schema else str(empty)
     assert kp.check(root) == [f"packs: no kernel pack in {root}"]
     assert kp.check(_write_root(full, shipped.values())) == []
 
