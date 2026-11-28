@@ -235,15 +235,18 @@ def test_search_rows_over_one_message_are_left_out_whole_and_counted(cap, kept):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("libraries, top_k, scores", [
-    (["gk1", "gk2"], None, [0.9, 0.8, 0.7, 0.6, 0.5]),
-    (["gk1", "gk2"], 99, [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]),
-], ids=["default-five", "at-most-twenty"])
+    (["gk1", "gk2"], None, [0.98, 0.97, 0.96, 0.95, 0.94]),
+    (["gk1", "gk2"], 99, [round(0.98 - i / 100, 2) for i in range(20)]),
+    (["gk2"], 3, [0.97, 0.95, 0.93]),
+], ids=["default-five", "at-most-twenty", "one-library"])
 async def test_general_knowledge_merges_every_library_best_first(monkeypatch, libraries, top_k, scores):
     from app.agents.base.knowledge import handle_search_general_knowledge
     from app.core import doc_index
     from app.core.rag import retriever
 
-    per = {"gk1": [0.9, 0.7, 0.5, 0.3], "gk2": [0.8, 0.6, 0.4, 0.2]}
+    # 15 hits per library, interleaved by score: the merge is best first across both.
+    per = {"gk1": [round(0.98 - 2 * i / 100, 2) for i in range(15)],
+           "gk2": [round(0.97 - 2 * i / 100, 2) for i in range(15)]}
 
     async def fake(project_id, query, k, **_kw):
         return [{"score": s} for s in per[project_id][:k]]
