@@ -118,15 +118,20 @@ def test_the_shipped_pack_has_no_problem_before_it_is_broken(pack, entries, harm
     ("extra_key", "pack: Additional properties"),
     ("approved_word", "formulas/0/approved: "),
 ])
-def test_a_pack_off_the_schema_gives_the_schema_fault_first(pack, entries, break_it, where):
-    # these faults are invisible to every later check: only the schema sees them
+def test_a_pack_off_the_schema_gives_the_schema_fault_alone(pack, entries, break_it, where):
+    # a pack off the schema is not read further: a later fault it also has
+    # (a missing line of an owned formula) is not reported until the schema
+    # fault is put right
+    gone = pack["formulas"].pop(3)["id"]
+    assert any(f"no line for {gone}" in p for p in kp.problems(pack, entries))
     if break_it == "extra_key":
         pack["notes"] = "free text"
     else:
         pack["formulas"][0]["approved"] = "yes"
     found = kp.problems(pack, entries)
-    assert found and all(p == q for p, q in zip(found, kp.schema_problems(pack)))
+    assert found == kp.schema_problems(pack) and found, found
     assert any(p.startswith(where) for p in found), found
+    assert not any(gone in p for p in found), found
 
 
 @pytest.mark.parametrize("chain_id,step,name,output", [
