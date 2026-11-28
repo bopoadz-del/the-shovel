@@ -1,0 +1,331 @@
+{
+  "schema": "kernel-pack/1",
+  "kernel": "kernel:quantities",
+  "formulas": [
+    {
+      "id": "formula:concrete_mix_proportions",
+      "fingerprint": "sha256:888f019c50160ba1",
+      "approved": false,
+      "purpose": "Cement, sand and aggregate volumes for a wet concrete volume, from the caller's own mix proportions, a dry-volume factor and a waste share.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:cost_buildup_concrete",
+          "difference": "cost_buildup_concrete prices a cubic metre of concrete; concrete_mix_proportions gives material volumes, not money."
+        }
+      ]
+    },
+    {
+      "id": "formula:cost_buildup_concrete",
+      "fingerprint": "sha256:c86c0f8016a9776f",
+      "approved": false,
+      "purpose": "Selling price per cubic metre of concrete and the value of a given volume, built from material prices and contents, per-m3 plant, labour, erection, power and indirect lines, waste, indirect share and markup.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:concrete_mix_proportions",
+          "difference": "concrete_mix_proportions gives material volumes from mix parts; cost_buildup_concrete gives a price."
+        },
+        {
+          "id": "formula:concrete_volume",
+          "difference": "concrete_volume measures the cubic metres; cost_buildup_concrete takes them as quantity_m3."
+        }
+      ]
+    },
+    {
+      "id": "formula:cost_buildup_formwork",
+      "fingerprint": "sha256:6459bfde4eb637ea",
+      "approved": false,
+      "purpose": "Selling price per square metre of formwork and the value of a given area, from shuttering supply, scaffold hire over the cycle, labour hours, crane time, indirect share and markup.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:cost_buildup_concrete",
+          "difference": "cost_buildup_concrete is per cubic metre of concrete; cost_buildup_formwork is per square metre of formed face."
+        }
+      ]
+    },
+    {
+      "id": "formula:cost_buildup_rebar",
+      "fingerprint": "sha256:f7557f78c514daf0",
+      "approved": false,
+      "purpose": "Selling price per tonne of reinforcement and the value of a given mass in kg, from material price, waste, labour hours, crane hours, indirect share and markup.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:rebar_weight",
+          "difference": "rebar_weight gives the mass of bars; cost_buildup_rebar prices a mass already known, taken in kg."
+        }
+      ]
+    },
+    {
+      "id": "formula:crane_cost_estimate",
+      "fingerprint": "sha256:110b17ff799e2cec",
+      "approved": false,
+      "purpose": "Hire cost of a number of cranes over a number of months: dry hire, optional operator and riggers, a remote-area factor, plus mobilisation and demobilisation.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:mobilization_cost_estimate",
+          "difference": "mobilization_cost_estimate is site set-up for personnel (offices, camp, transport); crane_cost_estimate is crane hire only."
+        }
+      ]
+    },
+    {
+      "id": "formula:cut_fill_balance",
+      "fingerprint": "sha256:568f9e0d3decb1b1",
+      "approved": false,
+      "purpose": "Bank-volume balance of cut against fill (positive is surplus to export, negative is deficit to import) and the loose volume to haul after bulking.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:excavation_volume",
+          "difference": "excavation_volume measures one dug volume from its dimensions; cut_fill_balance compares two volumes already measured."
+        }
+      ]
+    },
+    {
+      "id": "formula:interior_finishes_takeoff",
+      "fingerprint": "sha256:053d34ab7271e204",
+      "approved": false,
+      "purpose": "Floor, ceiling, skirting and wall-finish quantities of a set of rooms from floor area, perimeter, room count and floor-to-ceiling height, less door and window openings.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:resource_line_cost",
+          "difference": "resource_line_cost prices one line's labour, plant and material; interior_finishes_takeoff only measures quantities."
+        }
+      ]
+    },
+    {
+      "id": "formula:material_consumption",
+      "fingerprint": "sha256:d451efdc5524e4eb",
+      "approved": false,
+      "purpose": "Material required for a quantity of work: the quantity divided by the output per unit of material, times an optional waste factor or percentage.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:resource_line_cost",
+          "difference": "resource_line_cost gives cost and crew-days from a daily output; material_consumption gives a material quantity, not money."
+        }
+      ]
+    },
+    {
+      "id": "formula:mobilization_cost_estimate",
+      "fingerprint": "sha256:82802811e6b4510e",
+      "approved": false,
+      "purpose": "Site set-up cost from personnel count and months: monthly per-person rates for offices, camp, transport, safety and IT, one-off set-up costs and demobilisation, at the project's rates.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:crane_cost_estimate",
+          "difference": "crane_cost_estimate is crane hire; mobilization_cost_estimate is people and site facilities."
+        }
+      ]
+    },
+    {
+      "id": "formula:rebar_by_area",
+      "fingerprint": "sha256:9090bc56df5e533c",
+      "approved": false,
+      "purpose": "Bar length and mass of reinforcement over a slab or wall area from bar spacing and diameter, one way or both ways.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:rebar_weight",
+          "difference": "rebar_weight starts from a known bar length or mass; rebar_by_area starts from an area and a spacing."
+        }
+      ]
+    },
+    {
+      "id": "formula:rebar_weight",
+      "fingerprint": "sha256:b873748c5e278343",
+      "approved": false,
+      "purpose": "Mass of reinforcing bars of one diameter from their total length (or a count of bars of that length), or the metres run a given mass of that diameter makes.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:rebar_by_area",
+          "difference": "rebar_by_area starts from a slab or wall area and a bar spacing; rebar_weight starts from a known bar length or a known mass."
+        }
+      ]
+    },
+    {
+      "id": "formula:resource_line_cost",
+      "fingerprint": "sha256:77d6d4b16aa8e01f",
+      "approved": false,
+      "purpose": "Labour, plant and material split of one estimate line: crew-days from the quantity and the daily output, labour at the day rate, plant as a share of labour, material at a rate per unit.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:material_consumption",
+          "difference": "material_consumption gives a material quantity; resource_line_cost gives the line's cost."
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "knowledge:boq_units_of_measurement",
+      "fingerprint": "sha256:adb2e1b2cd125042",
+      "approved": false,
+      "purpose": "The unit each kind of bill item is measured in under the civil and building measurement methods, to read before a quantity is extended against a rate.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "knowledge:earthworks.swelling_factor",
+      "fingerprint": "sha256:961828e8f84802cf",
+      "approved": false,
+      "purpose": "How a swelling factor is worked out from Proctor density, compaction and loose density, to read before choosing the bulking of cut to haul.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "knowledge:interior_finishes_process",
+      "fingerprint": "sha256:d7612f9266417e66",
+      "approved": false,
+      "purpose": "How interior quantities and their resource costs are derived on this platform, step by step, to read before an interior take-off is priced.",
+      "not_to_be_confused_with": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "skill:quantities.q2",
+      "fingerprint": "sha256:f7a70073dfd18d5e",
+      "approved": false,
+      "purpose": "Review a produced take-off for one trade: revisions first, double counts, missed scope, measurement rules, arithmetic, one evidence field per check; it does not re-measure.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:quantities.q5",
+      "fingerprint": "sha256:079cc42ae5dd43e9",
+      "approved": false,
+      "purpose": "Before a bill or bid is relied on, test the three identities of a priced schedule: quantity times rate equals amount, rows sum to subtotals, subtotals sum to the total; it corrects nothing.",
+      "not_to_be_confused_with": []
+    }
+  ],
+  "chains": [
+    {
+      "id": "slab_concrete_to_price",
+      "fingerprint": "sha256:bef1c5d38eea6c6e",
+      "approved": false,
+      "purpose": "Price the concrete of a rectangular slab: measure the volume with its waste, then build up the price of that volume.",
+      "steps": [
+        {
+          "formula": "formula:concrete_volume",
+          "inputs": {
+            "length_m": 12,
+            "width_m": 6,
+            "thickness_m": 0.25,
+            "waste_factor": 0.05
+          }
+        },
+        {
+          "formula": "formula:cost_buildup_concrete",
+          "inputs": {
+            "quantity_m3": {
+              "from": {
+                "step": 0,
+                "output": "volume_with_waste_m3"
+              }
+            },
+            "cement_kg_m3": 400,
+            "cement_price_per_t": 300,
+            "aggregate_price_per_t": 40,
+            "water_price_per_m3": 5,
+            "microsilica_kg_m3": 12,
+            "microsilica_price_per_kg": 2,
+            "plasticizer_lit_m3": 5,
+            "plasticizer_price_per_lit": 3,
+            "plant_cost_per_m3": 20,
+            "labour_cost_per_m3": 35,
+            "erection_per_m3": 10,
+            "power_per_m3": 4,
+            "indirect_per_m3": 8,
+            "waste_pct": 0.03,
+            "indirect_pct": 0.18,
+            "markup_pct": 0.15
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "net_volume_m3",
+          "value": 18.0
+        },
+        {
+          "step": 0,
+          "output": "volume_with_waste_m3",
+          "value": 18.9
+        },
+        {
+          "step": 1,
+          "output": "selling_price_per_m3",
+          "value": 440.57
+        },
+        {
+          "step": 1,
+          "output": "total_project_value",
+          "value": 8327.0
+        }
+      ]
+    },
+    {
+      "id": "slab_rebar_to_price",
+      "fingerprint": "sha256:c12b80b03b9f1ecd",
+      "approved": false,
+      "purpose": "Price the reinforcement of a slab mesh: bar length over the area from the spacing, the mass of that length, then build up the price of that mass.",
+      "steps": [
+        {
+          "formula": "formula:rebar_by_area",
+          "inputs": {
+            "area_m2": 120,
+            "spacing_mm": 200,
+            "bar_diameter_mm": 12,
+            "both_ways": true
+          }
+        },
+        {
+          "formula": "formula:rebar_weight",
+          "inputs": {
+            "bar_diameter_mm": 12,
+            "total_length_m": {
+              "from": {
+                "step": 0,
+                "output": "total_bar_length_m"
+              }
+            }
+          }
+        },
+        {
+          "formula": "formula:cost_buildup_rebar",
+          "inputs": {
+            "quantity_kg": {
+              "from": {
+                "step": 1,
+                "output": "total_mass_kg"
+              }
+            },
+            "material_price_per_t": 2600,
+            "labour_mhr_t": 90,
+            "labour_rate_per_hr": 15,
+            "crane_hr_t": 2,
+            "crane_rate_per_hr": 90,
+            "waste_pct": 0.1,
+            "indirect_pct": 0.18,
+            "markup_pct": 0.15
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "total_bar_length_m",
+          "value": 1200.0
+        },
+        {
+          "step": 1,
+          "output": "total_mass_kg",
+          "value": 1065.38
+        },
+        {
+          "step": 2,
+          "output": "selling_price_per_t",
+          "value": 6094.0
+        },
+        {
+          "step": 2,
+          "output": "total_project_value",
+          "value": 6492.0
+        }
+      ]
+    }
+  ]
+}
