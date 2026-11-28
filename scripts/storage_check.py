@@ -62,8 +62,12 @@ never prints a secret: a setting held as a secret or in an environment file
 prints as ``<secret>`` / ``<env_file>``. It prints the file system id,
 counts, timestamps, mount paths and the plain values of the store settings
 it judges (``DOCUMENT_BYTE_STORE``, ``DOCUMENT_STORE_ROOT``, ``DATA_DIR``,
-``REQUIRE_DURABLE_DOCUMENT_STORE``); a carriage return or line feed in a
-check's line prints escaped, so a value cannot forge a second line.
+``REQUIRE_DURABLE_DOCUMENT_STORE``). Every line it prints goes out through
+``_emit``: each character that is not printable ASCII (a line break of any
+kind, a control character, a letter outside ASCII) prints as its backslash
+escape. So a line is one line however the caller splits the output, a value
+cannot forge a second line, and a value the terminal's encoding cannot
+write does not stop the check.
 """
 from __future__ import annotations
 
@@ -515,6 +519,17 @@ def _max_age(raw: str) -> float:
     return value
 
 
+def _one_line(text: str) -> str:
+    """``text`` with every character outside printable ASCII written as its
+    backslash escape: one line in any encoding and under any line splitter."""
+    return "".join(c if " " <= c <= "~" else c.encode("unicode_escape").decode("ascii") for c in text)
+
+
+def _emit(text: str, stream: Any = None) -> None:
+    """The one way this script prints a line (stdout unless ``stream``)."""
+    print(_one_line(text), file=stream if stream is not None else sys.stdout)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("described", type=Path, help="describe-task-definition JSON")
@@ -531,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         now = _parse_when(args.now) if args.now else datetime.now(timezone.utc)
     except ValueError:
-        print(f"{_PREFIX} unreadable_input now", file=sys.stderr)
+        _emit(f"{_PREFIX} unreadable_input now", sys.stderr)
         return 2
     inputs = {
         "described": _load(args.described),
@@ -540,23 +555,22 @@ def main(argv: list[str] | None = None) -> int:
     }
     for label, value in inputs.items():
         if isinstance(value, NotRead):
-            print(f"{_PREFIX} unreadable_input {label} {value.reason}", file=sys.stderr)
+            _emit(f"{_PREFIX} unreadable_input {label} {value.reason}", sys.stderr)
     checks = run_checks(inputs["described"], inputs["backup-policy"],
                         inputs["recovery-points"], now, args.max_age_hours,
                         asked_for=args.file_system_id)
     for name, ok, detail in checks:
         word = "UNVERIFIED" if ok is None else ("ok" if ok else "FAIL")
-        one_line = detail.replace("\r", "\\r").replace("\n", "\\n")
-        print(f"{_PREFIX} {name}={word} {one_line}")
+        _emit(f"{_PREFIX} {name}={word} {detail}")
     failed = [name for name, ok, _ in checks if ok is False]
     unverified = [name for name, ok, _ in checks if ok is None]
     if failed:
-        print(f"{_PREFIX} verdict=FAIL failed={','.join(failed)}")
+        _emit(f"{_PREFIX} verdict=FAIL failed={','.join(failed)}")
         return 1
     if unverified:
-        print(f"{_PREFIX} verdict=UNVERIFIED unverified={','.join(unverified)}")
+        _emit(f"{_PREFIX} verdict=UNVERIFIED unverified={','.join(unverified)}")
         return 2
-    print(f"{_PREFIX} verdict=ok failed=none")
+    _emit(f"{_PREFIX} verdict=ok failed=none")
     return 0
 
 

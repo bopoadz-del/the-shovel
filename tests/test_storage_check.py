@@ -1072,3 +1072,69 @@ def test_a_value_cannot_forge_a_line(tmp_path, capsys, forged):
     assert not any(line.startswith("STORAGE_CHECK verdict=ok") for line in lines)
     store = next(line for line in lines if line.startswith("STORAGE_CHECK durable_store=FAIL"))
     assert store.count("\\n") == 1
+
+
+# --- every printed line is one line, in any encoding --------------------------
+@pytest.mark.parametrize("text,printed", [
+    ("plain ~ text / = , :", "plain ~ text / = , :"),
+    ("a\nb\rc", "a\\nb\\rc"),
+    ("x y z", "x\\u2028y\\u2029z"),
+    ("p\x85q", "p\\x85q"),
+    ("v\x0bw\x0cx\x1cy\x1dz\x1e.", "v\\x0bw\\x0cx\\x1cy\\x1dz\\x1e."),
+    ("/app/数据", "/app/\\u6570\\u636e"),
+    ("tab\there", "tab\\there"),
+    ("", ""),
+])
+def test_one_line_writes_whatever_is_not_printable_ascii_as_its_escape(text, printed):
+    from scripts.storage_check import _one_line
+
+    assert _one_line(text) == printed
+    assert len(_one_line(text).splitlines()) <= 1
+
+
+@pytest.mark.parametrize("stream_name", ["out", "err"])
+def test_emit_prints_one_escaped_line_to_the_stream_it_is_given(capsys, stream_name):
+    import sys
+
+    from scripts.storage_check import _emit
+
+    _emit("STORAGE_CHECK a STORAGE_CHECK verdict=ok", sys.stderr if stream_name == "err" else None)
+    got = capsys.readouterr()
+    text, other = (got.err, got.out) if stream_name == "err" else (got.out, got.err)
+    assert text == "STORAGE_CHECK a\\u2028STORAGE_CHECK verdict=ok\n" and other == ""
+
+
+@pytest.mark.parametrize("sep", [" ", " ", "\x85", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\n", "\r\n"])
+def test_no_line_separator_of_any_kind_lets_a_value_forge_a_line(tmp_path, capsys, sep):
+    forged = f"s3{sep}STORAGE_CHECK verdict=ok failed=none"
+    d = _described(env=_env(backend=forged))
+    assert _cli(tmp_path, d, _ENABLED, _fresh("fs-0aaa")) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert not any(line.startswith("STORAGE_CHECK verdict=ok") for line in lines)
+    assert sum(1 for line in lines if line.startswith("STORAGE_CHECK verdict=")) == 1
+    assert lines[-1].startswith("STORAGE_CHECK verdict=FAIL")
+
+
+@pytest.mark.parametrize("path", ["/app/数据", "/srv/données ☃"])
+def test_a_path_the_terminal_cannot_write_does_not_stop_the_check(tmp_path, path):
+    """The script as a caller runs it, its output captured in a narrow
+    encoding: every check is ok and the exit code is 0, not a crash that
+    reads as a failed check."""
+    import os
+    import subprocess
+    import sys
+
+    files = {"td.json": _described(mount=path), "pol.json": _ENABLED, "rp.json": _fresh("fs-0aaa")}
+    for name, value in files.items():
+        (tmp_path / name).write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env["PYTHONIOENCODING"] = "ascii"
+    script = Path(__file__).resolve().parents[1] / "scripts" / "storage_check.py"
+    run = subprocess.run(
+        [sys.executable, str(script), str(tmp_path / "td.json"), "--backup-policy", str(tmp_path / "pol.json"),
+         "--recovery-points", str(tmp_path / "rp.json"), "--file-system-id", "fs-0aaa", "--now", NOW.isoformat()],
+        capture_output=True, env=env, timeout=120, check=False)
+    out = run.stdout.decode("ascii")
+    assert run.returncode == 0, (run.returncode, out, run.stderr.decode("ascii", "replace"))
+    assert out.splitlines()[-1] == "STORAGE_CHECK verdict=ok failed=none"
+    assert path.encode("unicode_escape").decode("ascii") in out
