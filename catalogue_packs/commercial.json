@@ -1,0 +1,242 @@
+{
+  "schema": "kernel-pack/1",
+  "kernel": "kernel:commercial",
+  "formulas": [
+    {
+      "id": "formula:break_even_point",
+      "fingerprint": "sha256:557b8472d96496bc",
+      "approved": false,
+      "purpose": "Break-even quantity and revenue: fixed costs divided by the contribution per unit (price less variable cost per unit), with the smallest whole quantity that covers the fixed costs; when the price is not above the variable cost there is no break-even and it says so.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:roi_calculator",
+          "difference": "roi_calculator gives the return of one gain against one cost; break_even_point gives the quantity at which income covers the fixed costs."
+        }
+      ]
+    },
+    {
+      "id": "formula:calculate_evm",
+      "fingerprint": "sha256:b22fedf3d1514014",
+      "approved": false,
+      "purpose": "Earned value measures from planned value, earned value and actual cost: cost and schedule variance, CPI and SPI; with a budget at completion also the estimate at completion (budget over CPI), the estimate to complete and the variance at completion.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:progress_kpi",
+          "difference": "progress_kpi takes planned and actual progress quantities and gives an SPI only; calculate_evm takes money values and also gives the cost measures."
+        }
+      ]
+    },
+    {
+      "id": "formula:calculate_interim_payment",
+      "fingerprint": "sha256:f4909e64b2525c8e",
+      "approved": false,
+      "purpose": "Net payment from one gross valuation less a retention percentage; gives the retention amount and the net.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:interim_payment_to_date",
+          "difference": "interim_payment_to_date adds materials on site, caps retention at a limit and deducts earlier certificates; calculate_interim_payment does none of these."
+        },
+        {
+          "id": "formula:calculate_payment",
+          "difference": "calculate_payment separates the claimed from the certified amount and can carry a cumulative certified total."
+        }
+      ]
+    },
+    {
+      "id": "formula:calculate_payment",
+      "fingerprint": "sha256:18ce84d849e747a7",
+      "approved": false,
+      "purpose": "Net payment due for one period: this period's certified amount less retention on it, with the disputed part (claimed less certified) and the cumulative certified when earlier certificates are given.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:interim_payment_to_date",
+          "difference": "interim_payment_to_date starts from cumulative work done to date and deducts earlier certificates; calculate_payment takes this period's amount and deducts nothing earlier."
+        },
+        {
+          "id": "formula:calculate_interim_payment",
+          "difference": "calculate_interim_payment has no claimed-versus-certified split and no cumulative; it only takes retention off one gross valuation."
+        }
+      ]
+    },
+    {
+      "id": "formula:interim_payment_to_date",
+      "fingerprint": "sha256:a3b8bdb7d5f5eb68",
+      "approved": false,
+      "purpose": "Amount due on an interim payment certificate measured to date: work done to date plus materials on site, less retention at the contract rate up to its limit, less what earlier certificates already paid.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:calculate_payment",
+          "difference": "calculate_payment takes this period's certified amount on its own; interim_payment_to_date takes cumulative values and subtracts earlier certificates."
+        },
+        {
+          "id": "formula:calculate_interim_payment",
+          "difference": "calculate_interim_payment has no materials on site, no retention limit and no deduction of earlier certificates."
+        }
+      ]
+    },
+    {
+      "id": "formula:leed_points_estimate",
+      "fingerprint": "sha256:ff378cfc533ff932",
+      "approved": false,
+      "purpose": "The certification level of a LEED v4 BD+C point total: Certified from 40 points, Silver from 50, Gold from 60, Platinum from 80, not certified below 40.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "formula:roi_calculator",
+      "fingerprint": "sha256:6ff37a1c185edf38",
+      "approved": false,
+      "purpose": "Return on investment as a percentage of cost, (gain less cost) over cost, with the net profit; the gain is the whole amount returned, not the profit. A zero cost is refused.",
+      "not_to_be_confused_with": [
+        {
+          "id": "formula:break_even_point",
+          "difference": "break_even_point gives the quantity at which income covers fixed costs; roi_calculator gives the return of one gain against one cost."
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "knowledge:evm_thresholds_and_traffic_lights",
+      "fingerprint": "sha256:dd7555523c6649ba",
+      "approved": false,
+      "purpose": "How to read CPI and SPI: their definitions, the traffic-light bands, TCPI and forecasting, to read after a performance index has been computed.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "knowledge:procurement.interim_payment_flow",
+      "fingerprint": "sha256:eec1760dee3b18c1",
+      "approved": false,
+      "purpose": "The steps an interim payment passes through, from the registered payment request to the cost consultant's recommendation, the payment-certificate checklist and the payment advice; no payment advice is issued before the checklist has passed.",
+      "not_to_be_confused_with": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "skill:commercial.q1",
+      "fingerprint": "sha256:a31de778239a8662",
+      "approved": false,
+      "purpose": "Unit-rate consistency review before a bid goes in: line by line, what looks wrong in the rates and quantities, why, what to check and who owns it.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:commercial.q3",
+      "fingerprint": "sha256:7dd1a01d2894a9c3",
+      "approved": false,
+      "purpose": "Interim payment certificate check: the arithmetic of a payment application against the schedule of values and the previous certificate, with the working, the reconciliation and the flags.",
+      "not_to_be_confused_with": []
+    },
+    {
+      "id": "skill:commercial.q4",
+      "fingerprint": "sha256:2b3264be728a19c6",
+      "approved": false,
+      "purpose": "Change pricing narrative: the pricing method the contract prescribes explained before the numbers, the numbers taken as given inputs with their sources, the exclusions and a hold-point line.",
+      "not_to_be_confused_with": []
+    }
+  ],
+  "chains": [
+    {
+      "id": "measured_work_to_certificate",
+      "fingerprint": "sha256:1a17ac9de7430cbe",
+      "approved": false,
+      "purpose": "Amount due on a certificate from a measured item: value the quantity done to date at its unit rate, then add the materials on site, take retention on the work at the contract rate up to its limit, and deduct what earlier certificates paid; when they paid more than is now due the amount due is negative.",
+      "steps": [
+        {
+          "formula": "formula:unit_cost_total",
+          "inputs": {
+            "quantity": 1850,
+            "unit_rate": 42.5
+          }
+        },
+        {
+          "formula": "formula:interim_payment_to_date",
+          "inputs": {
+            "work_value_to_date": {
+              "from": {
+                "step": 0,
+                "output": "total_cost"
+              }
+            },
+            "retention_percent": 10,
+            "previously_certified": 50000,
+            "materials_on_site": 6000,
+            "retention_limit": 7500
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "total_cost",
+          "value": 78625.0
+        },
+        {
+          "step": 1,
+          "output": "gross_to_date",
+          "value": 84625.0
+        },
+        {
+          "step": 1,
+          "output": "retention_to_date",
+          "value": 7500.0
+        },
+        {
+          "step": 1,
+          "output": "net_to_date",
+          "value": 77125.0
+        },
+        {
+          "step": 1,
+          "output": "amount_due",
+          "value": 27125.0
+        }
+      ]
+    },
+    {
+      "id": "risk_cost_to_return",
+      "fingerprint": "sha256:dde264b1e1d704e0",
+      "approved": false,
+      "purpose": "Return on an investment at a risk-adjusted cost: take the 80th percentile of a three-point cost estimate, then the return of the stated gain against that cost.",
+      "steps": [
+        {
+          "formula": "formula:monte_carlo_cost_percentiles",
+          "inputs": {
+            "low": 400000,
+            "most_likely": 460000,
+            "high": 600000,
+            "iterations": 10000,
+            "seed": 7
+          }
+        },
+        {
+          "formula": "formula:roi_calculator",
+          "inputs": {
+            "gain": 560000,
+            "cost": {
+              "from": {
+                "step": 0,
+                "output": "p80"
+              }
+            }
+          }
+        }
+      ],
+      "example": [
+        {
+          "step": 0,
+          "output": "p80",
+          "value": 525336.3
+        },
+        {
+          "step": 1,
+          "output": "net_profit",
+          "value": 34663.7
+        },
+        {
+          "step": 1,
+          "output": "roi_percent",
+          "value": 6.6
+        }
+      ]
+    }
+  ]
+}

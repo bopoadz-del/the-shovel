@@ -323,6 +323,83 @@ def test_load_refuses_a_broken_or_misplaced_pack(tmp_path, shipped, name, body):
     assert name in str(err.value)
 
 
+# -- the commercial pack ---------------------------------------------------------------
+
+@pytest.fixture()
+def commercial(shipped):
+    return copy.deepcopy(shipped["kernel:commercial"])
+
+
+@pytest.mark.parametrize("chain_id", ["measured_work_to_certificate", "risk_cost_to_return"])
+def test_commercial_example_figures_are_what_the_formulas_give(commercial, entries, chain_id):
+    chain = _chain(commercial, chain_id)
+    assert kp.example_problems(chain, entries) == []
+    last = chain["example"][-1]
+    last["value"] = round(last["value"] * 1.01, 4)            # one per cent off
+    found = kp.example_problems(chain, entries)
+    assert len(found) == 1 and f"{last['output']} is written" in found[0], found
+
+
+@pytest.mark.parametrize("quantity,limit,retention,due,capped", [
+    (1850, 7500, 7500.0, 27125.0, True),      # the shipped example: 10% of the work is over the limit
+    (1850, 9000, 7862.5, 26762.5, False),     # a higher limit: 10% of the work, materials carry none
+    (1850, None, 7862.5, 26762.5, False),     # no limit given: the full rate
+    (1000, 7500, 4250.0, -5750.0, False),     # earlier certificates paid more than is now due
+])
+def test_commercial_measured_value_feeds_the_certificate(commercial, entries, quantity, limit, retention, due, capped):
+    chain = _chain(commercial, "measured_work_to_certificate")
+    chain["steps"][0]["inputs"]["quantity"] = quantity
+    if limit is None:
+        del chain["steps"][1]["inputs"]["retention_limit"]
+    else:
+        chain["steps"][1]["inputs"]["retention_limit"] = limit
+    first, second = kp.run_chain(chain, entries)
+    assert first["total_cost"] == quantity * 42.5
+    assert second["gross_to_date"] == first["total_cost"] + 6000
+    assert second["retention_to_date"] == retention
+    assert second["amount_due"] == due
+    assert second["retention_limit_reached"] is capped
+
+
+@pytest.mark.parametrize("gain", [560000, 500000])          # a gain above and one below the cost
+def test_commercial_return_is_taken_against_the_80th_percentile(commercial, entries, gain):
+    chain = _chain(commercial, "risk_cost_to_return")
+    chain["steps"][1]["inputs"]["gain"] = gain
+    first, second = kp.run_chain(chain, entries)
+    p80 = first["p80"]
+    assert first["p50"] < p80 < first["p90"]
+    assert second["net_profit"] == round(gain - p80, 2)
+    assert second["roi_percent"] == round((gain - p80) / p80 * 100, 2)
+    assert (second["roi_percent"] < 0) is (gain < p80)
+
+
+@pytest.mark.parametrize("seed", [7, 8])
+def test_commercial_risk_step_gives_the_same_percentile_for_the_same_seed(commercial, entries, seed):
+    chain = _chain(commercial, "risk_cost_to_return")
+    chain["steps"][0]["inputs"]["seed"] = seed
+    once, again = kp.run_chain(chain, entries)[0], kp.run_chain(chain, entries)[0]
+    assert once["p80"] == again["p80"]
+    other = copy.deepcopy(chain)
+    other["steps"][0]["inputs"]["seed"] = seed + 100
+    assert kp.run_chain(other, entries)[0]["p80"] != once["p80"]
+
+
+@pytest.mark.parametrize("chain_id,step,name,output,expect", [
+    ("measured_work_to_certificate", 1, "retention_percent", "total_cost",
+     "unit 'currency' of total_cost does not agree with unit '%'"),          # money into a rate
+    ("risk_cost_to_return", 1, "gain", "probability_within_most_likely_percent",
+     "gives no output 'probability_within_most_likely_percent'"),            # a percent the code returns, off the card
+    ("risk_cost_to_return", 1, "cost", "min_trial",
+     "gives no output 'min_trial'"),                                         # returned, but not on the card
+])
+def test_commercial_a_link_the_cards_do_not_bear_is_refused(commercial, entries, chain_id, step, name, output, expect):
+    chain = _chain(commercial, chain_id)
+    assert kp._chain_problems(chain, entries) == []
+    chain["steps"][step]["inputs"][name] = {"from": {"step": step - 1, "output": output}}
+    found = kp._chain_problems(chain, entries)
+    assert any(expect in p for p in found), found
+
+
 # -- neighbours are of the line's kind (KIND_OF) ---------------------------------------
 
 @pytest.mark.parametrize("part,index,neighbour,kind", [
