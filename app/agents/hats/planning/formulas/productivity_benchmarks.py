@@ -138,8 +138,6 @@ def _same_unit(a: Any, b: Any) -> bool:
     does not know, or a value that is not text, is not a unit."""
     from app.agents.base.formulas.construction_formulas_planning import parse_unit
 
-    if not isinstance(a, str) or not isinstance(b, str):
-        return False
     ua, ub = parse_unit(a), parse_unit(b)
     if ua is None or ub is None:
         return False

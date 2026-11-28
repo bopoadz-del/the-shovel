@@ -75,10 +75,11 @@ def test_same_unit(a, b, same):
     assert pb._same_unit(a, b) is same
 
 
-def test_every_row_is_one_knowledge_entry_with_a_catalogue_file():
+@pytest.mark.parametrize("index", range(len(pb.ROW_IDS)))
+def test_every_row_is_one_knowledge_entry_with_a_catalogue_file(index):
     rows = pb.template_rows()
     assert len(rows) == len(pb.ROW_IDS) and len(rows) > 1
-    for rid, (item, unit, crew, rate, _flag, not_covered) in zip(pb.ROW_IDS, rows):
+    for rid, (item, unit, crew, rate, _flag, not_covered) in [(pb.ROW_IDS[index], rows[index])]:
         path = os.path.join(_ROOT, "catalogue", "knowledge", rid + ".json")
         doc = json.load(open(path, encoding="utf-8"))
         assert doc["id"] == "knowledge:" + rid
@@ -96,11 +97,12 @@ def test_the_benchmark_and_the_duration_read_the_same_row(item, rate):
     assert pb.crew_days_from_rate_row(item, rate * 3, "m2")["duration_crew_days"] == pytest.approx(3.0)
 
 
-def test_a_named_row_missing_from_the_knowledge_base_raises(monkeypatch):
+@pytest.mark.parametrize("index", [0, 1, -1])
+def test_a_named_row_missing_from_the_knowledge_base_raises(monkeypatch, index):
     from app.blocks import _knowledge
 
     real = _knowledge.shipped_entry
-    gone = pb.ROW_IDS[1]
+    gone = pb.ROW_IDS[index]
     monkeypatch.setattr(_knowledge, "shipped_entry",
                         lambda rid: None if rid == gone else real(rid))
     with pytest.raises(LookupError, match=gone):
