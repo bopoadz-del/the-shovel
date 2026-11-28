@@ -324,8 +324,12 @@ def bill_rows_statement(result: dict) -> list[Statement]:
         if not isinstance(bill, dict):
             continue
         source = str(bill.get("filename") or bill.get("document_id") or "")
-        terms = tuple(str(t) for t in bill.get("terms") or [])
-        within = tuple(str(t) for t in bill.get("section_terms") or [])
+        # The words are stated as what matched the rows only when they did:
+        # a result whose question scope chose the rows says its terms were
+        # not applied, and the statement then names no words.
+        applied = bill.get("terms_applied") is not False
+        terms = tuple(str(t) for t in bill.get("terms") or []) if applied else ()
+        within = tuple(str(t) for t in bill.get("section_terms") or []) if applied else ()
         if bill.get("status") != "success":
             out.append(Statement(figure=None, what="", source=source, basis="count",
                                  terms=terms, within=within,

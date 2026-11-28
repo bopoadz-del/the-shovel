@@ -259,8 +259,13 @@ _SHEET_RULES = (
     "something else.")
 
 
-def _sheet_note(work: Dict[str, Any]) -> str:
-    return _SHEET_RULES + "\n" + sheet.render(work)
+def _sheet_note(work: Dict[str, Any], round_no: int, rounds: int) -> str:
+    """The rules and the round this is of the turn's budget (one line), then
+    the sheet. The budget is stated, never enforced here: the model plans its
+    own rounds; the ceiling stays where it is."""
+    budget = (f"This is round {round_no} of {rounds} for this turn; tool calls end after round "
+              f"{rounds}, so write what you found onto the sheet as you go.")
+    return _SHEET_RULES + " " + budget + "\n" + sheet.render(work)
 
 
 def _build_sha() -> str:
@@ -344,7 +349,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             await off_loop(agent_memory.get_or_create_conversation, conversation_id,
                            getattr(agent, "name", "") or "driver", project_id, owner_id=user_id)
         work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
-        sheet_msg["content"] = _sheet_note(work)
+        sheet_msg["content"] = _sheet_note(work, 1, driver.sheet_max_rounds())
         msgs.insert(len(msgs) - 1, sheet_msg)
         # The request's own question set (a per-turn sheet request) wins;
         # else the project's profile names one.
@@ -464,7 +469,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         if work is not None:
             # The sheet as it stands, handed back every round; its tools are
             # offered every round -- never withdrawn while a step is open.
-            sheet_msg["content"] = _sheet_note(work)
+            sheet_msg["content"] = _sheet_note(work, step + 1, driver.sheet_max_rounds())
             offered = offered + tools.sheet_schemas()
         trace.append({"step": step + 1, "hat": hat, "offered": len(offered),
                       "workflows": _offered_workflows(offered), "calls": []})

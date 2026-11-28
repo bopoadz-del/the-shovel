@@ -392,6 +392,33 @@ def test_the_round_ceiling_ends_a_turn_whose_step_stays_open(monkeypatch, rounds
     assert end["ended"] == row["ended"] == "ceiling"
 
 
+@pytest.mark.parametrize("rounds", [2, 3])
+def test_every_round_tells_the_model_which_round_of_its_budget_it_is(monkeypatch, rounds):
+    """The budget is stated in the sheet note each round, never enforced by it:
+    the turn still runs to the same ceiling and the sheet still parses."""
+    monkeypatch.setenv("DRIVER_SHEET_MAX_ROUNDS", str(rounds))
+    replies = [{"content": "", "tool_calls": [_call("run_step", {"step": "s1"}, f"c{i}")]} for i in range(rounds)]
+    seen = _scripted(monkeypatch, replies + [{"content": "Stopped."}])
+    _run(user_message="q", conversation_id=f"ws-p7-{rounds}", sheet_mode=True)
+    notes = [next(m["content"] for m in s["messages"]
+                  if m["role"] == "system" and m["content"].startswith("Working sheet"))
+             for s in seen[:rounds]]
+    for i, note in enumerate(notes, start=1):
+        rules = note.split("\n", 1)[0]
+        assert f"round {i} of {rounds} " in rules
+        assert all(f"round {j} of" not in rules for j in range(1, rounds + 2) if j != i)
+    assert all(isinstance(_sheet_in(s["messages"]), dict) for s in seen[:rounds])
+    assert len(seen) == rounds + 1  # the ceiling did not move
+
+
+def test_the_default_path_gets_no_round_line(monkeypatch):
+    """Negative: a turn off the sheet path carries no sheet note and so no budget line."""
+    seen = _scripted(monkeypatch, [{"content": "Done."}])
+    _run(user_message="q", conversation_id="ws-p8-1")
+    assert not any("for this turn; tool calls end after round" in m["content"]
+                   for m in seen[0]["messages"] if isinstance(m.get("content"), str))
+
+
 def _owned_conversation(conv, user, title="carry project"):
     """A stored conversation of ``user`` on a new project of theirs."""
     from app.core import agent_memory

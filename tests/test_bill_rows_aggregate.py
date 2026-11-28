@@ -259,3 +259,45 @@ def test_tool_is_in_the_base_manifest_and_registry():
 ])
 def test_source_page_cell_is_read_without_guessing(cell, expected):
     assert agg._page(cell) == expected
+
+
+# --- the statement names the words only when they chose the rows ------------
+
+BILL_NAMED = [
+    _row(("Bill No. 2 - Earthworks",), 2, "E1", "Excavate topsoil to stockpile", "m3", "10", "5", "50"),
+    _row(("Bill No. 2 - Earthworks",), 2, "E2", "Fill to make up levels", "m3", "4", "5", "20"),
+]
+
+
+@pytest.mark.parametrize("terms", ["topsoil", "levels"])
+def test_statement_names_no_words_when_the_question_scope_chose_the_rows(tmp_path, terms):
+    from app.agents.base.tools import bill_rows_statement
+
+    out = agg.aggregate(_sheet(tmp_path, BILL_NAMED), terms=terms, section="earthworks",
+                        measure=agg.MEASURE_AMOUNT, ask="What is the total amount of Bill No. 2?")
+    assert out["terms_applied"] is False and out["count"] == 2
+    stated = bill_rows_statement({"bills": [{"status": "success", **out}]})
+    assert stated and all(s.terms == () and s.within == () for s in stated)
+
+
+@pytest.mark.parametrize("terms, count", [("topsoil", 1), ("levels", 1)])
+def test_statement_names_the_words_when_they_chose_the_rows(tmp_path, terms, count):
+    """Negative: no scope in the question, so the words matched the rows and are named."""
+    from app.agents.base.tools import bill_rows_statement
+
+    out = agg.aggregate(_sheet(tmp_path, BILL_NAMED), terms=terms, measure=agg.MEASURE_AMOUNT,
+                        ask="how much is it")
+    assert out["terms_applied"] is True and out["count"] == count
+    stated = bill_rows_statement({"bills": [{"status": "success", **out}]})
+    assert {s.terms for s in stated} == {(terms,)}
+
+
+@pytest.mark.parametrize("junk", ["not a bill", ["a", "list"]])
+def test_statement_skips_an_entry_that_is_not_a_bill_object(tmp_path, junk):
+    """A malformed entry beside a good bill states nothing; the good bill is stated whole."""
+    from app.agents.base.tools import bill_rows_statement
+
+    out = agg.aggregate(_sheet(tmp_path, BILL_NAMED), terms="topsoil", measure=agg.MEASURE_AMOUNT,
+                        ask="how much is it")
+    stated = bill_rows_statement({"bills": [junk, {"status": "success", **out}]})
+    assert [(s.basis, s.figure) for s in stated] == [("count", 1.0), ("sum", 50.0)]
