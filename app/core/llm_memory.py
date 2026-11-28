@@ -168,9 +168,10 @@ def told_by_user(data: Any) -> bool:
     return isinstance(data, dict) and data.get(TOLD_BY_USER) is True
 
 
-#: A figure: digits not glued to a letter before them, so the 3 of "m3"
-#: and the 2 of "B2" are part of a unit or a name, not figures.
-_FIGURE = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
+#: A figure as every figure check reads one (the exit check's own reader,
+#: citation_provenance._nums, uses this pattern): any run of digits, so the
+#: 3 of "m3" and the 40 of "C40" count; a check may refuse more, never less.
+FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 def figure_values(text: Any) -> Set[float]:
@@ -178,7 +179,7 @@ def figure_values(text: Any) -> Set[float]:
     figure, and so are "4.10" and "4.1". Every check that compares a told
     figure with what was written reads figures through this one function."""
     out: Set[float] = set()
-    for token in _FIGURE.findall(text if isinstance(text, str) else ""):
+    for token in FIGURE.findall(text if isinstance(text, str) else ""):
         try:
             out.add(float(token.replace(",", "")))
         except ValueError:

@@ -1413,7 +1413,8 @@ def test_a_told_note_holding_a_figure_the_user_never_wrote_is_refused_and_backs_
     assert r.status_code == 200, r.text
     got = _tool_results(seen)
     assert got["w1"]["ok"] is False
-    assert f"the user did not write {figure.split()[0]} in this conversation" in got["w1"]["result"]["error"]
+    named = got["w1"]["result"]["error"].split("the user did not write ")[1].split(" in this conversation")[0]
+    assert figure.split()[0] in named.split(", ")
     assert got["r1"]["ok"] is False
     with pytest.raises(llm_memory.MemoryRefused):
         llm_memory.read(pid, "site")
@@ -1524,7 +1525,8 @@ def test_users_words_are_the_users_messages_only(history, message, words):
 @pytest.mark.parametrize("text,values", [
     ("1,850 kN and 4.10 m", {1850.0, 4.1}),
     ("level 2 at +2.35, 2026-11-28", {2.0, 2.35, 2026.0, 11.0, 28.0}),
-    ("412 m3 in bay B2", {412.0}),
+    ("412 m3 in bay B2", {412.0, 3.0, 2.0}),
+    ("C40 over 1,2", {40.0, 12.0}),
     ("", set()),
     (None, set()),
 ])

@@ -1478,8 +1478,10 @@ def _figure_mentions(text: str) -> list[tuple[re.Match, float]]:
 
 
 def _nums(text: str) -> list[float]:
+    from app.core.llm_memory import FIGURE
+
     out = []
-    for tok in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+    for tok in FIGURE.findall(text or ""):
         try:
             out.append(float(tok.replace(",", "")))
         except ValueError:
