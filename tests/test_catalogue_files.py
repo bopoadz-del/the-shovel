@@ -382,7 +382,7 @@ def test_hint_text_and_enrich_use_only_an_approved_file_that_agrees(shipped, cap
     entries = {e["id"]: e for _k, e in capabilities}
     files = json.loads(json.dumps(shipped))
     for entry_id, purpose in ((a, "First purpose."), (b, "Second purpose.")):
-        files[entry_id]["hints"].update(purpose=purpose, not_to_be_confused_with=[
+        files[entry_id]["hints"].update(approved=False, purpose=purpose, not_to_be_confused_with=[
             {"id": a if entry_id == b else b, "difference": "another figure"}])
     assert cf.hint_text(files[a]) == ("First purpose.", f"Not to be confused with {b} (another figure).")
     plain = [dict(entries[a], when_to_use="", when_not=""), dict(entries[b], when_to_use="", when_not="")]

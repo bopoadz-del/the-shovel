@@ -98,7 +98,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "In-situ (bank) volume of soil dug from a rectangular pit or trench, and the loose volume after bulking, for haulage and disposal.",
     "not_to_be_confused_with": [
       {
