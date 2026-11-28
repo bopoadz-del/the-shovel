@@ -109,6 +109,10 @@ class Statement:
     #: tool states it (None for a row it states without one). Empty when the
     #: tool states no per-row figure.
     row_figures: Tuple[Optional[float], ...] = ()
+    #: False when the rows were not chosen by ``terms``/``within`` (the tool
+    #: says something else chose them): the words still name the part of the
+    #: question this figure is for, but are not shown as what matched.
+    words_matched: bool = True
 
 
 Stater = Callable[[Dict[str, Any]], List[Statement]]
