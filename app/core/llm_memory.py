@@ -65,6 +65,16 @@ class MemoryRefused(ValueError):
     """A request the model can correct: its message is returned to it."""
 
 
+class ToldRefused(MemoryRefused):
+    """A note marked as told by the user that holds figures the user's words
+    do not back: ``untold`` names them, as they are shown. Whoever answers
+    the call says why in the words that are true where it was made."""
+
+    def __init__(self, message: str, untold: List[str]):
+        super().__init__(message)
+        self.untold = list(untold)
+
+
 def _setting(env: str, default: int) -> int:
     try:
         value = int(os.getenv(env) or default)
@@ -328,10 +338,11 @@ def _check_told(session: Any, project_id: str, stem: str, value: Any, told_from:
     before = json.loads(row.data) if row is not None and row.review != DISCARDED else None
     untold = untold_figures(value, told_from, before)
     if untold:
-        raise MemoryRefused(
+        shown = [_shown(v) for v in untold]
+        raise ToldRefused(
             f"this note is marked {TOLD_BY_USER} but the user did not write "
-            f"{', '.join(_shown(v) for v in untold)} in this conversation; nothing was written. "
-            f"Keep in a told note only figures the user gave, or write it without the mark")
+            f"{', '.join(shown)} in this conversation; nothing was written. "
+            f"Keep in a told note only figures the user gave, or write it without the mark", shown)
 
 
 def _replace(session: Any, project_id: str, stem: str, row: Dict[str, Any]) -> int:

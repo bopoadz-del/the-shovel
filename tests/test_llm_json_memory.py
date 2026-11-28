@@ -1601,6 +1601,12 @@ def test_a_delegated_turn_cannot_store_the_delegating_models_figure_as_told(clie
     r = _turn(client, h, pid, message="What is the value?")
     assert r.status_code == 200, r.text
     assert inside["told"]["ok"] is False and "nothing was written" in inside["told"]["result"]["error"]
+    # The refusal says what is true there: the delegated turn cannot see the
+    # user's words. It never says the user did not give the figure, and it
+    # does not send the figure into a note without the mark.
+    why = inside["told"]["result"]["error"]
+    assert figure in why and "delegated" in why and "the turn that delegated to you writes the note" in why
+    assert "did not write" not in why and "without the mark" not in why
     assert [n["name"] for n in llm_memory.listing(pid)] == ["how"]
     # Negative: a note that is not marked as told is still written there.
     assert inside["plain"]["ok"] is True
@@ -1807,3 +1813,38 @@ def test_every_tool_named_instead_is_one_the_driver_path_offers():
     tool_registry.load()
     named = {s.driver_instead for s in tool_registry._TOOLS.values() if s.driver_instead}
     assert named and named <= set(tool_registry.driver_tools())
+
+
+@pytest.mark.parametrize("figures", [["1850"], ["2.35", "4.1"]])
+def test_told_on_a_delegated_turn_names_the_figures_and_not_the_user(figures):
+    from app.agents.base import memory
+
+    text = memory.told_on_a_delegated_turn(figures)
+    assert all(f in text for f in figures)
+    assert "did not write" not in text and "nothing was written" in text
+
+
+@pytest.mark.parametrize("depth,blames_the_user", [(0, True), (1, False)])
+def test_the_told_refusal_blames_the_user_only_where_the_users_words_were_read(depth, blames_the_user):
+    import asyncio
+
+    from app.agents.core.tool_registry import ToolCall
+    from app.agents.base import memory
+
+    pid = f"mem-why-{uuid.uuid4().hex[:8]}"
+    call = ToolCall(agent=None, name="write_memory", project_id=pid, depth=depth, user_message="What is it?",
+                    args={"name": "site", "data": json.dumps({"told_by_user": True, "value": "1850 kN"})})
+    got = asyncio.run(memory.handle_write_memory(call))
+    assert got["ok"] is False
+    assert ("the user did not write 1850" in got["result"]["error"]) is blames_the_user
+    assert llm_memory.listing(pid) == []
+
+
+@pytest.mark.parametrize("untold", [["1850"], ["10", "2.5"]])
+def test_a_told_refusal_carries_the_figures_it_refused(untold):
+    pid = f"mem-carry-{uuid.uuid4().hex[:8]}"
+    note = {"told_by_user": True, "v": [float(u) for u in untold]}
+    with pytest.raises(llm_memory.ToldRefused) as info:
+        llm_memory.write(pid, "n", json.dumps(note), "c#1", told_from=["nothing here"])
+    assert sorted(info.value.untold) == sorted(untold)
+    assert isinstance(info.value, llm_memory.MemoryRefused)

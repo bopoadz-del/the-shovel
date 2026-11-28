@@ -113,6 +113,16 @@ def users_words(call: ToolCall) -> list:
     return [t for t in said if isinstance(t, str) and t]
 
 
+def told_on_a_delegated_turn(figures: list) -> str:
+    """The refusal a delegated turn reads when it writes figures into a note
+    marked as told by the user: what was refused and why, with the one thing
+    that works. It does not say the user did not give them."""
+    return (f"this note is marked {llm_memory.TOLD_BY_USER} and holds {', '.join(figures)}; a turn another "
+            "turn delegated cannot see the user's own words, so it cannot keep a figure as told by the user; "
+            "nothing was written. Say so in your reply and give the figures back: the turn that delegated "
+            "to you writes the note")
+
+
 @tool("write_memory", owner="base", display_name="Working notes", kind="notes", schema=WRITE_SCHEMA, params={
     "name": Param(label="note name", kind="text", required=True),
     "data": Param(label="note as JSON", kind="text", required=True),
@@ -122,6 +132,11 @@ async def handle_write_memory(call: ToolCall) -> dict:
     try:
         done = await off_loop(llm_memory.write_retrying, call.project_id or "", name,
                               call.args.get("data"), turn, users_words(call))
+    except llm_memory.ToldRefused as exc:
+        # On a delegated turn the check had no user's words to hold the
+        # figures against; the refusal says that, never that the user did
+        # not give them.
+        return _refused(call, "write", told_on_a_delegated_turn(exc.untold) if call.depth else str(exc), name)
     except llm_memory.MemoryRefused as exc:
         return _refused(call, "write", str(exc), name)
     return {"name": call.name, "ok": True,
