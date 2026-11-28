@@ -132,6 +132,7 @@
       "formula:productivity_manpower_duration"
     ],
     "fed_by": [
+      "formula:crew_days_from_rate_row",
       "formula:productivity_benchmark"
     ]
   },
