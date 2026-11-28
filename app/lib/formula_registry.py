@@ -92,6 +92,12 @@ class Param:
     #: given (a :class:`KnowledgeConstant`; see its ``as_input``). A
     #: description of the input names that entry and its value.
     default_from: Any = None
+    #: The input whose value is this input's unit (``quantity_unit`` for
+    #: ``quantity``). A unit written in this input's value is converted into
+    #: that input's unit when it is the same kind, refused naming both when
+    #: it is not, and taken as that input's value when it is blank. Empty
+    #: when the unit is the fixed ``unit`` above.
+    unit_from: str = ""
 
     def __post_init__(self) -> None:
         if self.basis and self.basis not in BASES:
@@ -120,6 +126,7 @@ class ParamSpec:
     default: Any = None
     basis: str = ""
     above_lo: bool = False
+    unit_from: str = ""
 
     @property
     def display_label(self) -> str:
@@ -577,6 +584,7 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
             label=declared.label, grade=declared.grade, required=required,
             default=None if no_default else param.default,
             basis=declared.basis, above_lo=declared.above_lo,
+            unit_from=declared.unit_from,
         )
     return out
 
@@ -899,6 +907,48 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
                            "to_unit": spec.unit, "value_out": value, "note": out.get("note", "")}}
 
 
+def _convert_to_sibling_unit(spec: ParamSpec, value: Any, values: Dict[str, Any],
+                             context: Dict[str, Any]) -> Dict[str, Any]:
+    """``value`` of an input whose unit is the value of its sibling input
+    ``spec.unit_from``. Returns ``values`` (the inputs to update, with a
+    ``conversion`` when the unit changed) or ``rejection``. A written unit
+    is never dropped: it is converted into the sibling's unit, refused when
+    it is another kind, or becomes the sibling's value when that is blank."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    parsed = value_and_unit(value)
+    if parsed is None:
+        return {"values": {}}
+    number, unit = parsed
+    sibling = values.get(spec.unit_from)
+    sibling_unit = sibling.strip() if isinstance(sibling, str) else ""
+    if sibling_unit in ("", "-"):
+        return {"values": {spec.name: number, spec.unit_from: unit}}
+    if unit.strip().lower() == sibling_unit.lower():
+        return {"values": {spec.name: number}}
+    if parse_unit(sibling_unit) is None:
+        # The sibling names a unit the conversion tool does not know ("nr",
+        # "item"): only the same written unit is that unit.
+        return {"rejection": _unit_rejection(
+            replace(spec, unit=sibling_unit), f"{written_number(number)} {unit}", "wrong_unit",
+            given_unit=unit)}
+    target = replace(spec, unit=sibling_unit)
+    declared, written = parse_unit(sibling_unit), parse_unit(unit)
+    if written is not None and written.dimension != declared.dimension:
+        # Another kind of quantity than the sibling names (an area against a
+        # count of "nr"): refused, not carried through as a count would be.
+        return {"rejection": _unit_rejection(
+            target, f"{written_number(number)} {unit}", "wrong_unit", given_unit=unit,
+            given_dimension=written.dimension, expected_dimension=declared.dimension)}
+    got = convert_figure(target, number, unit, context)
+    if "rejection" in got:
+        return got
+    out = {"values": {spec.name: got["value"]}}
+    if "conversion" in got:
+        out["conversion"] = got["conversion"]
+    return out
+
+
 def convert_written_units(name: str, values: Dict[str, Any],
                           context: Optional[Dict[str, Any]] = None,
                           ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -920,6 +970,15 @@ def convert_written_units(name: str, values: Dict[str, Any],
             continue
         # A context value being converted is not its own context.
         ctx = {k: v for k, v in {**stated, **(context or {})}.items() if k != key}
+        if p.unit_from and p.kind != "series":
+            got = _convert_to_sibling_unit(p, value, out, ctx)
+            if "rejection" in got:
+                rejected.append(got["rejection"])
+                continue
+            out.update(got["values"])
+            if "conversion" in got:
+                conversions.append(got["conversion"])
+            continue
         items = value if p.kind == "series" and isinstance(value, (list, tuple)) else [value]
         converted: List[Any] = []
         failed = False

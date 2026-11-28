@@ -12,6 +12,7 @@ import pytest
 
 from app.agents.hats.planning.formulas import productivity_benchmarks as pb
 from app.lib import construction_formulas as cf
+from app.lib import formula_registry as fr
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -193,22 +194,105 @@ def test_exclusions_are_the_sources_own_or_said_not_stated(monkeypatch, stated, 
     assert out["not_covered"] == want
 
 
-@pytest.mark.parametrize("item,written,unit", [
-    # The value's own unit differs from quantity_unit: an area in sq ft, a
-    # volume and a length against an m2 row. None of them is a figure.
-    ("internal wall plaster", "2000 sq ft", "m2"),
-    ("blockwork walls", "30 m3", "m2"),
-    ("blockwork walls", "600 m", "m2"),
-    # Even the row's own unit written in the value is asked for again: the
-    # unit is read from quantity_unit only, never from the value.
-    ("ceiling plaster", "600 m2", "m2"),
+# A unit written in the quantity is the sibling-unit declaration's job
+# (Param(unit_from="quantity_unit")): converted into quantity_unit when it
+# is the same kind, refused naming both when it is not, taken as
+# quantity_unit when that is blank. Never dropped.
+@pytest.mark.parametrize("item,written,unit,want_days", [
+    # The row's own unit written twice (what the real model sends).
+    ("blockwork walls", "600 m2", "m2", 50.0),
+    ("ceiling plaster", "1,200 m2", "M2", 1200 / 20),
+    # Same kind, another unit: converted (1 ft2 = 0.09290304 m2).
+    ("internal wall plaster", "2000 sq ft", "m2", 2000 * 0.09290304 / 20),
+    ("blockwork walls", "6.5 sqft", "m2", 6.5 * 0.09290304 / 12),
 ])
-def test_a_unit_written_in_the_quantity_is_refused_not_dropped(item, written, unit):
+def test_a_unit_written_in_the_quantity_is_converted_to_quantity_unit(item, written, unit, want_days):
+    out = _run(item, written, unit)
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("item,written,unit,given_kind", [
+    ("blockwork walls", "30 m3", "m2", "volume"),
+    ("internal wall plaster", "600 m", "m2", "length"),
+])
+def test_a_quantity_of_another_kind_than_quantity_unit_is_refused_naming_both(item, written, unit, given_kind):
     out = _run(item, written, unit)
     assert out["status"] != "success", out
     assert "duration_crew_days" not in (out.get("result") or {})
     text = str(out.get("error") or "") + str(out.get("question") or "")
     assert "quantity of the work item" in text, out
+    assert given_kind in text and "area" in text, out
+
+
+@pytest.mark.parametrize("written,blank,want_unit,want_days", [
+    ("600 m2", "", "m2", 50.0),
+    ("1,200 m2", None, "m2", 100.0),
+    ("600 m2", "-", "m2", 50.0),
+])
+def test_a_blank_quantity_unit_takes_the_unit_written_in_the_quantity(written, blank, want_unit, want_days):
+    values, _conv, rejected = fr.convert_written_units(
+        "crew_days_from_rate_row",
+        {"work_item": "blockwork walls", "quantity": written, "quantity_unit": blank})
+    assert rejected == []
+    assert values["quantity_unit"] == want_unit
+    out = _run("blockwork walls", written, blank)
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("written,unit", [("30 m3", ""), ("600 m", None)])
+def test_a_written_unit_taken_into_a_blank_quantity_unit_still_meets_the_row_check(written, unit):
+    # The adopted unit is the one the row check reads: a volume or a length
+    # against an m2 row is refused there, not computed.
+    out = _run("blockwork walls", written, unit)
+    assert out["status"] != "success", out
+    assert "duration_crew_days" not in (out.get("result") or {})
+
+
+@pytest.mark.parametrize("written,unit,ok", [
+    # A quantity_unit the conversion tool does not know: only the same
+    # written unit is that unit; another is refused, not dropped.
+    ("600 nr", "nr", True),
+    ("40 item", "Item", True),
+    ("600 m2", "nr", False),
+    ("40 m3", "item", False),
+])
+def test_an_unknown_quantity_unit_accepts_only_itself(written, unit, ok):
+    values, _conv, rejected = fr.convert_written_units(
+        "crew_days_from_rate_row",
+        {"work_item": "blockwork walls", "quantity": written, "quantity_unit": unit})
+    if ok:
+        assert rejected == [] and values["quantity"] == float(written.split()[0])
+    else:
+        assert [r["reason"] for r in rejected] == ["wrong_unit"], rejected
+        assert rejected[0]["unit"] == unit and values["quantity"] == written
+
+
+@pytest.mark.parametrize("value,unit,want", [(600, "m2", 600), ("1,200", "m2", "1,200"), (None, "m2", None)])
+def test_a_quantity_without_a_written_unit_is_left_to_the_range_check(value, unit, want):
+    values, conv, rejected = fr.convert_written_units(
+        "crew_days_from_rate_row",
+        {"work_item": "blockwork walls", "quantity": value, "quantity_unit": unit})
+    assert values["quantity"] == want and values["quantity_unit"] == unit
+    assert conv == [] and rejected == []
+
+
+def test_a_conversion_into_quantity_unit_is_reported():
+    _values, conv, _rej = fr.convert_written_units(
+        "crew_days_from_rate_row",
+        {"work_item": "blockwork walls", "quantity": "2000 sq ft", "quantity_unit": "m2"})
+    assert [(c["parameter"], c["from_unit"], c["to_unit"]) for c in conv] == [("quantity", "sq ft", "m2")]
+    _values, conv, _rej = fr.convert_written_units(
+        "crew_days_from_rate_row",
+        {"work_item": "blockwork walls", "quantity": "600 m2", "quantity_unit": "m2"})
+    assert conv == []
+
+
+def test_the_sibling_unit_declaration_reaches_the_parameter_spec():
+    params = fr.parameters(fr.get("crew_days_from_rate_row"))
+    assert params["quantity"].unit_from == "quantity_unit"
+    assert params["work_item"].unit_from == ""
 
 
 @pytest.mark.parametrize("item,bare,want_days", [
