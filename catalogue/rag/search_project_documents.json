@@ -54,7 +54,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Finds the passages of this project's own documents that best match a query. One call returns up to top_k passages (default 5), best first, each whole; a passage already handed this turn is not repeated, and rows that do not fit one tool message are left out and counted. It is a ranked sample, never every row: it gives no complete count or total.",
+    "purpose": "Finds the passages of this project's own documents that best match a query. One call returns up to top_k passages (default 5) in the order the search ranks them; rows that do not fit one tool message are left out whole and counted. It is a ranked sample, never every row: it gives no complete count or total.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_general_knowledge",

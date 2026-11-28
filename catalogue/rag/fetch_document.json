@@ -51,7 +51,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Reads the text of one document, picked by its id or file name, from this project or a library a search cites. One call returns the text up to a fixed length, with truncated saying whether the end was cut and partial_read when only part of a scan was read. A name that matches several documents returns an error naming them all, not a pick.",
+    "purpose": "Reads the text of one document, picked by its id or file name. One call returns the text up to a fixed length, with truncated saying whether the end was cut and partial_read when only part of a scan was read. A name that matches several documents returns an error naming them all, not a pick.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",

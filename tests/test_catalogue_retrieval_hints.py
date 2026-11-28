@@ -151,12 +151,19 @@ async def test_document_list_counts_all_returns_up_to_the_cap_and_no_id(monkeypa
 
     docs = [{"id": f"id{i}", "original_name": f"f{i}.pdf", "doc_type": "pdf", "size": i} for i in range(held)]
     monkeypatch.setattr(projects, "_master_corpus_source", lambda pid: None)
-    monkeypatch.setattr(projects, "list_documents", lambda pid, limit=100, **_kw: docs[:limit])
+    asked = []
+
+    def listed(pid, limit=100, **kw):
+        asked.append(kw.get("newest_first"))
+        return docs[:limit]
+
+    monkeypatch.setattr(projects, "list_documents", listed)
     monkeypatch.setattr(projects, "count_documents", lambda pid: len(docs))
     args = {} if limit is None else {"limit": limit}
     out = await handle_list_project_documents(_call("list_project_documents", args))
     result = out["result"]
     assert (result["total_documents"], result["returned"]) == (held, returned)
+    assert asked == [True]
     # each entry is file name, type and size: no text and no document id
     assert all(set(d) == {"filename", "doc_type", "size_bytes"} for d in result["documents"])
 
@@ -201,6 +208,16 @@ async def test_fetch_a_name_matching_several_documents_names_them_all(fetchable,
         assert "wall spec.docx" in out["result"]["error"] and "wall schedule.docx" in out["result"]["error"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("note", [None, "pages 1-3 of 9 were read"])
+async def test_fetch_says_when_only_part_of_a_scan_was_read(fetchable, monkeypatch, note):
+    from app.agents.base.tools import handle_fetch_document
+    monkeypatch.setattr(fetchable, "_partial_read_note_for_doc", lambda doc: note)
+    out = await handle_fetch_document(_call("fetch_document", {"document_id": "b"}))
+    assert out["ok"] is True
+    assert out["result"]["partial_read"] == note
+
+
 # -- search_project_documents -------------------------------------------------
 
 @pytest.mark.asyncio
@@ -218,7 +235,8 @@ async def test_search_asks_for_top_k_passages_default_five(monkeypatch, args, as
     monkeypatch.setattr(doc_index, "search_project_documents", fake)
     out = await handle_search_project_documents(_call("search_project_documents", args))
     assert seen == [asked]
-    assert len(out["result"]["results"]) == asked
+    # the rows come back in the order the search ranked them
+    assert [r["snippet"] for r in out["result"]["results"]] == [f"s{i}" for i in range(asked)]
 
 
 @pytest.mark.parametrize("cap, kept", [(10_000, 4), (260, 1), (330, 2)])

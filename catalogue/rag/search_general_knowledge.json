@@ -54,7 +54,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Finds passages in the platform's general-knowledge library (standards, codes, guidance), not in this project's documents. One call searches every configured library and returns the best top_k passages by score (default 5, at most 20), each marked as general knowledge. With no library configured it returns an error, which says nothing about the subject.",
+    "purpose": "Finds passages in the platform's general-knowledge library (standards, codes, guidance), not in this project's documents. One call searches every configured library and returns the best top_k passages by score (default 5, at most 20), each marked as general knowledge. With no library configured it returns an error that says so, not an empty search.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",
