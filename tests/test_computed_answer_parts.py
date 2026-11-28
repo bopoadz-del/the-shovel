@@ -305,3 +305,36 @@ def test_a_figure_typed_with_thousands_separators_is_the_users(value, question):
 
     assert str(value) not in question  # only the figure form appears
     assert _typed_by_user(value, question) is True
+
+
+@pytest.mark.parametrize("st, expected", [
+    (Statement(figure=2.0, what="", basis="count", terms=("kerb",), words_matched=False), "Number of rows"),
+    (Statement(figure=9.0, what="quantity", basis="sum", terms=("pile cap",), within=("B2",), words_matched=False),
+     "Quantity summed over the rows"),
+    (Statement(figure=2.0, what="", basis="count", terms=("kerb",), words_matched=True),
+     "Number of rows whose description holds kerb"),
+])
+def test_what_a_statement_is_names_no_words_the_tool_says_did_not_choose_the_rows(st, expected):
+    assert _what(st, EN) == expected
+
+
+@pytest.mark.parametrize("words, scoped_words, left", [
+    ("kerb", "kerb", []),               # the scoped result is for the same part: nothing is left unanswered
+    ("pile cap", "pile cap", []),
+    ("kerb", "edging", ["kerb"]),       # negative: a result for other words does not answer it
+])
+def test_a_result_whose_scope_chose_the_rows_still_answers_the_part_its_words_name(words, scoped_words, left):
+    from app.agents.base.tools import bill_rows_statement
+    from app.agents.core.computed_answer import Call, unanswered
+
+    bill = {"status": "success", "filename": "b.xlsx", "terms": [scoped_words], "section_terms": [],
+            "terms_applied": False, "measure": "amount", "sum": 3500.0, "unit": "",
+            "rows": [{"ref": "A1", "description": "x", "amount": 1500.0}, {"ref": "A2", "description": "y", "amount": 2000.0}]}
+    stated = tuple(bill_rows_statement({"bills": [bill]}))
+    assert stated and all(s.words_matched is False for s in stated)
+    failed = Call(tool="bill_rows_aggregate", heading="Bill row count and total", asked={"terms": words},
+                  error="the tool reported an error")
+    ok = Call(tool="bill_rows_aggregate", heading="Bill row count and total", statements=stated,
+              asked={"terms": scoped_words, "measure": "amount"})
+    assert [c.asked["terms"] for c in unanswered([failed, ok])] == left
+

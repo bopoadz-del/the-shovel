@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -259,8 +260,25 @@ _SHEET_RULES = (
     "something else.")
 
 
-def _sheet_note(work: Dict[str, Any]) -> str:
-    return _SHEET_RULES + "\n" + sheet.render(work)
+def _sheet_note(work: Dict[str, Any], round_no: int, elapsed: float) -> str:
+    """The rules and what is left of the turn's budget (one line), then the
+    sheet. The budget is both ceilings the loop enforces, read from the same
+    settings the loop reads: the round of the round ceiling, and the seconds
+    left of the seconds ceiling as of ``elapsed`` (rounded down, so never more
+    than is left). It is stated, never enforced here: the model plans its own
+    rounds; the ceilings stay where they are."""
+    rounds, seconds = driver.sheet_max_rounds(), driver.sheet_max_seconds()
+    if math.isinf(seconds):
+        # A setting that leaves no seconds ceiling: the loop's own check
+        # (elapsed > seconds) never ends the turn, so only the rounds do.
+        budget = (f"This is round {round_no} of {rounds} for this turn; no tool round starts after round "
+                  f"{rounds}, so write what you found onto the sheet as you go.")
+        return _SHEET_RULES + " " + budget + "\n" + sheet.render(work)
+    left = max(0, math.floor(seconds - elapsed))
+    budget = (f"This is round {round_no} of {rounds} for this turn, with {left} of {math.floor(seconds)} "
+              f"seconds left; no tool round starts after round {rounds} or once the seconds have run "
+              "out, whichever comes first, so write what you found onto the sheet as you go.")
+    return _SHEET_RULES + " " + budget + "\n" + sheet.render(work)
 
 
 def _build_sha() -> str:
@@ -344,7 +362,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             await off_loop(agent_memory.get_or_create_conversation, conversation_id,
                            getattr(agent, "name", "") or "driver", project_id, owner_id=user_id)
         work = sheet.new_sheet(f"{conversation_id or ''}@{int(time.time() * 1000)}", user_message, previous)
-        sheet_msg["content"] = _sheet_note(work)
+        sheet_msg["content"] = _sheet_note(work, 1, time.monotonic() - t0)
         msgs.insert(len(msgs) - 1, sheet_msg)
         # The request's own question set (a per-turn sheet request) wins;
         # else the project's profile names one.
@@ -464,7 +482,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         if work is not None:
             # The sheet as it stands, handed back every round; its tools are
             # offered every round -- never withdrawn while a step is open.
-            sheet_msg["content"] = _sheet_note(work)
+            sheet_msg["content"] = _sheet_note(work, step + 1, time.monotonic() - t0)
             offered = offered + tools.sheet_schemas()
         trace.append({"step": step + 1, "hat": hat, "offered": len(offered),
                       "workflows": _offered_workflows(offered), "calls": []})
