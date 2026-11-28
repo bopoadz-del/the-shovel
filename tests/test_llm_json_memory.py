@@ -1280,9 +1280,8 @@ def test_a_figure_the_user_told_comes_back_with_its_source_in_a_new_chat(client,
     assert credited and credited[0]["source"] == "user_note"
     # Figures are matched by size: where the note holds the figure below
     # zero the credit shows the note's own figure.
-    below = [f"{v:g}" for v in told.values() if isinstance(v, (int, float)) and not isinstance(v, bool) and v < 0]
     assert credited[0]["doc_name"] == "Told by the user, from the project notes" + (
-        f"; the note holds {below[0]}" if below else "")
+        "; the note holds -4.1" if "formation_level_m" in told else "")
     assert shown not in (end.get("exit_check") or {}).get("figures_removed", [])
     # Negative: a figure in no note and no document is still withheld.
     seen = []
@@ -1904,29 +1903,77 @@ def test_a_refusal_that_is_not_about_told_figures_keeps_its_own_words_on_any_tur
     assert "delegated" not in got["result"]["error"]
 
 
-@pytest.mark.parametrize("data,below", [
-    (-2.35, {2.35}),
-    (2.35, set()),
-    ({"cut_off": -4.1, "top": 4.1, "told_by_user": True}, {4.1}),
-    ({"levels": [-2, {"deep": -1850}], "n": 7}, {2.0, 1850.0}),
-    ({"v": "-2.35 m"}, set()),
+@pytest.mark.parametrize("data,held", [
+    (-2.35, {-2.35}),
+    (2.35, {2.35}),
+    ({"cut_off": -4.1, "top": 4.1, "told_by_user": True}, {-4.1, 4.1}),
+    ({"levels": [-2, {"deep": -1850}], "n": 7}, {-2.0, -1850.0, 7.0}),
+    ({"v": "-2.35 m"}, {-2.35}),
+    ({"v": "Formation level -4.10 m; pile cut-off level \u22122.35 m."}, {-4.1, -2.35}),
+    ({"v": "level: -1,250.5 (below datum)"}, {-1250.5}),
+    ({"v": "datum +2.35 m"}, {2.35}),
+    # a dash between two things is not a sign
+    ({"v": "grade C-40, bars 2-2.35 m apart"}, {40.0, 2.0, 2.35}),
+    ({"v": "1,, and none"}, {1.0}),
     (True, set()),
     (None, set()),
-    (0, set()),
+    (0, {0.0}),
 ])
-def test_figures_below_zero_are_the_sizes_of_the_numbers_a_note_holds_below_zero(data, below):
-    assert llm_memory.figures_below_zero(data) == below
+def test_signed_figures_are_a_notes_figures_with_the_sign_the_note_gives_them(data, held):
+    assert llm_memory.signed_figures(data) == held
+    # The sizes are exactly the figures every told check reads from the note.
+    assert {abs(h) for h in held} == llm_memory.note_figures(data)
 
 
-@pytest.mark.parametrize("value,below,label", [
-    (2.35, {2.35}, "Told by the user, from the project notes; the note holds -2.35"),
-    (2.35, {2350.0}, "Told by the user, from the project notes; the note holds -2350"),
-    (4.1, {2.35}, "Told by the user, from the project notes"),
+@pytest.mark.parametrize("value,text", [
+    (-2.35, "-2.35"), (-1234567.0, "-1234567"), (-125000.75, "-125000.75"), (-1234.5678, "-1234.5678"),
+    (-0.00002, "-0.00002"), (-2345678.5, "-2345678.5"), (1e21, "1000000000000000000000"), (4.1, "4.1"),
+    (float("inf"), "inf"),
+])
+def test_shown_writes_a_figure_out_in_full_and_never_as_an_exponent(value, text):
+    assert llm_memory._shown(value) == text
+
+
+@pytest.mark.parametrize("value,held,label", [
+    (2.35, {-2.35}, "Told by the user, from the project notes; the note holds -2.35"),
+    (2.35, {-2350.0}, "Told by the user, from the project notes; the note holds -2350"),
+    (1234567.0, {-1234567.0}, "Told by the user, from the project notes; the note holds -1234567"),
+    (125000.75, {-125000.75, 9.0}, "Told by the user, from the project notes; the note holds -125000.75"),
+    # the size held above and below zero: both, as the notes hold them
+    (2.35, {2.35, -2.35}, "Told by the user, from the project notes; the note holds -2.35, 2.35"),
+    (4.1, {4.1, -4.1, -4100.0}, "Told by the user, from the project notes; the note holds -4100, -4.1, 4.1"),
+    # nothing of that size below zero: the plain credit
+    (4.1, {-2.35, 4.1}, "Told by the user, from the project notes"),
     (4.1, set(), "Told by the user, from the project notes"),
 ])
-def test_told_label_says_what_the_note_holds_where_it_holds_the_figure_below_zero(value, below, label):
+def test_told_label_lists_what_the_notes_hold_where_they_hold_the_size_below_zero(value, held, label):
     from app.agents import citation_provenance as cp
-    assert cp._told_label(value, below) == label
+    assert cp._told_label(value, held) == label
+
+
+@pytest.mark.parametrize("data,answer,label", [
+    ({"v": -1234567}, "The settlement is 1,234,567 mm.",
+     "Told by the user, from the project notes; the note holds -1234567"),
+    ({"v": -125000.75}, "The level is 125,000.75 mm.",
+     "Told by the user, from the project notes; the note holds -125000.75"),
+    # held as text, the sign written before the figure
+    ({"level": "-2.35 m"}, "The pile cut-off level is +2.35 m (above datum).",
+     "Told by the user, from the project notes; the note holds -2.35"),
+    ({"level": "Formation level -4.10 m"}, "It is 4.10 m above datum.",
+     "Told by the user, from the project notes; the note holds -4.1"),
+    # one size above and below zero in the notes: both are shown
+    ({"top_m": 2.35, "bottom_m": -2.35}, "The top level is 2.35 m.",
+     "Told by the user, from the project notes; the note holds -2.35, 2.35"),
+    # negative: nothing held below zero, the plain credit
+    ({"top_m": 2.35, "span": "2-2.35 m"}, "The top level is 2.35 m.", "Told by the user, from the project notes"),
+])
+def test_figure_provenance_credits_a_told_figure_with_what_the_notes_hold_of_that_size(data, answer, label):
+    from app.agents import citation_provenance as cp
+    told = _tool_msg("read_memory", {"status": "success", "told_by_user": True, "data": data})
+    user = {"role": "user", "content": "what is it?"}
+    out, trail = cp.figure_provenance(answer, None, [user, told], enforce=True, tool_passages=True)
+    assert out == answer
+    assert [e["doc_name"] for e in trail if e["source"] == "user_note"] == [label]
 
 
 @pytest.mark.parametrize("held,answer,figure,label", [

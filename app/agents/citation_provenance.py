@@ -1493,16 +1493,20 @@ def _match(value: float, pool: Iterable[float]) -> bool:
     return any(_close(value, p) for p in pool)
 
 
-def _told_label(value: float, below_zero: Iterable[float]) -> str:
-    """The credit of a figure a told note backs. Figures are matched by size,
-    so where the note holds that figure as a number below zero the credit
-    says so: the reader sees the user's own figure next to the answer's."""
+def _told_label(value: float, held: Iterable[float]) -> str:
+    """The credit of a figure a told note backs. Figures are matched by size.
+    ``held`` is every figure the told notes hold, with its sign; where one of
+    the size matched is held below zero, the credit lists every held figure
+    of that size exactly as the notes hold it (both, when a note holds the
+    size above and below zero), so the reader sees the user's own figures
+    next to the answer's."""
     from app.agents import provenance_trail as pt
+    from app.core import llm_memory
 
-    held = sorted(b for b in below_zero if _match(value, _rescaled({b})))
-    if not held:
+    same = sorted(h for h in set(held) if _match(value, _rescaled({abs(h)})))
+    if not any(h < 0 for h in same):
         return pt.USER_NOTE_LABEL
-    return f"{pt.USER_NOTE_LABEL}; the note holds {', '.join(f'-{b:g}' for b in held)}"
+    return f"{pt.USER_NOTE_LABEL}; the note holds {', '.join(llm_memory._shown(h) for h in same)}"
 
 
 def _rescaled(values: Iterable[float]) -> set[float]:
@@ -1723,8 +1727,8 @@ def figure_provenance(
         # (llm_memory.note_figures): its values, never its key names.
         told_vals = {n for rec in ev.records if rec.kind == "user_note"
                      for n in llm_memory.note_figures(json.loads(rec.text))}
-        told_below = {n for rec in ev.records if rec.kind == "user_note"
-                      for n in llm_memory.figures_below_zero(json.loads(rec.text))}
+        told_held = {n for rec in ev.records if rec.kind == "user_note"
+                     for n in llm_memory.signed_figures(json.loads(rec.text))}
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         # B11: the words of the ask a cited sentence must name when a chunk
         # carries competing figures in the same unit. Derived only on the
@@ -1898,7 +1902,7 @@ def figure_provenance(
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
             if entry is None and _match(value, _rescaled(told_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER_NOTE,
-                         "doc_name": _told_label(value, told_below)}
+                         "doc_name": _told_label(value, told_held)}
             if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:

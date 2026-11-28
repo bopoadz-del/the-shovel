@@ -28,6 +28,7 @@ import json
 import os
 import re
 import threading
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -217,17 +218,36 @@ def note_figures(data: Any) -> Set[float]:
     return set()
 
 
-def figures_below_zero(data: Any) -> Set[float]:
-    """The sizes of the JSON numbers below zero in a note's values: for -2.35
-    the 2.35 ``note_figures`` reads it as. A figure check compares sizes;
-    whoever shows a told figure says with this what the note itself holds.
-    (True and false are not below zero, so they give nothing.)"""
+#: A figure with the minus written before it, where the minus is a sign and
+#: not a dash between two things: at the start of the text or after a space,
+#: an opening bracket, a colon or an equals sign ("-2.35 m", "level: -4.10"),
+#: never after a letter or a digit ("C-40", "2-2.35").
+SIGNED_FIGURE = re.compile(r"(?:(?<![^\s(\[:=])([-\u2212]))?(\d[\d,]*(?:\.\d+)?)")
+
+
+def signed_figures(data: Any) -> Set[float]:
+    """The figures a note's values hold, each with the sign the note gives it:
+    a JSON number as it is, a figure written inside text below zero when a
+    minus sign is written before it (``SIGNED_FIGURE``). The sizes are the
+    figures ``note_figures`` reads; a figure check compares sizes, and whoever
+    shows a told figure says with this what the note itself holds."""
+    if isinstance(data, bool):
+        return set()
     if isinstance(data, (int, float)):
-        return note_figures(data) if data < 0 else set()
+        return {float(str(data))}
+    if isinstance(data, str):
+        out: Set[float] = set()
+        for minus, token in SIGNED_FIGURE.findall(data):
+            try:
+                size = float(token.replace(",", ""))
+            except ValueError:
+                continue  # "1,,": digits with no figure in them
+            out.add(-size if minus else size)
+        return out
     if isinstance(data, dict):
-        return set().union(*(figures_below_zero(v) for v in data.values()))
+        return set().union(*(signed_figures(v) for v in data.values()))
     if isinstance(data, list):
-        return set().union(*(figures_below_zero(v) for v in data))
+        return set().union(*(signed_figures(v) for v in data))
     return set()
 
 
@@ -245,7 +265,14 @@ def untold_figures(value: Any, told_from: Iterable[str], before: Any = None) -> 
 
 
 def _shown(value: float) -> str:
-    return str(int(value)) if value.is_integer() else repr(value)
+    """The figure written out in full, as a person writes one: every digit it
+    holds, never an exponent ("-1234567", "0.00002"). A value no float holds
+    (inf, nan) is shown by its name."""
+    if value != value or value in (float("inf"), float("-inf")):
+        return repr(value)
+    if value.is_integer():
+        return str(int(value))
+    return format(Decimal(repr(value)), "f")
 
 
 def parse_data(data: Any) -> Tuple[str, Any]:
