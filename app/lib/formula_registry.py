@@ -93,10 +93,19 @@ class Param:
     #: description of the input names that entry and its value.
     default_from: Any = None
     #: The input whose value is this input's unit (``quantity_unit`` for
-    #: ``quantity``). A unit written in this input's value is converted into
-    #: that input's unit when it is the same kind, refused naming both when
-    #: it is not, and taken as that input's value when it is blank. Empty
-    #: when the unit is the fixed ``unit`` above.
+    #: ``quantity``). A unit written in this input's value goes to the
+    #: calculator with the number, as that input's value, whenever it is the
+    #: same kind as the unit given there (or that is blank or "-"); another
+    #: kind is refused naming both. So the calculator itself sees the unit
+    #: the figure was written in, on every path, and any conversion it makes
+    #: is its own to report. Only a single-figure input can declare it: a
+    #: series is refused when the formula is registered. Empty when the unit
+    #: is the fixed ``unit`` above. Its ``lo``/``hi`` hold in the unit the
+    #: calculator works in, which only the calculator knows (the unit of a
+    #: row it looks up): when a unit is given, the front door does not hold
+    #: them against the number in that unit; the calculator checks the
+    #: figure it converted into its own unit (``in_declared_range``).
+    #: A number with no unit at all is still range-checked at the front door.
     unit_from: str = ""
 
     def __post_init__(self) -> None:
@@ -228,6 +237,14 @@ def formula(
         if existing is not None and existing.fn is not fn:
             raise ValueError(f"formula {key!r} is declared twice")
         params = {k: _declared_param(v) for k, v in inputs.items()}
+        sig = inspect.signature(fn)
+        for pname, declared in params.items():
+            sp = sig.parameters.get(pname)
+            if (declared.unit_from and sp is not None
+                    and annotation_kind(sp.annotation, sp.default) == "series"):
+                # One sibling unit cannot hold the units of several figures.
+                raise ValueError(f"formula {key!r}: series input {pname!r} cannot take its "
+                                 f"unit from {declared.unit_from!r}; unit_from is for one figure")
         _REGISTRY[key] = FormulaSpec(key, fn, owner, description.strip(),
                                      display_name.strip(),
                                      {k: p.unit for k, p in params.items()},
@@ -691,6 +708,14 @@ def _in_range(spec: ParamSpec, number: float) -> bool:
     return spec.hi is None or number <= spec.hi
 
 
+def in_declared_range(spec: Any, number: float) -> bool:
+    """``number`` is inside the range ``spec`` (a :class:`Param` or
+    :class:`ParamSpec`) declares. For a calculator that checks an input
+    after putting it into its own unit (an input that declares
+    ``unit_from``)."""
+    return _in_range(spec, number)
+
+
 _SI_PREFIX = {"G": 1e9, "M": 1e6, "k": 1e3, "": 1.0, "c": 1e-2, "m": 1e-3}
 _SI_UNIT_RE = re.compile(r"^(G|M|k|c|m|)(m|N|Pa|g)([1-4])?$")
 
@@ -910,10 +935,11 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
 def _convert_to_sibling_unit(spec: ParamSpec, value: Any, values: Dict[str, Any],
                              context: Dict[str, Any]) -> Dict[str, Any]:
     """``value`` of an input whose unit is the value of its sibling input
-    ``spec.unit_from``. Returns ``values`` (the inputs to update, with a
-    ``conversion`` when the unit changed) or ``rejection``. A written unit
-    is never dropped: it is converted into the sibling's unit, refused when
-    it is another kind, or becomes the sibling's value when that is blank."""
+    ``spec.unit_from``. Returns ``values`` (the inputs to update) or
+    ``rejection``. A written unit is never dropped and never converted here:
+    when it is the sibling's kind (or the sibling is blank) it becomes the
+    sibling's value beside the bare number, so the calculator converts it
+    and reports that conversion itself; another kind is refused."""
     from app.agents.base.formulas.construction_formulas_planning import parse_unit
 
     parsed = value_and_unit(value)
@@ -943,10 +969,11 @@ def _convert_to_sibling_unit(spec: ParamSpec, value: Any, values: Dict[str, Any]
     got = convert_figure(target, number, unit, context)
     if "rejection" in got:
         return got
-    out = {"values": {spec.name: got["value"]}}
-    if "conversion" in got:
-        out["conversion"] = got["conversion"]
-    return out
+    if "conversion" not in got:
+        # The same unit under another spelling: the sibling's word stands.
+        return {"values": {spec.name: got["value"]}}
+    conv = got["conversion"]
+    return {"values": {spec.name: conv["value_in"], spec.unit_from: conv["from_unit"]}}
 
 
 def convert_written_units(name: str, values: Dict[str, Any],
@@ -1062,6 +1089,11 @@ def check_inputs(name: str, values: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
                 rejected.append(_rejection(p, value, "not_whole"))
                 continue
             out[key] = int(number)
+        if p.unit_from and str(out.get(p.unit_from) or "").strip() not in ("", "-"):
+            # A unit is given: the range holds in the unit the calculator
+            # converts the figure into, which is not known here, so the
+            # calculator checks it there (``in_declared_range``).
+            continue
         if not _in_range(p, number):
             row = _rejection(p, value, "out_of_range")
             hint = scale_hint(p, number)

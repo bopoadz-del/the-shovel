@@ -529,7 +529,9 @@ def _formula_values(spec: Any, values: Dict[str, Any]) -> Dict[str, Any]:
     the unit it carries there: a ``<input>_unit`` the plan writes beside it
     does not replace that unit, in whatever order the plan lists the two.
     The plan's own ``<input>_unit`` is the unit of a number the plan itself
-    wrote bare."""
+    wrote bare. For an input whose unit IS that sibling (it declares
+    ``unit_from``), "-" on a sheet value states no unit, as it does at the
+    registry's front door, so it never replaces the unit the plan gives."""
     from app.lib import formula_registry
 
     params = formula_registry.parameters(spec)
@@ -542,7 +544,10 @@ def _formula_values(spec: Any, values: Dict[str, Any]) -> Dict[str, Any]:
         number, unit = value["value"], str(value.get("unit") or "-").strip() or "-"
         if f"{name}_unit" in params:
             out[name] = number
-            carried[f"{name}_unit"] = unit
+            spec_p = params.get(name)
+            unit_is_sibling = spec_p is not None and spec_p.unit_from == f"{name}_unit"
+            if unit != "-" or not unit_is_sibling:
+                carried[f"{name}_unit"] = unit
         elif unit == "-":
             out[name] = number
         else:
@@ -624,6 +629,13 @@ def run_step(sheet: Dict[str, Any], step_id: str, call_id: str = "") -> Dict[str
         return _end(status="failed", error=f"{name} could not run: {exc}")
     output = _output_of(spec, str(plan.get("output") or ""))
     if isinstance(result, dict) and result.get("error"):
+        asked = result.get("needs_input")
+        if isinstance(asked, list) and asked and not result.get("required"):
+            # The formula's refusal names inputs that are ABSENT (a value
+            # given wrong also carries ``required``): the step waits for
+            # them, as it does for an input the front door finds missing.
+            return _end(status="waiting_input", needs=[
+                (params[k].label or k) if k in params else str(k) for k in asked])
         return _end(status="failed", error=str(result["error"]))
     if not isinstance(result, dict) or not output or output not in result:
         return _end(status="failed", error=_no_output_error(name, output, result))
