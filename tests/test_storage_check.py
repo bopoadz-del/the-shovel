@@ -8,24 +8,41 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
 from scripts.storage_check import (
     POLICY_NOT_FOUND,
+    _load,
     check_backup_policy,
     check_durable_store,
     check_recovery_point,
-    main,
     mounted_file_system,
     run_checks,
 )
+from scripts.storage_check import main as _main
 
 NOW = datetime(2026, 11, 24, 21, 0, tzinfo=timezone.utc)
 
 
 def _check_points(points, fs_id, now, limit):
-    return check_recovery_point({"RecoveryPoints": list(points)}, fs_id, now, limit)
+    return check_recovery_point({"RecoveryPoints": list(points)}, fs_id, now, limit, asked_for=fs_id)
+
+
+def main(argv):
+    """The CLI, run the way a deploy runs it: the backup inputs were fetched
+    for the file system the task file mounts. Binding tests call ``_main``."""
+    argv = [str(a) for a in argv]
+    if "--file-system-id" not in argv and argv and not argv[0].startswith("-"):
+        described = _load(Path(argv[0]))
+        try:
+            fs_id = mounted_file_system(described) if isinstance(described, dict) else ""
+        except ValueError:  # a task file that shows no one file system binds nothing
+            fs_id = ""
+        if fs_id:
+            argv += ["--file-system-id", fs_id]
+    return _main(argv)
 
 
 def _described(
@@ -113,7 +130,7 @@ def test_durable_store_fails_without_an_efs_volume(volume, mount):
     (None, None),
 ])
 def test_backup_policy_must_be_enabled(policy, ok):
-    _, got, detail = check_backup_policy(policy, "fs-0bbb")
+    _, got, detail = check_backup_policy(policy, "fs-0bbb", asked_for="fs-0bbb")
     assert got is ok
     assert "fs-0bbb" in detail
 
@@ -168,7 +185,7 @@ def test_no_points_at_all_fails():
     ("fs-0eee", {"BackupPolicy": {"Status": "DISABLED"}}),
 ])
 def test_mounted_but_unbacked_volume_fails_only_the_backup_checks(fs_id, policy):
-    checks = run_checks(_described(fs_id=fs_id), policy, {"RecoveryPoints": []}, NOW)
+    checks = run_checks(_described(fs_id=fs_id), policy, {"RecoveryPoints": []}, NOW, asked_for=fs_id)
     assert [(n, ok) for n, ok, _ in checks] == [
         ("durable_store", True), ("backup_policy", False), ("recovery_point", False),
     ]
@@ -472,7 +489,7 @@ def test_efs_mounted_in_two_containers_is_not_judged_for_the_store(fs_a, fs_b):
     taskdef["volumes"].append({"name": "other", "efsVolumeConfiguration": {"fileSystemId": fs_b}})
     _add_container(described, {"name": "second", "mountPoints": [
         {"sourceVolume": "other", "containerPath": "/srv/other", "readOnly": False}]})
-    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW)
+    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW, asked_for=fs_a)
     assert checks == [
         ("durable_store", None, "not_checked=described:efs_mounts=2"),
         ("backup_policy", None, "not_checked=described:efs_file_systems=2"),
@@ -480,7 +497,7 @@ def test_efs_mounted_in_two_containers_is_not_judged_for_the_store(fs_a, fs_b):
     ]
     # Negative: both containers on ONE file system still have its backups checked.
     taskdef["volumes"][-1]["efsVolumeConfiguration"]["fileSystemId"] = fs_a
-    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW)
+    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW, asked_for=fs_a)
     assert [(n, ok) for n, ok, _ in checks] == [
         ("durable_store", None), ("backup_policy", True), ("recovery_point", True)]
 
@@ -560,7 +577,7 @@ def test_a_described_file_that_is_not_a_task_definition_checks_nothing(tmp_path,
 def test_unreadable_settings_leave_the_store_unchecked_and_backups_judged(mutate, reason):
     described = _described(fs_id="fs-0ccc")
     mutate(described["taskDefinition"]["containerDefinitions"][0])
-    checks = run_checks(described, _ENABLED, _fresh("fs-0ccc"), NOW)
+    checks = run_checks(described, _ENABLED, _fresh("fs-0ccc"), NOW, asked_for="fs-0ccc")
     assert checks[0] == ("durable_store", None, f"not_checked=described:{reason}")
     assert [(n, ok) for n, ok, _ in checks[1:]] == [("backup_policy", True), ("recovery_point", True)]
 
@@ -854,30 +871,30 @@ def test_an_unset_root_with_a_hidden_data_dir_is_unverified(hidden):
 def test_one_page_of_a_longer_listing_without_a_fresh_point_is_unverified(age_h):
     points = {"RecoveryPoints": [_point(NOW - timedelta(hours=age_h), arn=_arn("fs-0aaa"))],
               "NextToken": "abc"}
-    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
+    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26, asked_for="fs-0aaa")
     assert ok is None and "more_pages=not_read" in detail
     # Negative: the same stale page with no NextToken is complete, and fails.
     del points["NextToken"]
-    assert check_recovery_point(points, "fs-0aaa", NOW, 26)[1] is False
+    assert check_recovery_point(points, "fs-0aaa", NOW, 26, asked_for="fs-0aaa")[1] is False
 
 
 @pytest.mark.parametrize("token", ["abc", "eyJuZXh0IjoxfQ=="])
 def test_a_fresh_point_on_one_page_is_enough(token):
     points = {"RecoveryPoints": [_point(NOW - timedelta(hours=2), arn=_arn("fs-0bbb"))], "NextToken": token}
-    assert check_recovery_point(points, "fs-0bbb", NOW, 26)[1] is True
+    assert check_recovery_point(points, "fs-0bbb", NOW, 26, asked_for="fs-0bbb")[1] is True
 
 
 @pytest.mark.parametrize("token", [None, "", "  "])
 def test_an_empty_next_token_is_a_complete_listing(token):
     points = {"RecoveryPoints": [], "NextToken": token}
-    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26)
+    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26, asked_for="fs-0aaa")
     assert ok is False and "more_pages" not in detail
 
 
 @pytest.mark.parametrize("token", [5, ["abc"]])
 def test_a_next_token_that_is_not_text_is_not_read(token):
     points = {"RecoveryPoints": [], "NextToken": token}
-    assert check_recovery_point(points, "fs-0aaa", NOW, 26) == (
+    assert check_recovery_point(points, "fs-0aaa", NOW, 26, asked_for="fs-0aaa") == (
         "recovery_point", None, "file_system=fs-0aaa not_checked=recovery-points:NextToken_not_text")
 
 
@@ -888,3 +905,170 @@ def test_a_relative_root_under_a_relative_working_directory_is_unverified(workdi
     d["taskDefinition"]["containerDefinitions"][0]["workingDirectory"] = workdir
     _, ok, detail = check_durable_store(d)
     assert ok is None and "workingDirectory=<not_in_task_definition>" in detail
+
+
+# --- #779 grade 1 (trial4, trial5): absent fields, binding, Status shape ---
+
+def _mount_point(d: dict) -> dict:
+    return d["taskDefinition"]["containerDefinitions"][0]["mountPoints"][0]
+
+
+@pytest.mark.parametrize("fs_id,path", [("fs-0aaa", None), ("fs-0bbb", "   ")])
+def test_an_efs_mount_with_no_container_path_is_not_checked(fs_id, path):
+    d = _described(fs_id=fs_id)
+    _mount_point(d)["containerPath"] = path
+    reason = "not_checked=described:mountPoint_without_containerPath"
+    assert run_checks(d, _ENABLED, _fresh(fs_id), NOW, asked_for=fs_id) == [
+        ("durable_store", None, reason),
+        ("backup_policy", None, reason),
+        ("recovery_point", None, reason),
+    ]
+
+
+@pytest.mark.parametrize("path", [None, ""])
+def test_another_mount_with_no_container_path_is_not_checked(path):
+    d = _described()
+    d["taskDefinition"]["volumes"].append({"name": "scratch", "host": {}})
+    d["taskDefinition"]["containerDefinitions"][0]["mountPoints"].append(
+        {"sourceVolume": "scratch", "containerPath": path})
+    assert check_durable_store(d) == (
+        "durable_store", None, "not_checked=described:mountPoint_without_containerPath")
+
+
+@pytest.mark.parametrize("path", ["app/data", "srv"])
+def test_a_relative_efs_mount_path_fails(path):
+    d = _described(mount=path, env=_env(root=path))
+    assert check_durable_store(d) == ("durable_store", False, "efs_mount_not_absolute")
+
+
+@pytest.mark.parametrize("fs_id,name", [("fs-0aaa", None), ("fs-0bbb", " ")])
+def test_an_unnamed_efs_volume_is_not_checked(fs_id, name):
+    d = _described(fs_id=fs_id)
+    d["taskDefinition"]["volumes"][0]["name"] = name
+    _mount_point(d)["sourceVolume"] = name
+    reason = "not_checked=described:efs_volume_without_name"
+    checks = run_checks(d, _ENABLED, _fresh(fs_id), NOW, asked_for=fs_id)
+    assert [(n, ok, det) for n, ok, det in checks] == [
+        ("durable_store", None, reason),
+        ("backup_policy", None, reason),
+        ("recovery_point", None, reason),
+    ]
+
+
+@pytest.mark.parametrize("fs_id,source", [("fs-0aaa", None), ("fs-0bbb", "")])
+def test_a_mount_point_with_no_source_volume_is_not_checked(fs_id, source):
+    d = _described(fs_id=fs_id)
+    _mount_point(d)["sourceVolume"] = source
+    reason = "not_checked=described:mountPoint_without_sourceVolume"
+    assert [c[1:] for c in run_checks(d, _ENABLED, _fresh(fs_id), NOW, asked_for=fs_id)] == [
+        (None, reason), (None, reason), (None, reason),
+    ]
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0ddd"])
+def test_an_unnamed_volume_that_is_not_efs_is_not_read(fs_id):
+    # Negative: only an EFS volume needs a name to be told apart.
+    d = _described(fs_id=fs_id)
+    d["taskDefinition"]["volumes"].append({"host": {}})
+    assert [c[1] for c in run_checks(d, _ENABLED, _fresh(fs_id), NOW, asked_for=fs_id)] == [True, True, True]
+
+
+@pytest.mark.parametrize("fs_id,readonly", [("fs-0aaa", True), ("fs-0bbb", None)])
+def test_no_read_write_efs_mount_fails_the_store_and_names_why_backups_are_not_checked(fs_id, readonly):
+    d = _described(fs_id=fs_id)
+    if readonly is None:
+        d["taskDefinition"]["containerDefinitions"][0]["mountPoints"] = []
+    else:
+        _mount_point(d)["readOnly"] = readonly
+    assert run_checks(d, _ENABLED, _fresh(fs_id), NOW, asked_for=fs_id) == [
+        ("durable_store", False, "no_efs_mount"),
+        ("backup_policy", None, "not_checked=described:no_efs_mount"),
+        ("recovery_point", None, "not_checked=described:no_efs_mount"),
+    ]
+
+
+@pytest.mark.parametrize("content", ["{", "abc"])
+def test_cli_a_file_that_is_not_json_is_named(tmp_path, capsys, content):
+    td = tmp_path / "td.json"
+    td.write_text(content, encoding="utf-8")
+    assert _main([str(td), "--now", NOW.isoformat()]) == 2
+    out, err = capsys.readouterr()
+    assert "unreadable_input described not_json" in err
+    assert "durable_store=UNVERIFIED not_checked=described:not_json" in out
+
+
+@pytest.mark.parametrize("fs_id,policy", [
+    ("fs-0aaa", _ENABLED),
+    ("fs-0bbb", {"BackupPolicy": {"Status": "DISABLED"}}),
+    ("fs-0ccc", POLICY_NOT_FOUND),
+])
+def test_a_backup_policy_not_bound_to_the_volume_is_not_judged(fs_id, policy):
+    assert check_backup_policy(policy, fs_id) == (
+        "backup_policy", None, f"file_system={fs_id} not_checked=backup-policy:file_system_not_named")
+    assert check_backup_policy(policy, fs_id, asked_for="fs-0zzz") == (
+        "backup_policy", None, f"file_system={fs_id} not_checked=backup-policy:asked_for=fs-0zzz")
+    # Negative: bound to the mounted volume (stray spaces allowed), it is judged.
+    assert check_backup_policy(policy, fs_id, asked_for=f" {fs_id} ")[1] is (policy is _ENABLED)
+
+
+@pytest.mark.parametrize("fs_id,asked", [("fs-0aaa", None), ("fs-0bbb", "fs-0zzz"), ("fs-0ccc", "  ")])
+def test_a_point_with_no_arn_is_bound_only_by_the_file_system_asked_for(fs_id, asked):
+    points = {"RecoveryPoints": [_point(NOW - timedelta(hours=2))]}
+    _, ok, detail = check_recovery_point(points, fs_id, NOW, 26, asked_for=asked)
+    assert ok is None and "own=0" in detail and "unbound=1" in detail and "other_volumes=0" in detail
+    # Negative: asked for this volume, the same point is its own and fresh.
+    _, ok, detail = check_recovery_point(points, fs_id, NOW, 26, asked_for=fs_id)
+    assert ok is True and "own=1" in detail and "unbound=0" in detail
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0bbb"])
+def test_a_point_whose_arn_names_the_volume_needs_no_binding(fs_id):
+    fresh = {"RecoveryPoints": [_point(NOW - timedelta(hours=2), arn=_arn(fs_id))]}
+    assert check_recovery_point(fresh, fs_id, NOW, 26)[1] is True
+    stale = {"RecoveryPoints": [_point(NOW - timedelta(hours=40), arn=_arn(fs_id))]}
+    assert check_recovery_point(stale, fs_id, NOW, 26)[1] is False
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0ddd"])
+def test_cli_without_the_file_system_id_the_backup_inputs_are_not_judged(tmp_path, capsys, fs_id):
+    td = _write(tmp_path, "td.json", _described(fs_id=fs_id))
+    pol = _write(tmp_path, "pol.json", _ENABLED)
+    rp = _write(tmp_path, "rp.json", {"RecoveryPoints": [_point(NOW - timedelta(hours=5))]})
+    base = [td, "--backup-policy", pol, "--recovery-points", rp, "--now", NOW.isoformat()]
+    assert _main(base) == 2
+    out = capsys.readouterr().out
+    assert "not_checked=backup-policy:file_system_not_named" in out and "unbound=1" in out
+    assert _main(base + ["--file-system-id", "fs-0zzz"]) == 2
+    assert "not_checked=backup-policy:asked_for=fs-0zzz" in capsys.readouterr().out
+    assert _main(base + ["--file-system-id", fs_id]) == 0
+    # PolicyNotFound for an unnamed volume is not a FAIL either.
+    nopol = [td, "--no-backup-policy", "--recovery-points", rp, "--now", NOW.isoformat()]
+    assert _main(nopol) == 2
+    assert _main(nopol + ["--file-system-id", fs_id]) == 1
+
+
+@pytest.mark.parametrize("status", [["COMPLETED"], 1, None, "  "])
+def test_a_point_whose_status_cannot_be_read_is_counted_not_dropped(status):
+    p = _point(NOW - timedelta(hours=2))
+    p["Status"] = status
+    _, ok, detail = _check_points([p], "fs-0aaa", NOW, 26)
+    assert ok is None and "status_unread=1" in detail and "completed=0" in detail
+    # Negative: a fresh COMPLETED point beside it still decides.
+    _, ok, detail = _check_points([p, _point(NOW - timedelta(hours=3))], "fs-0bbb", NOW, 26)
+    assert ok is True and "status_unread=1" in detail
+
+
+@pytest.mark.parametrize("status", ["PARTIAL", "EXPIRED"])
+def test_a_readable_status_that_is_not_completed_still_fails(status):
+    _, ok, detail = _check_points([_point(NOW - timedelta(hours=2), status=status)], "fs-0aaa", NOW, 26)
+    assert ok is False and "status_unread=0" in detail
+
+
+@pytest.mark.parametrize("forged", ["s3\nSTORAGE_CHECK verdict=ok failed=none", "s3\r\nSTORAGE_CHECK verdict=ok"])
+def test_a_value_cannot_forge_a_line(tmp_path, capsys, forged):
+    d = _described(env=_env(backend=forged))
+    assert _cli(tmp_path, d, _ENABLED, _fresh("fs-0aaa")) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert not any(line.startswith("STORAGE_CHECK verdict=ok") for line in lines)
+    store = next(line for line in lines if line.startswith("STORAGE_CHECK durable_store=FAIL"))
+    assert store.count("\\n") == 1

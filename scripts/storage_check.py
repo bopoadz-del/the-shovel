@@ -11,6 +11,10 @@ itself (the same split as ``scripts/durable_store_rollout.py``):
                       ``PolicyNotFound`` (no backup policy exists).
   --recovery-points   ``aws backup list-recovery-points-by-resource`` (or
                       ``...-by-backup-vault``) output.
+  --file-system-id    the file system id the two backup commands were run
+                      for. Neither the policy nor a by-resource listing names
+                      its file system, so without this id (or with another
+                      one) they are not bound to the mounted volume.
 
 Checks, one ``STORAGE_CHECK`` line each, then a verdict line:
 
@@ -44,10 +48,13 @@ value is not in the task definition (held as a secret, or left to the
 container's ``environmentFiles``, which a plain ``environment`` value
 overrides), a relative store root with no ``workingDirectory``, a task where
 more than one container mounts EFS read-write, a store root on a path two
-mounts share, an EFS volume naming no file system, a recovery point whose
-date cannot be read or lies ahead of ``--now``, and a recovery-point listing
-that says it has more pages (``NextToken``) without a fresh point on this
-one are each reported, not judged.
+mounts share, an EFS volume naming no file system, an EFS volume with no
+name, a mount point with no ``sourceVolume`` or no ``containerPath``, a
+backup policy or by-resource recovery point not bound to the mounted file
+system by ``--file-system-id``, a recovery point whose ``Status`` or date
+cannot be read or whose date lies ahead of ``--now``, and a recovery-point
+listing that says it has more pages (``NextToken``) without a fresh point on
+this one are reported, not judged.
 
 Exit 0 only when every check is ``ok``; 1 when any check fails; 2 when no
 check failed and one is ``UNVERIFIED``, or ``--now`` cannot be read. It
@@ -55,7 +62,8 @@ never prints a secret: a setting held as a secret or in an environment file
 prints as ``<secret>`` / ``<env_file>``. It prints the file system id,
 counts, timestamps, mount paths and the plain values of the store settings
 it judges (``DOCUMENT_BYTE_STORE``, ``DOCUMENT_STORE_ROOT``, ``DATA_DIR``,
-``REQUIRE_DURABLE_DOCUMENT_STORE``).
+``REQUIRE_DURABLE_DOCUMENT_STORE``); a carriage return or line feed in a
+check's line prints escaped, so a value cannot forge a second line.
 """
 from __future__ import annotations
 
@@ -133,6 +141,14 @@ def _text(value: Any, where: str) -> str:
     return value
 
 
+def _container_path(mount_point: dict) -> str:
+    """The mount point's path; a mount point with none is not read."""
+    path = _text(mount_point.get("containerPath"), "containerPath").strip()
+    if not path:
+        raise _Unreadable("mountPoint_without_containerPath")
+    return path
+
+
 @dataclass(frozen=True)
 class _Mount:
     container: dict
@@ -157,17 +173,22 @@ def _efs_mounts(taskdef: dict) -> list[_Mount]:
     for volume in _objects(taskdef.get("volumes"), "volumes"):
         if "efsVolumeConfiguration" in volume:
             cfg = _object(volume["efsVolumeConfiguration"], "efsVolumeConfiguration")
-            efs[_text(volume.get("name"), "volume_name")] = _text(
-                cfg.get("fileSystemId"), "fileSystemId").strip()
+            name = _text(volume.get("name"), "volume_name")
+            if not name.strip():
+                # A mount names its volume; an unnamed one cannot be told apart.
+                raise _Unreadable("efs_volume_without_name")
+            efs[name] = _text(cfg.get("fileSystemId"), "fileSystemId").strip()
     mounts: list[_Mount] = []
     for container in containers:
         for m in _objects(container.get("mountPoints"), "mountPoints"):
             source = _text(m.get("sourceVolume"), "sourceVolume")
+            if not source.strip():
+                raise _Unreadable("mountPoint_without_sourceVolume")
             read_only = m.get("readOnly")
             if read_only is not None and not isinstance(read_only, bool):
                 raise _Unreadable("readOnly_not_a_flag")
             if source in efs and not read_only:
-                mounts.append(_Mount(container, _text(m.get("containerPath"), "containerPath"), efs[source]))
+                mounts.append(_Mount(container, _container_path(m), efs[source]))
     return mounts
 
 
@@ -250,7 +271,7 @@ def _covering_mounts(container: dict, root: str) -> list[str]:
     """The container's mount points closest above ``root`` (ties all kept)."""
     best: list[str] = []
     for m in _objects(container.get("mountPoints"), "mountPoints"):
-        path = _text(m.get("containerPath"), "containerPath").strip()
+        path = _container_path(m)
         if not path.startswith("/"):
             continue
         mp = posixpath.normpath(path)
@@ -323,12 +344,28 @@ def _reason(value: Any) -> str:
     return value.reason if isinstance(value, NotRead) else "not_given"
 
 
-def check_backup_policy(policy: Input | _PolicyNotFound, fs_id: str) -> Check:
+def _unbound(asked_for: str | None, fs_id: str) -> str:
+    """Why an input that names no file system is not this volume's; "" when it is."""
+    asked = (asked_for or "").strip()
+    if not asked:
+        return "file_system_not_named"
+    if asked != fs_id:
+        return f"asked_for={asked}"
+    return ""
+
+
+def check_backup_policy(
+    policy: Input | _PolicyNotFound, fs_id: str, *, asked_for: str | None = None
+) -> Check:
     name = "backup_policy"
+    if policy is not POLICY_NOT_FOUND and not isinstance(policy, dict):
+        return _not_checked(name, f"backup-policy:{_reason(policy)}", fs_id)
+    # The CLI's answer carries no file system id: only the caller can bind it.
+    unbound = _unbound(asked_for, fs_id)
+    if unbound:
+        return _not_checked(name, f"backup-policy:{unbound}", fs_id)
     if policy is POLICY_NOT_FOUND:
         return (name, False, f"file_system={fs_id} status=PolicyNotFound")
-    if not isinstance(policy, dict):
-        return _not_checked(name, f"backup-policy:{_reason(policy)}", fs_id)
     try:
         if "BackupPolicy" not in policy:
             raise _Unreadable("no_BackupPolicy")
@@ -356,16 +393,18 @@ def _parse_when(raw: Any) -> datetime:
     return when
 
 
-def _names_file_system(point: dict, fs_id: str) -> bool:
+def _names_file_system(point: dict, fs_id: str) -> bool | None:
+    """Whether the point's ARN names ``fs_id``; None when it carries no ARN."""
     arn = _text(point.get("ResourceArn"), "ResourceArn")
     if not arn:
-        # The by-resource listing omits the ARN; it was asked for this volume.
-        return True
+        # The by-resource listing omits the ARN.
+        return None
     return arn.rstrip("/").endswith(f"file-system/{fs_id}")
 
 
 def check_recovery_point(
-    points: Input, fs_id: str, now: datetime, max_age_hours: float
+    points: Input, fs_id: str, now: datetime, max_age_hours: float,
+    *, asked_for: str | None = None,
 ) -> Check:
     name = "recovery_point"
     if not isinstance(points, dict):
@@ -374,15 +413,23 @@ def check_recovery_point(
         if "RecoveryPoints" not in points:
             raise _Unreadable("no_RecoveryPoints")
         listed = _objects(points["RecoveryPoints"], "RecoveryPoints")
-        own = [p for p in listed if _names_file_system(p, fs_id)]
+        named = [(p, _names_file_system(p, fs_id)) for p in listed]
         # A NextToken means this is one page of a longer listing.
         more_pages = bool(_text(points.get("NextToken"), "NextToken").strip())
     except _Unreadable as exc:
         return _not_checked(name, f"recovery-points:{exc.reason}", fs_id)
+    # A point with no ARN is this volume's only when the listing was asked for it.
+    bound = not _unbound(asked_for, fs_id)
+    own = [p for p, names in named if names or (names is None and bound)]
+    unbound = sum(1 for _, names in named if names is None and not bound)
     completed: list[datetime] = []
-    undated = ahead = 0
+    undated = ahead = status_unread = 0
     for p in own:
-        if p.get("Status") != "COMPLETED":
+        status = p.get("Status")
+        if not isinstance(status, str) or not status.strip():
+            status_unread += 1
+            continue
+        if status != "COMPLETED":
             continue
         try:
             when = _parse_when(p.get("CreationDate"))
@@ -396,7 +443,8 @@ def check_recovery_point(
             completed.append(when)
     detail = (
         f"file_system={fs_id} own={len(own)} completed={len(completed)} "
-        f"undated={undated} ahead={ahead} other_volumes={len(listed) - len(own)}"
+        f"undated={undated} ahead={ahead} status_unread={status_unread} "
+        f"unbound={unbound} other_volumes={len(listed) - len(own) - unbound}"
         f"{' more_pages=not_read' if more_pages else ''}"
     )
     if completed:
@@ -407,8 +455,8 @@ def check_recovery_point(
             return (name, True, detail)
     else:
         detail += " newest=<none>"
-    if undated or ahead or more_pages:
-        # A point this check could not date, or did not see, may be the fresh one.
+    if undated or ahead or status_unread or unbound or more_pages:
+        # A point this check could not read, bind or see may be the fresh one.
         return (name, None, detail)
     return (name, False, detail)
 
@@ -419,6 +467,8 @@ def run_checks(
     recovery_points: Input,
     now: datetime,
     max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+    *,
+    asked_for: str | None = None,
 ) -> list[Check]:
     checks = [check_durable_store(described)]
     if not isinstance(described, dict):
@@ -429,8 +479,8 @@ def run_checks(
     except _Unreadable as exc:
         reason = f"described:{exc.reason}"
         return checks + [_not_checked("backup_policy", reason), _not_checked("recovery_point", reason)]
-    checks.append(check_backup_policy(policy, fs_id))
-    checks.append(check_recovery_point(recovery_points, fs_id, now, max_age_hours))
+    checks.append(check_backup_policy(policy, fs_id, asked_for=asked_for))
+    checks.append(check_recovery_point(recovery_points, fs_id, now, max_age_hours, asked_for=asked_for))
     return checks
 
 
@@ -473,6 +523,8 @@ def main(argv: list[str] | None = None) -> int:
     policy_arg.add_argument("--no-backup-policy", action="store_true",
                             help="describe-backup-policy answered PolicyNotFound")
     ap.add_argument("--recovery-points", type=Path, default=None)
+    ap.add_argument("--file-system-id", default=None,
+                    help="the file system id the backup-policy and recovery-points commands were run for")
     ap.add_argument("--max-age-hours", type=_max_age, default=DEFAULT_MAX_AGE_HOURS)
     ap.add_argument("--now", default=None, help="ISO time to judge age against (default: now)")
     args = ap.parse_args(argv)
@@ -490,10 +542,12 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(value, NotRead):
             print(f"{_PREFIX} unreadable_input {label} {value.reason}", file=sys.stderr)
     checks = run_checks(inputs["described"], inputs["backup-policy"],
-                        inputs["recovery-points"], now, args.max_age_hours)
+                        inputs["recovery-points"], now, args.max_age_hours,
+                        asked_for=args.file_system_id)
     for name, ok, detail in checks:
         word = "UNVERIFIED" if ok is None else ("ok" if ok else "FAIL")
-        print(f"{_PREFIX} {name}={word} {detail}")
+        one_line = detail.replace("\r", "\\r").replace("\n", "\\n")
+        print(f"{_PREFIX} {name}={word} {one_line}")
     failed = [name for name, ok, _ in checks if ok is False]
     unverified = [name for name, ok, _ in checks if ok is None]
     if failed:
