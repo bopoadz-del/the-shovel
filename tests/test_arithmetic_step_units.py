@@ -282,3 +282,45 @@ def test_an_unknown_operator_is_refused_never_computed(operator, a, b):
     out = arithmetic_step(operator, a, b, "m", "m")
     assert "result" not in out
     assert out["error"].startswith("operator must be one of")
+
+
+# --- a named currency against another named currency --------------------------
+# The unit table holds every currency at one scale, so a conversion between two
+# named currencies would relabel the amount: refused, never a figure.
+
+@pytest.mark.parametrize("unit,named", [("AED", "aed"), ("SAR/day", "sar"), ("AED per m2", "aed"),
+                                        ("currency", ""), ("currency/m2", ""), ("m", ""), ("kg", ""),
+                                        ("d", ""), ("kN/m2", ""), ("-", ""),
+                                        ("", "")])
+def test_currency_of_names_the_leading_currency_only(unit, named):
+    from app.lib import formula_registry
+
+    assert formula_registry._currency_of(unit) == named
+
+
+@pytest.mark.parametrize("a,unit", [("5000 AED", "SAR"), ("120 SAR", "AED")])
+def test_a_value_in_another_named_currency_is_refused_not_relabelled(a, unit):
+    from app.lib.construction_formulas import run_calculation
+
+    out = run_calculation("arithmetic_step",
+                          {"operator": "multiply", "a": a, "b": 2, "a_unit": unit, "b_unit": "-"})
+    assert out["status"] != "success" and "result" not in out
+    assert a.split()[1] in out["error"] and unit in out["error"]
+
+
+@pytest.mark.parametrize("a,unit,number", [("5000 AED", "aed", 5000.0), ("120 SAR", "currency", 120.0),
+                                           ("75 currency", "AED", 75.0)])
+def test_the_same_currency_or_the_plain_word_is_read_as_the_number(a, unit, number):
+    from app.lib.construction_formulas import run_calculation
+
+    out = run_calculation("arithmetic_step",
+                          {"operator": "multiply", "a": a, "b": 2, "a_unit": unit, "b_unit": "-"})
+    assert out["status"] == "success", out.get("error")
+    assert out["result"]["result"] == pytest.approx(number * 2)
+
+
+@pytest.mark.parametrize("a,unit", [("5000 AED", "SAR"), ("2 SAR/day", "AED/day")])
+def test_a_sheet_literal_in_another_named_currency_fails_the_step(a, unit):
+    step = _one_step([], {"operator": "multiply", "a": a, "b": 2, "a_unit": unit, "b_unit": "-"})
+    assert step["status"] == "failed" and "result" not in step
+    assert step["error"] == "first value: wrong_unit"

@@ -907,6 +907,19 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
                            "to_unit": spec.unit, "value_out": value, "note": out.get("note", "")}}
 
 
+def _currency_of(unit: str) -> str:
+    """The named currency a unit is in ("AED" for "AED/m2"), lowercased, or
+    "" when its leading part is not a currency in the unit table or is the
+    plain word "currency", which names none."""
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate, parse_unit
+
+    head = str(normalise_rate(unit)).split("/")[0].strip()
+    read = parse_unit(head)
+    if read is None or read.dimension != "currency" or head.lower() == "currency":
+        return ""
+    return head.lower()
+
+
 def _convert_to_sibling_unit(spec: ParamSpec, value: Any, values: Dict[str, Any],
                              context: Dict[str, Any]) -> Dict[str, Any]:
     """``value`` of an input whose unit is the value of its sibling input
@@ -940,6 +953,13 @@ def _convert_to_sibling_unit(spec: ParamSpec, value: Any, values: Dict[str, Any]
         return {"rejection": _unit_rejection(
             target, f"{written_number(number)} {unit}", "wrong_unit", given_unit=unit,
             given_dimension=written.dimension, expected_dimension=declared.dimension)}
+    if _currency_of(unit) and _currency_of(sibling_unit) \
+            and _currency_of(unit) != _currency_of(sibling_unit):
+        # Two named currencies ("EUR" against "AED"): the unit table holds
+        # every currency at one scale, so converting would relabel the
+        # amount. No exchange rate is known here: refused, naming both.
+        return {"rejection": _unit_rejection(
+            target, f"{written_number(number)} {unit}", "wrong_unit", given_unit=unit)}
     got = convert_figure(target, number, unit, context)
     if "rejection" in got:
         return got
