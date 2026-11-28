@@ -389,9 +389,14 @@ def _edit(pack, what):
         return "skills/" + pack["skills"][0]["id"]
     chain = _chain(pack, "slab_rebar_to_price")
     if what == "chain_input":
+        # a real edit: another input, and the example re-worked to what the formulas give for it
         chain["steps"][0]["inputs"]["area_m2"] = 121
+        results = kp.run_chain(chain)
+        for figure in chain["example"]:
+            figure["value"] = round(results[figure["step"]][figure["output"]], 4)
     else:
-        chain["example"][0]["value"] = 1201.0
+        # the figure re-written, still what the formulas give to SIGNIFICANT_DIGITS
+        chain["example"][0]["value"] = 1200.2
     return "chains/slab_rebar_to_price"
 
 
@@ -495,6 +500,104 @@ def test_cli_stamp_on_a_pack_it_cannot_load_exits_1_without_a_traceback(tmp_path
     assert _run_cli(monkeypatch, root, ["--stamp"]) == 1
     out = capsys.readouterr().out
     assert "quantities.json" in out and "not stamped" in out
+
+
+# -- an example figure the formulas no longer give: stamp, --stamp and approved_lines -------
+
+def _off_by_one_percent(chain):
+    figure = chain["example"][-1]
+    figure["value"] = round(figure["value"] * 1.01, 4)
+    return figure["output"]
+
+
+@pytest.mark.parametrize("chain_id", ["slab_concrete_to_price", "slab_rebar_to_price"])
+def test_faults_holds_a_wrong_example_figure_and_a_clean_pack_has_none(pack, entries, chain_id):
+    assert kp.faults(pack, entries) == []
+    output = _off_by_one_percent(_chain(pack, chain_id))
+    found = kp.faults(pack, entries)
+    assert len(found) == 1 and f"chains/{chain_id}/example: step" in found[0] and output in found[0], found
+
+
+@pytest.mark.parametrize("ghost_at", ["step", "neighbour"])
+def test_faults_of_a_pack_with_problems_are_the_problems_only(pack, entries, ghost_at):
+    if ghost_at == "step":
+        _chain(pack, "slab_rebar_to_price")["steps"][1]["formula"] = "formula:rebar_weight_gone"
+    else:
+        pack["formulas"][1]["not_to_be_confused_with"][0]["id"] = "formula:rebar_weight_gone"
+    assert kp.faults(pack, entries) == kp.problems(pack, entries) != []
+
+
+@pytest.mark.parametrize("chain_id", ["slab_concrete_to_price", "slab_rebar_to_price"])
+def test_stamp_refuses_a_wrong_example_figure_and_leaves_the_pack_as_it_was(pack, entries, chain_id):
+    pack["formulas"][0]["fingerprint"] = "sha256:" + "0" * 16       # would be re-stamped
+    _off_by_one_percent(_chain(pack, chain_id))
+    before = copy.deepcopy(pack)
+    with pytest.raises(kp.KernelPackError) as err:
+        kp.stamp(pack, entries)
+    assert f"chains/{chain_id}/example" in str(err.value)
+    assert pack == before
+
+
+@pytest.mark.parametrize("chain_id", ["slab_concrete_to_price", "slab_rebar_to_price"])
+def test_cli_stamp_with_a_wrong_example_figure_exits_1_and_writes_nothing(tmp_path, monkeypatch, capsys,
+                                                                         pack, chain_id):
+    pack["formulas"][0]["fingerprint"] = "sha256:" + "0" * 16
+    _off_by_one_percent(_chain(pack, chain_id))
+    root = _write_root(tmp_path, [pack])
+    before = (tmp_path / "quantities.json").read_bytes()
+    assert _run_cli(monkeypatch, root, ["--stamp"]) == 1
+    out = capsys.readouterr().out
+    assert f"chains/{chain_id}/example" in out and "no pack was stamped" in out
+    assert (tmp_path / "quantities.json").read_bytes() == before
+
+
+def _scale_output(monkeypatch, entries, formula, output, factor):
+    """The calculation behind ``formula`` gives ``output`` times ``factor``;
+    its catalogue facts (and so every fingerprint) stay as they were."""
+    from app.lib import construction_formulas
+
+    real = construction_formulas.run_calculation
+    name = entries[formula]["code"]["calculation"]
+
+    def changed(calc, params, *a, **kw):
+        envelope = real(calc, params, *a, **kw)
+        if calc == name and isinstance(envelope.get("result"), dict) and output in envelope["result"]:
+            envelope["result"][output] = envelope["result"][output] * factor
+        return envelope
+
+    monkeypatch.setattr(construction_formulas, "run_calculation", changed)
+
+
+@pytest.mark.parametrize("formula,output,dropped,kept,line", [
+    ("formula:rebar_weight", "total_mass_kg", "chains/slab_rebar_to_price", "chains/slab_concrete_to_price",
+     "formulas/formula:rebar_weight"),
+    ("formula:concrete_volume", "net_volume_m3", "chains/slab_concrete_to_price", "chains/slab_rebar_to_price",
+     "formulas/formula:cost_buildup_concrete"),
+])
+def test_a_chain_whose_calculation_changed_is_no_longer_approved_and_is_not_stamped(
+        monkeypatch, pack, entries, formula, output, dropped, kept, line):
+    for _, each in kp._lines(pack):
+        each["approved"] = True
+    assert dropped in kp.approved_lines(pack, entries)
+    _scale_output(monkeypatch, entries, formula, output, 1.10)
+    assert kp.stale(pack, entries) == []                # the facts did not change ...
+    approved = kp.approved_lines(pack, entries)
+    assert dropped not in approved and kept in approved  # ... but the figures did
+    assert line in approved                              # a formula line carries no figure
+    with pytest.raises(kp.KernelPackError) as err:
+        kp.stamp(pack, entries)
+    assert dropped + "/example" in str(err.value)
+
+
+@pytest.mark.parametrize("part,line,ids", [
+    ("chains", {"id": "c", "steps": [{"formula": "formula:a"}, {"formula": "formula:b"},
+                                     {"formula": "formula:a"}]}, ["formula:a", "formula:b"]),
+    ("formulas", {"id": "formula:a", "not_to_be_confused_with": [{"id": "formula:b"}, {"id": "formula:b"},
+                                                                 {"id": "formula:a"}]},
+     ["formula:a", "formula:b"]),
+])
+def test_a_line_names_each_id_once_in_the_order_first_named(part, line, ids):
+    assert kp._line_ids(part, line) == ids
 
 
 # -- check reports a directory it cannot read, never raises, never passes empty -----------

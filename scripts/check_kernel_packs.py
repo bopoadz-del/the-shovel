@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         entries = kernel_packs._entries()
         faults = [f"{kernel}: {p}" for kernel, pack in packs.items()
-                  for p in kernel_packs.problems(pack, entries)]
+                  for p in kernel_packs.faults(pack, entries)]
         if faults:
             for line in faults:
                 print(line)

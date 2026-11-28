@@ -272,8 +272,14 @@ def stale(pack: Dict[str, Any], entries: Optional[Dict[str, Dict[str, Any]]] = N
 
 def approved_lines(pack: Dict[str, Any],
                    entries: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
-    """``part/id`` of every line that is approved and not stale."""
+    """``part/id`` of every line that is approved, not stale and, for a
+    chain, whose example figures are still what the formulas give (a
+    chain's fingerprint covers the formulas' facts, not what their
+    calculations return, so a changed calculation is caught here)."""
+    entries = entries if entries is not None else _entries()
     gone = set(stale(pack, entries))
+    gone.update(f"chains/{chain['id']}" for chain in pack.get("chains") or []
+                if example_problems(chain, entries))
     return [f"{part}/{line['id']}" for part, line in _lines(pack)
             if line["approved"] and f"{part}/{line['id']}" not in gone]
 
@@ -379,6 +385,18 @@ def load(root: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def faults(pack: Any, entries: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
+    """Every fault of one pack: its ``problems``; when it has none, every
+    chain's ``example_problems``. Staleness is not a fault here (``stamp``
+    is what clears it). ``check``, ``stamp`` and the script's ``--stamp``
+    all read this one list."""
+    entries = entries if entries is not None else _entries()
+    found = problems(pack, entries)
+    if not found:
+        found = [p for chain in pack["chains"] for p in example_problems(chain, entries)]
+    return found
+
+
 def check(root: Optional[str] = None) -> List[str]:
     """Every fault of every shipped pack and every stale line, each as
     ``<kernel>: ...``; empty when all agree with the code. A packs
@@ -393,9 +411,8 @@ def check(root: Optional[str] = None) -> List[str]:
     entries = _entries()
     out: List[str] = []
     for kernel, pack in packs.items():
-        found = problems(pack, entries)
+        found = faults(pack, entries)
         if not found:
-            found = [p for chain in pack["chains"] for p in example_problems(chain, entries)]
             found += [f"{line}: stale (its words or the code facts it names changed since it was stamped; read it again and re-stamp)"
                       for line in stale(pack, entries)]
         out.extend(f"{kernel}: {p}" for p in found)
@@ -407,10 +424,11 @@ def stamp(pack: Dict[str, Any], entries: Optional[Dict[str, Dict[str, Any]]] = N
     now, in place. A line whose fingerprint changes loses its
     ``approved``: what was approved is no longer what the line says or
     what the code says. Returns ``part/id`` of the lines changed. A pack
-    with any ``problems`` is not stamped: ``KernelPackError`` names every
-    one and the pack is left as it was."""
+    with any ``faults`` (a problem, or an example figure the formulas do
+    not give) is not stamped: ``KernelPackError`` names every one and the
+    pack is left as it was."""
     entries = entries if entries is not None else _entries()
-    found = problems(pack, entries)
+    found = faults(pack, entries)
     if found:
         raise KernelPackError("\n".join(found))
     changed = []
