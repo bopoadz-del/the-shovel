@@ -4201,7 +4201,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4241,7 +4241,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4281,7 +4281,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4321,7 +4321,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4361,7 +4361,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4401,7 +4401,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4441,7 +4441,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4481,7 +4481,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4521,7 +4521,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4561,7 +4561,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4601,7 +4601,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4641,7 +4641,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4681,7 +4681,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },
@@ -4721,7 +4721,7 @@
         "applies_to": [
           "construction.buildings"
         ],
-        "region_specific": true,
+        "region_specific": false,
         "project_specific": false,
         "standards_cross_ref": []
       },

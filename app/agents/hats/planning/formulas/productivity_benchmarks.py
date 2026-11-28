@@ -158,7 +158,7 @@ def _same_unit(a: Any, b: Any) -> bool:
     ),
     inputs={
         "work_item": Param("-", label="planner template row (work item, as the row names it)"),
-        "quantity": Param("-", lo=0.0, above_lo=True, label="quantity of the work item"),
+        "quantity": Param("-", lo=0.0, hi=1e12, above_lo=True, label="quantity of the work item"),
         "quantity_unit": Param("-", label="unit the quantity is measured in"),
     },
     outputs={
