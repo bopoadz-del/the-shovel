@@ -628,3 +628,34 @@ def test_input_question_states_a_refused_value_by_its_reason(detail, label_word,
                          [{"parameter": "quantity", "value": 1, "reason": "refused", "detail": detail},
                           {"parameter": "quantity_unit", "value": "kg", "reason": "refused", "detail": detail}])
     assert two.count(want) == 1 and "What values should I use" in two, two
+
+
+@pytest.mark.parametrize("item,qty,want_days", [
+    ("blockwork walls", 600, 50.0),
+    ("Internal wall plaster", 1200, 60.0),
+])
+def test_run_calculation_reads_params_written_as_text_like_a_dict(item, qty, want_days):
+    """construction_formulas.run_calculation: params that arrive as a JSON
+    object string (compact or indented) are read as the same keyword arguments."""
+    obj = {"work_item": item, "quantity": qty, "quantity_unit": "m2"}
+    for raw in (json.dumps(obj), "  " + json.dumps(obj, indent=2)):
+        out = cf.run_calculation("crew_days_from_rate_row", raw)
+        assert out["status"] == "success", (raw, out)
+        assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("raw", [42, "no keyword arguments here", 3.5])
+def test_run_calculation_refuses_params_it_cannot_read(raw):
+    """construction_formulas.run_calculation: params that are neither an object
+    nor readable text are refused, not run with nothing."""
+    out = cf.run_calculation("crew_days_from_rate_row", raw)
+    assert out == {"status": "error", "error": "params must be an object of keyword arguments."}
+
+
+@pytest.mark.parametrize("raw", [None, ""])
+def test_run_calculation_with_no_params_asks_for_every_input(raw):
+    """construction_formulas.run_calculation: no params at all is an empty call:
+    the inputs are asked for, nothing is refused as unreadable."""
+    out = cf.run_calculation("crew_days_from_rate_row", raw)
+    assert out["status"] == "needs_input", out
+    assert {"work_item", "quantity"} <= set(out["missing"]), out
