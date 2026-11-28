@@ -262,3 +262,16 @@ def test_a_sheet_literal_of_another_kind_fails_the_step(a, unit):
     step = _one_step([], {"operator": "add", "a": a, "b": 1, "a_unit": unit, "b_unit": unit})
     assert step["status"] == "failed" and "result" not in step
     assert step["error"] == "first value: wrong_unit"
+
+
+@pytest.mark.parametrize("key,sibling", [("a", "a_unit"), ("b", "b_unit")])
+def test_the_offer_names_no_fixed_unit_for_a_value_whose_unit_is_its_sibling(key, sibling):
+    from app.agents.driver.tools import _input_line
+    from app.lib import formula_registry
+
+    p = formula_registry.parameters(formula_registry.get("arithmetic_step"))[key]
+    assert p.unit_from == sibling
+    line = _input_line(key, p)
+    assert line.startswith(f"{key} = {p.label} (") and "ratio" not in line
+    # the range is still offered: only the fixed unit went
+    assert f"{-1e15:g} to {1e15:g}" in line
