@@ -124,7 +124,10 @@ def capabilities() -> List[Tuple[str, Dict[str, Any]]]:
     knowledge entry and every retrieval tool, by kind then id."""
     from app.agents.driver import catalogue
 
-    held = catalogue.entries()
+    # The registries' own entries, never the hint-enriched ones: a file's
+    # facts are what the code says, so an approved hint (which may set an
+    # entry's ``for``) can never feed back into the facts it is checked by.
+    held = catalogue.registry_entries()
     rag = {f"tool:{name}" for name in rag_tool_names()}
     out = [(e["kind"], e) for e in held if e["kind"] in ("formula", "knowledge")]
     out += [("rag", e) for e in held if e["id"] in rag]
@@ -455,8 +458,12 @@ def enrich(entries: List[Dict[str, Any]], files: Dict[str, Dict[str, Any]]) -> L
     file's facts are what the code says of that entry now; it fills the
     entry's ``when_to_use`` / ``when_not`` where the registry declares none
     (a registry's own declaration is never replaced) and takes them off the
-    entry's ``gaps``. Every other field, and every entry without such a
+    entry's ``gaps``. A non-blank approved purpose is also the entry's
+    ``for`` -- the text its index line shows -- cut to one line the way
+    every ``for`` is. Every other field, and every entry without such a
     file, is returned as it came: which tool runs is not touched."""
+    from app.agents.driver import catalogue
+
     out = []
     for entry in entries:
         entry = copy.deepcopy(entry)
@@ -471,7 +478,11 @@ def enrich(entries: List[Dict[str, Any]], files: Dict[str, Dict[str, Any]]) -> L
         use, avoid = hint_text(doc)
         entry["when_to_use"] = entry["when_to_use"] or use
         entry["when_not"] = entry["when_not"] or avoid
-        entry["gaps"] = [g for g in entry["gaps"] if g not in ("when_to_use", "when_not") or not entry[g]]
+        purpose = catalogue._one_line(doc["hints"]["purpose"])
+        if purpose:
+            entry["for"] = purpose
+        entry["gaps"] = [g for g in entry["gaps"]
+                         if g not in ("for", "when_to_use", "when_not") or not entry[g]]
     return out
 
 
