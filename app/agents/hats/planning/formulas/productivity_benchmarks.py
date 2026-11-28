@@ -157,7 +157,7 @@ def _into_row_unit(quantity: float, quantity_unit: Any, row_unit: str) -> tuple:
 
     if _same_unit(quantity_unit, row_unit):
         return float(quantity), ""
-    given = parse_unit(quantity_unit) if isinstance(quantity_unit, str) else None
+    given = parse_unit(quantity_unit)  # None for a word or value it does not know
     row = parse_unit(row_unit)
     if given is not None and row is not None and given.dimension == row.dimension:
         out = convert_units(quantity, quantity_unit, row_unit)
