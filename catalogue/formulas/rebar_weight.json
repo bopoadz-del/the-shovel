@@ -160,7 +160,7 @@
     ]
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Mass of reinforcing bars of one diameter from their total length (or from a count of bars of that length), or the metres run that a given mass of that diameter makes.",
     "not_to_be_confused_with": [
       {

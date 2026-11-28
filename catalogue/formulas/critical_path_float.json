@@ -93,7 +93,7 @@
     "fed_by": []
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Total float of one activity from its early and late start and finish, and whether it is critical (zero or negative float). Free float is not computed here.",
     "not_to_be_confused_with": [
       {

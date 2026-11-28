@@ -132,7 +132,7 @@
     ]
   },
   "hints": {
-    "approved": false,
+    "approved": true,
     "purpose": "Net payment due for one period: this period's certified amount less retention on it, with the disputed part (claimed less certified) and the cumulative certified when earlier certificates are given.",
     "not_to_be_confused_with": [
       {
