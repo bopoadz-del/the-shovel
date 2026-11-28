@@ -44,7 +44,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Lists the documents this project holds, with file name, type and size, so the model knows what exists before it searches or reads one.",
+    "purpose": "Lists the documents this project holds, newest first: the total count, then up to limit entries (default 100, at most 200), each with file name, type and size. It reads no document's text and returns no document id; two entries can carry the same file name.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_project_documents",
@@ -64,7 +64,7 @@
       {
         "kind": "totals_across_bill_rows",
         "role": "supports",
-        "how": "Finds which documents are bills, so the bill row tool can be pointed at the right one."
+        "how": "Shows by file name and type which documents the project holds, before the bill row tool reads its bills."
       },
       {
         "kind": "specification_and_bill",

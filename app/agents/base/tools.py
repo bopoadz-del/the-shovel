@@ -147,14 +147,21 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
     }
 
 
-def _search_payload(rows: list[dict], withheld: int, extra: dict | None = None) -> dict:
+def _search_payload(rows: list[dict], withheld: int, extra: dict | None = None,
+                    shortened: bool = False) -> dict:
     payload: dict = {"results": rows, **(extra or {})}
+    said = []
     if withheld:
         payload["rows_withheld"] = withheld
-        payload["note"] = (
-            f"{withheld} lower-ranked row(s) did not fit in one tool message "
-            "and were left out whole; every row shown is complete."
-        )
+        said.append(f"{withheld} lower-ranked row(s) did not fit in one tool message "
+                    "and were left out whole")
+    if shortened:
+        said.append("the top-ranked row alone was too long for one tool message, so its "
+                    "snippet is shortened from the end (it ends with ' ...')")
+    elif withheld:
+        said.append("every row shown is complete")
+    if said:
+        payload["note"] = "; ".join(said) + "."
     return payload
 
 
@@ -188,8 +195,8 @@ def search_rows_within_cap(results: list[dict], cap: int, extra: dict | None = N
         while words:
             words = words[: len(words) * 3 // 4] if len(words) > 4 else words[:-1]
             first["snippet"] = " ".join(words) + " ..."
-            if _serialized_len(_search_payload([first], withheld, extra)) <= cap:
-                return _search_payload([first], withheld, extra)
+            if _serialized_len(_search_payload([first], withheld, extra, shortened=True)) <= cap:
+                return _search_payload([first], withheld, extra, shortened=True)
         return _search_payload([], len(results), extra)
     return _search_payload(kept, len(results) - len(kept), extra)
 

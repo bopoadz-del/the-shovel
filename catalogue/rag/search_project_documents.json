@@ -54,7 +54,7 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "Finds the passages in this project's own documents that speak to a question, ranked by relevance, each with its document and page so the answer can cite it.",
+    "purpose": "Finds the passages of this project's own documents that best match a query: up to top_k (default 5), in rank order. Rows that do not fit one tool message are left out whole and counted; a top-ranked row too long alone is kept with its snippet shortened from the end. It is a ranked sample, never every row: it gives no complete count or total.",
     "not_to_be_confused_with": [
       {
         "id": "tool:search_general_knowledge",
