@@ -341,11 +341,11 @@ def bill_rows_statement(result: dict) -> list[Statement]:
             continue
         out.extend(_bill_sum_statements(bill, measure, rows, source, terms, within))
         # The measure not asked, totalled by the same call over the same rows,
-        # is stated the same way; it is stated only where a row carries it.
+        # is stated the same way (it has no total, so states none, when no
+        # row carries that figure).
         other = bill.get("other_measure")
         if isinstance(other, dict) and other.get("measure") and other.get("measure") != measure:
-            out.extend(st for st in _bill_sum_statements(
-                other, str(other["measure"]), rows, source, terms, within) if st.rows)
+            out.extend(_bill_sum_statements(other, str(other["measure"]), rows, source, terms, within))
     return out
 
 

@@ -154,7 +154,11 @@ def test_bill_rows_statement_states_no_other_total_off_nothing(rows, terms, meas
     assert [s for s in sts if s.basis == "count"], sts
 
 
-@pytest.mark.parametrize("bad", [None, "amount", {"measure": "quantity", "sum": 5.0}, {"sum": 5.0}])
+@pytest.mark.parametrize("bad", [
+    None, "amount", [], {"sum": 5.0, "unit": "m"}, {"measure": "", "sum": 5.0},
+    # the asked measure again, in the rows' own unit: never stated twice
+    {"measure": "quantity", "sum": 5.0, "unit": "m", "sum_by_unit": {"m": 5.0}},
+])
 def test_bill_rows_statement_ignores_an_other_measure_it_cannot_read(bad):
     """A missing, malformed or same-measure ``other_measure`` adds nothing:
     the statement is what it was for the asked measure alone."""
