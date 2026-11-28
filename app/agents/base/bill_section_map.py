@@ -24,8 +24,9 @@ SCHEMA = {
         "name": NAME,
         "description": "The sections a bill of quantities prints, read from the document's own "
                        "headings, in the order the document prints them: each section's number "
-                       "and its heading. An empty list means the document prints no section "
-                       "heading.",
+                       "and its heading. Only headings printed as 'Bill No. <n>' (or 'Bill "
+                       "Number <n>', 'Bill # <n>') are read: an empty list means no heading of "
+                       "that form, not that the bill has no sections.",
         "parameters": {
             "type": "object",
             "properties": {

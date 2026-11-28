@@ -989,6 +989,13 @@ def fullest_sections(scope: AskScope, admitted: Sequence[SheetRow]) -> list[Shee
     return [row for row in admitted if tuple(row.path) in keep]
 
 
+#: What selected a result's rows (the ``selected_by`` field): the scope the
+#: question states (a size, a depth band, a bill, a dimension, or the ask's own
+#: item words when the model passed none), or the model's terms and section.
+SELECTED_BY_QUESTION = "the question's stated scope; the terms and section passed were not applied"
+SELECTED_BY_TERMS = "the terms and section passed"
+
+
 def aggregate(
     rows: Sequence[SheetRow],
     *,
@@ -1085,8 +1092,14 @@ def aggregate(
     } for row in selected]
     asked = _measure_totals(selected, measure)
     other = next(m for m in MEASURES if m != measure)
+    # What chose the rows, stated in the result itself: the question's own
+    # scope, or the model's terms. A model that sees its terms were not
+    # applied knows that other words will return the same rows.
+    by_question = scope is not None
     return {
         "measure": measure,
+        "selected_by": SELECTED_BY_QUESTION if by_question else SELECTED_BY_TERMS,
+        "terms_applied": not by_question,
         "terms": sorted(want),
         "section_terms": sorted(where),
         "scope": ({

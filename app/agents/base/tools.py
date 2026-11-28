@@ -147,14 +147,21 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
     }
 
 
-def _search_payload(rows: list[dict], withheld: int, extra: dict | None = None) -> dict:
+def _search_payload(rows: list[dict], withheld: int, extra: dict | None = None,
+                    shortened: bool = False) -> dict:
     payload: dict = {"results": rows, **(extra or {})}
+    said = []
     if withheld:
         payload["rows_withheld"] = withheld
-        payload["note"] = (
-            f"{withheld} lower-ranked row(s) did not fit in one tool message "
-            "and were left out whole; every row shown is complete."
-        )
+        said.append(f"{withheld} lower-ranked row(s) did not fit in one tool message "
+                    "and were left out whole")
+    if shortened:
+        said.append("the top-ranked row alone was too long for one tool message, so its "
+                    "snippet is shortened from the end (it ends with ' ...')")
+    elif withheld:
+        said.append("every row shown is complete")
+    if said:
+        payload["note"] = "; ".join(said) + "."
     return payload
 
 
@@ -188,8 +195,8 @@ def search_rows_within_cap(results: list[dict], cap: int, extra: dict | None = N
         while words:
             words = words[: len(words) * 3 // 4] if len(words) > 4 else words[:-1]
             first["snippet"] = " ".join(words) + " ..."
-            if _serialized_len(_search_payload([first], withheld, extra)) <= cap:
-                return _search_payload([first], withheld, extra)
+            if _serialized_len(_search_payload([first], withheld, extra, shortened=True)) <= cap:
+                return _search_payload([first], withheld, extra, shortened=True)
         return _search_payload([], len(results), extra)
     return _search_payload(kept, len(results) - len(kept), extra)
 
@@ -325,32 +332,39 @@ def bill_rows_statement(result: dict) -> list[Statement]:
         if not isinstance(bill, dict):
             continue
         source = str(bill.get("filename") or bill.get("document_id") or "")
+        # The words are shown as what matched the rows only when they did:
+        # a result whose question scope chose the rows says its terms were
+        # not applied. The statement still carries them (they name the part
+        # of the question the figure is for) and says they did not match.
+        applied = bill.get("terms_applied") is not False
         terms = tuple(str(t) for t in bill.get("terms") or [])
         within = tuple(str(t) for t in bill.get("section_terms") or [])
         if bill.get("status") != "success":
             out.append(Statement(figure=None, what="", source=source, basis="count",
-                                 terms=terms, within=within,
+                                 terms=terms, within=within, words_matched=applied,
                                  failure=str(bill.get("reason") or bill.get("error") or "")))
             continue
         rows = [r for r in bill.get("rows") or [] if isinstance(r, dict)]
         measure = str(bill.get("measure") or "quantity")
         out.append(Statement(figure=float(len(rows)), what=measure, source=source,
                              rows=tuple(_row_label(r) for r in rows), count=len(rows),
-                             basis="count", terms=terms, within=within))
+                             basis="count", terms=terms, within=within, words_matched=applied))
         if not rows:
             continue
-        out.extend(_bill_sum_statements(bill, measure, rows, source, terms, within))
+        out.extend(_bill_sum_statements(bill, measure, rows, source, terms, within, applied))
         # The measure not asked, totalled by the same call over the same rows,
         # is stated the same way (it has no total, so states none, when no
         # row carries that figure).
         other = bill.get("other_measure")
         if isinstance(other, dict) and other.get("measure") and other.get("measure") != measure:
-            out.extend(_bill_sum_statements(other, str(other["measure"]), rows, source, terms, within))
+            out.extend(_bill_sum_statements(other, str(other["measure"]), rows, source, terms, within,
+                                               applied))
     return out
 
 
 def _bill_sum_statements(totals: dict, measure: str, rows: list[dict], source: str,
-                         terms: tuple[str, ...], within: tuple[str, ...]) -> list[Statement]:
+                         terms: tuple[str, ...], within: tuple[str, ...],
+                         words_matched) -> list[Statement]:
     """One sum statement per unit of ``measure`` in ``totals`` (a bill result,
     or its ``other_measure``), each with the rows that carry that figure."""
     out: list[Statement] = []
@@ -364,7 +378,7 @@ def _bill_sum_statements(totals: dict, measure: str, rows: list[dict], source: s
                   and (measure != "quantity" or str(r.get("unit") or "") == unit)]
         out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
                              source=source, rows=tuple(_row_label(r) for r in behind),
-                             basis="sum", terms=terms, within=within,
+                             basis="sum", terms=terms, within=within, words_matched=words_matched,
                              row_figures=tuple(float(r[measure]) for r in behind)))
     return out
 

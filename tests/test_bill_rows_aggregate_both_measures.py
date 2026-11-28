@@ -179,3 +179,21 @@ def test_bill_rows_statement_skips_an_entry_that_is_not_a_bill(junk):
     sts = bill_rows_statement(body)
     assert [(s.basis, s.what, s.figure) for s in sts] == [
         ("count", "quantity", 2.0), ("sum", "quantity", 150.0), ("sum", "amount", 4650.0)]
+
+@pytest.mark.parametrize("rows,terms,measure,applied", [
+    (KERBS[:2], "kerb", "quantity", False),
+    (CHAMBERS, "chamber", "amount", False),
+    (KERBS[:2], "kerb", "quantity", True),
+    (CHAMBERS, "chamber", "amount", True),
+])
+def test_bill_rows_statement_other_measure_says_what_chose_the_rows(rows, terms, measure, applied):
+    """The other measure's totals carry the same ``words_matched`` as the asked
+    measure's: when the question's own scope chose the rows, no statement of
+    the call names the model's words as what chose them; when the words chose
+    them, every statement does."""
+    body = _bill(rows, terms, measure)
+    body["bills"][0]["terms_applied"] = applied
+    sts = bill_rows_statement(body)
+    other = next(m for m in agg.MEASURES if m != measure)
+    assert [s for s in sts if s.basis == "sum" and s.what == other], sts
+    assert {(s.what, s.words_matched) for s in sts} == {(measure, applied), (other, applied)}

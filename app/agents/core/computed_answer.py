@@ -272,8 +272,10 @@ def _what(st: Any, lab: Dict[str, str]) -> str:
         what = str(st.what or "")
         return what[:1].upper() + what[1:]
     head = lab["count"] if basis == "count" else lab["sum"].format(what=_word(lab, st.what))
-    terms = tuple(getattr(st, "terms", ()) or ())
-    within = tuple(getattr(st, "within", ()) or ())
+    # Words the tool says did not choose the rows are not shown as a match.
+    matched = getattr(st, "words_matched", True)
+    terms = tuple(getattr(st, "terms", ()) or ()) if matched else ()
+    within = tuple(getattr(st, "within", ()) or ()) if matched else ()
     if terms:
         head += lab["holds"].format(terms=lab["sep"].join(terms))
     if within:

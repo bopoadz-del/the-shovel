@@ -512,6 +512,31 @@ def test_not_items_of_a_terms_ask_are_the_matching_lines(terms, want):
     assert len(out["not_items"]) == want
 
 
+# --- the result states what chose its rows ---------------------------------
+
+@pytest.mark.parametrize("bill", ["5", "6"])
+def test_a_scoped_ask_says_the_terms_were_not_applied_and_other_terms_change_nothing(bill):
+    """The question names a bill: its scope selects, whatever words the model
+    passes, and the result says so, so a model does not retry with new words."""
+    ask = f"What is the total amount of Bill No. {bill}?"
+    outs = [agg.aggregate(_two_bills(), terms=terms, ask=ask, measure=agg.MEASURE_AMOUNT)
+            for terms in (["a"], ["b"], ["zzz"])]
+    assert {o["selected_by"] for o in outs} == {agg.SELECTED_BY_QUESTION}
+    assert [o["terms_applied"] for o in outs] == [False, False, False]
+    assert [o["terms"] for o in outs] == [["a"], ["b"], ["zzz"]]  # still echoed as passed
+    assert [(o["count"], o["sum"]) for o in outs] == [(2, pytest.approx(300))] * 3
+
+
+@pytest.mark.parametrize("terms, refs", [(["a"], 2), (["b"], 2), (["zzz"], 0)])
+def test_an_unscoped_ask_says_the_terms_selected_and_they_do(terms, refs):
+    """Negative: the ask states no bill, size, band or dimension; the model's
+    terms select, and the result says they were applied."""
+    out = agg.aggregate(_two_bills(), terms=terms, ask="how much is it", measure=agg.MEASURE_AMOUNT)
+    assert out["selected_by"] == agg.SELECTED_BY_TERMS
+    assert out["terms_applied"] is True
+    assert out["count"] == refs
+
+
 # --- tolerances and the page a joined row stands on -------------------------
 
 @pytest.mark.parametrize("earlier, cell, want", [
