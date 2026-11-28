@@ -191,3 +191,31 @@ def test_exclusions_are_the_sources_own_or_said_not_stated(monkeypatch, stated, 
     monkeypatch.setattr(pb, "template_rows", lambda: rows)
     out = pb.crew_days_from_rate_row(rows[0][0], 24, rows[0][1])
     assert out["not_covered"] == want
+
+
+@pytest.mark.parametrize("item,written,unit", [
+    # The value's own unit differs from quantity_unit: an area in sq ft, a
+    # volume and a length against an m2 row. None of them is a figure.
+    ("internal wall plaster", "2000 sq ft", "m2"),
+    ("blockwork walls", "30 m3", "m2"),
+    ("blockwork walls", "600 m", "m2"),
+    # Even the row's own unit written in the value is asked for again: the
+    # unit is read from quantity_unit only, never from the value.
+    ("ceiling plaster", "600 m2", "m2"),
+])
+def test_a_unit_written_in_the_quantity_is_refused_not_dropped(item, written, unit):
+    out = _run(item, written, unit)
+    assert out["status"] != "success", out
+    assert "duration_crew_days" not in (out.get("result") or {})
+    text = str(out.get("error") or "") + str(out.get("question") or "")
+    assert "quantity of the work item" in text, out
+
+
+@pytest.mark.parametrize("item,bare,want_days", [
+    ("internal wall plaster", "2000", 100.0),
+    ("blockwork walls", "1,200", 100.0),
+])
+def test_a_bare_quantity_with_its_unit_beside_it_computes(item, bare, want_days):
+    out = _run(item, bare, "m2")
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)

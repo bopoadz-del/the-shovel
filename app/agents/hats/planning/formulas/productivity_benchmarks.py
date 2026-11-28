@@ -11,6 +11,7 @@ import math
 import re
 from typing import Any
 
+from app.agents.base.formulas.arithmetic import BARE_NUMBER
 from app.lib.formula_registry import Param, formula
 
 _BENCHMARK_PROVENANCE = (
@@ -156,13 +157,20 @@ def _same_unit(a: Any, b: Any) -> bool:
         "planner template's rate: duration = quantity / rate per crew-day. "
         "The work item is one template row, named exactly as the row is "
         "(see the productivity.* knowledge entries for each row's unit and "
-        "crew). The quantity's unit must be the row's "
+        "crew). The quantity is a bare number and its unit goes in "
+        "quantity_unit; a quantity written with a unit of its own is refused "
+        "and asked for again. The quantity's unit must be the row's "
         "unit; a quantity in another unit is refused, naming both. Unverified "
         "owner-supplied template: never a project figure."
     ),
     inputs={
         "work_item": Param("-", label="planner template row (work item, as the row names it)"),
-        "quantity": Param("-", lo=0.0, hi=1e12, above_lo=True, label="quantity of the work item"),
+        # A bare number: its unit is read from quantity_unit only, so the
+        # row-unit check below reads the unit the figure is in. A unit
+        # written in the value itself is refused at the front door, not
+        # dropped (the same declaration the arithmetic step's values use).
+        "quantity": Param(BARE_NUMBER, lo=0.0, hi=1e12, above_lo=True,
+                          label="quantity of the work item"),
         "quantity_unit": Param("-", label="unit the quantity is measured in"),
     },
     outputs={
