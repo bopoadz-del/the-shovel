@@ -7,7 +7,9 @@ project's own documents or asks for it.
 """
 from __future__ import annotations
 
+import math
 import re
+from typing import Any
 
 from app.lib.formula_registry import Param, formula
 
@@ -129,12 +131,19 @@ def productivity_benchmark(work_item: str) -> dict:
     }
 
 
-def _same_unit(a: str, b: str) -> bool:
-    """Two unit words name the same unit: case, spaces and the superscript
-    digit do not distinguish them (m², M2 and m2 are one unit)."""
-    def canon(u: str) -> str:
-        return str(u or "").strip().lower().replace("²", "2").replace("³", "3").replace(" ", "")
-    return bool(canon(a)) and canon(a) == canon(b)
+def _same_unit(a: Any, b: Any) -> bool:
+    """Two unit words name the same unit, as the platform's unit converter
+    reads them: the same dimension at the same scale (m², M2, sqm and
+    m2 are one unit; ft2 is an area but not this one). A word the converter
+    does not know, or a value that is not text, is not a unit."""
+    from app.agents.base.formulas.construction_formulas_planning import parse_unit
+
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    ua, ub = parse_unit(a), parse_unit(b)
+    if ua is None or ub is None:
+        return False
+    return (ua.dimension, ua.scale, ua.offset) == (ub.dimension, ub.scale, ub.offset)
 
 
 @formula(
@@ -165,10 +174,14 @@ def _same_unit(a: str, b: str) -> bool:
     },
     main_output="duration_crew_days",
 )
-def production_duration(work_item: str, quantity: float, quantity_unit: str) -> dict:
+def crew_days_from_rate_row(work_item: str, quantity: float, quantity_unit: str) -> dict:
     """Duration of one template row's work: the row the caller names, its
     unit checked against the quantity's. No row is guessed from a
     description: a name that is not a row is refused with the rows listed."""
+    if not isinstance(work_item, str):
+        raise ValueError(f"the work item is the name of one planner template row, not {work_item!r}")
+    if not math.isfinite(float(quantity)):
+        raise ValueError(f"the quantity of the work item is not a finite number ({quantity!r})")
     key = _normalise_work_item(work_item)
     if key not in _BENCHMARK_KEYS:
         rows = ", ".join(item for item, *_ in template_rows())

@@ -46,7 +46,12 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "The planner template's production rate for blockwork walls: its unit, crew and what the row does not cover. Unverified template, not a project figure.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:crew_days_from_rate_row",
+        "difference": "This entry states the row; crew_days_from_rate_row turns a quantity in the row's unit into crew-days at this row's rate."
+      }
+    ]
   }
 }

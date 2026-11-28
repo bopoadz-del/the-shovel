@@ -18,7 +18,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _run(work_item, quantity, unit):
     return cf.run_calculation(
-        "production_duration",
+        "crew_days_from_rate_row",
         {"work_item": work_item, "quantity": quantity, "quantity_unit": unit})
 
 
@@ -45,7 +45,7 @@ def test_duration_is_quantity_over_the_named_rows_rate(item, qty, unit, want_day
 ])
 def test_a_quantity_in_another_unit_is_refused_naming_both(item, qty, unit):
     with pytest.raises(ValueError) as err:
-        pb.production_duration(item, qty, unit)
+        pb.crew_days_from_rate_row(item, qty, unit)
     msg = str(err.value)
     assert item in msg and "m2" in msg
     assert (unit or "no unit") in msg
@@ -60,15 +60,16 @@ def test_a_quantity_in_another_unit_is_refused_naming_both(item, qty, unit):
 ])
 def test_a_name_that_is_not_a_row_is_refused_with_the_rows_listed(item):
     with pytest.raises(ValueError) as err:
-        pb.production_duration(item, 100, "m2")
+        pb.crew_days_from_rate_row(item, 100, "m2")
     msg = str(err.value)
     assert "not a planner template row" in msg
     assert "blockwork walls" in msg and "ceiling painting common areas" in msg
 
 
 @pytest.mark.parametrize("a,b,same", [
-    ("m2", "M2", True), ("m²", "m2", True), (" m 2", "m2", True),
-    ("m3", "m2", False), ("", "", False), ("m2", "", False),
+    ("m2", "M2", True), ("m²", "m2", True), (" m 2", "m2", True), ("sqm", "m2", True),
+    ("ft2", "m2", False), ("m3", "m2", False), ("", "", False), ("m2", "", False),
+    ("crew", "crew", False), (["m2"], "m2", False), (None, "m2", False),
 ])
 def test_same_unit(a, b, same):
     assert pb._same_unit(a, b) is same
@@ -92,7 +93,7 @@ def test_every_row_is_one_knowledge_entry_with_a_catalogue_file():
 def test_the_benchmark_and_the_duration_read_the_same_row(item, rate):
     bench = pb.productivity_benchmark(item)
     assert bench["rate_per_crew_day"] == rate
-    assert pb.production_duration(item, rate * 3, "m2")["duration_crew_days"] == pytest.approx(3.0)
+    assert pb.crew_days_from_rate_row(item, rate * 3, "m2")["duration_crew_days"] == pytest.approx(3.0)
 
 
 def test_a_named_row_missing_from_the_knowledge_base_raises(monkeypatch):
@@ -121,3 +122,42 @@ def test_chain_bill_quantity_to_row_to_programme_days(qty, item, crews, want_day
         "operator": "divide", "a": crew_days, "b": crews})
     assert second["status"] == "success", second
     assert float(second["result"]["result"]) == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("item,qty,unit,want_days", [
+    ("blockwork walls", 600, "sqm", 50.0),
+    ("ceiling plaster", 400, "sq.m", 20.0),
+])
+def test_another_spelling_of_the_rows_unit_is_the_same_unit(item, qty, unit, want_days):
+    out = _run(item, qty, unit)
+    assert out["status"] == "success", out
+    assert out["result"]["duration_crew_days"] == pytest.approx(want_days)
+
+
+@pytest.mark.parametrize("args,named", [
+    (("blockwork walls", float("inf"), "m2"), "finite"),
+    (("ceiling plaster", float("-inf"), "m2"), "finite"),
+    ((["blockwork walls"], 600, "m2"), "not ['blockwork walls']"),
+    (("ceiling plaster", 600, ["m2"]), "['m2']"),
+    (("blockwork walls", 600, "ft2"), "ft2"),
+])
+def test_degenerate_inputs_are_refused_naming_the_input(args, named):
+    with pytest.raises(ValueError) as err:
+        pb.crew_days_from_rate_row(*args)
+    assert named in str(err.value)
+    item, qty, unit = args
+    out = _run(item, qty, unit)
+    if any(isinstance(v, list) and len(v) == 1 for v in args):
+        # The calculator's front door reads a one-entry list as its entry.
+        assert out["status"] == "success", out
+        assert out["result"]["duration_crew_days"] == pytest.approx(qty / pb.productivity_benchmark(
+            item[0] if isinstance(item, list) else item)["rate_per_crew_day"])
+    else:
+        assert out["status"] != "success", out
+
+
+@pytest.mark.parametrize("item", [["blockwork walls", "ceiling plaster"], ["a", "b"]])
+def test_more_than_one_row_named_is_refused(item):
+    out = _run(item, 600, "m2")
+    assert out["status"] != "success", out
+    assert "one planner template row" in str(out.get("error"))

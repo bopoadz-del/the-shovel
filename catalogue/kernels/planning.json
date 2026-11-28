@@ -21,6 +21,7 @@
       "formulas": [
         "formula:cash_flow",
         "formula:cpm_network",
+        "formula:crew_days_from_rate_row",
         "formula:crew_sizing",
         "formula:critical_path_float",
         "formula:electrical_installation_sequence",
@@ -29,7 +30,6 @@
         "formula:monte_carlo_cost_percentiles",
         "formula:monte_carlo_percentiles",
         "formula:plumbing_flow_programme",
-        "formula:production_duration",
         "formula:productivity_benchmark",
         "formula:productivity_manpower_duration",
         "formula:progress_kpi",

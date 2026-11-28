@@ -1,6 +1,6 @@
 {
   "schema": "catalogue-file/1",
-  "id": "formula:production_duration",
+  "id": "formula:crew_days_from_rate_row",
   "kind": "formula",
   "facts": {
     "name": "Production duration from a planner template row",
@@ -78,7 +78,7 @@
     "call": {
       "tool": "construction_calc",
       "arguments": {
-        "calculation": "production_duration"
+        "calculation": "crew_days_from_rate_row"
       },
       "inputs_as": "params"
     },
@@ -99,7 +99,16 @@
   },
   "hints": {
     "approved": false,
-    "purpose": "",
-    "not_to_be_confused_with": []
+    "purpose": "Crew-days for a quantity of one finishing-trade work item at a planner template row's rate. You name the row (the productivity.* knowledge entries list each row's unit, crew and what it does not cover); the calculator checks the quantity's unit against the row's.",
+    "not_to_be_confused_with": [
+      {
+        "id": "formula:productivity_benchmark",
+        "difference": "productivity_benchmark only reads a row's rate; crew_days_from_rate_row also takes the quantity and its unit, checks the unit against the row and gives the crew-days."
+      },
+      {
+        "id": "formula:productivity_manpower_duration",
+        "difference": "productivity_manpower_duration takes a rate you already have (stated in the project's documents); crew_days_from_rate_row takes the template row's rate."
+      }
+    ]
   }
 }
