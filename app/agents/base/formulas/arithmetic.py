@@ -27,11 +27,6 @@ _LOG = logging.getLogger(__name__)
 
 OPERATORS = ("add", "subtract", "multiply", "divide")
 
-#: A value's declared unit: a bare number. Its real unit is given beside it
-#: (``a_unit`` / ``b_unit``); a value written with a unit is refused and asked
-#: for by its label, so the unit goes where the arithmetic reads it.
-BARE_NUMBER = "ratio"
-
 #: The magnitude either value may have. Wide on purpose: this is plain
 #: arithmetic on figures that already passed their own formula's checks.
 _LIMIT = 1e15
@@ -132,8 +127,12 @@ def _compose(a: str, b: str, operator: str) -> str:
                  "converted to the other's unit."),
     inputs={
         "operator": Param("-", label="operator (add, subtract, multiply or divide)"),
-        "a": Param(BARE_NUMBER, -_LIMIT, _LIMIT, label="first value"),
-        "b": Param(BARE_NUMBER, -_LIMIT, _LIMIT, label="second value"),
+        # Each value's unit is its sibling's value. A unit written in the
+        # value ("10.5 d") is read at the front door: the sibling's unit ->
+        # that number; another unit of the same kind -> converted into it;
+        # another kind -> refused naming both; a blank sibling takes it.
+        "a": Param("-", -_LIMIT, _LIMIT, label="first value", unit_from="a_unit"),
+        "b": Param("-", -_LIMIT, _LIMIT, label="second value", unit_from="b_unit"),
         "a_unit": Param("-", label="unit of the first value"),
         "b_unit": Param("-", label="unit of the second value"),
     },

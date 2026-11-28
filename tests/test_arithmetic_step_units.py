@@ -171,3 +171,94 @@ def test_a_percent_step_then_a_subtraction_gives_the_net(amount, pct):
     assert steps["s1"]["result"]["value"] == pytest.approx(amount * pct / 100)
     assert steps["s2"]["result"] == {"name": "result", "value": pytest.approx(amount * (1 - pct / 100)),
                                      "unit": "currency"}
+
+
+# --- a value written with its unit inside it (the unit field is its sibling) ------
+
+def _calc(**inputs):
+    from app.lib.construction_formulas import run_calculation
+
+    return run_calculation("arithmetic_step", inputs)
+
+
+@pytest.mark.parametrize("a,unit,number,b,b_unit,op,want", [
+    ("10.32256 d", "d", 10.32256, 2, "count", "divide", 5.16128),
+    ("-2.5 m", "m", -2.5, "-4.1 m", "m", "subtract", 1.6),
+])
+def test_a_value_written_in_its_unit_fields_unit_is_that_number(a, unit, number, b, b_unit, op, want):
+    out = _calc(operator=op, a=a, b=b, a_unit=unit, b_unit=b_unit)
+    assert out["status"] == "success", out
+    assert out["result"]["result"] == pytest.approx(want)
+    assert out["result"]["method"].startswith(f"{number:g} {unit} ")
+    assert not out.get("conversions")
+
+
+@pytest.mark.parametrize("a,unit,converted", [("3 ft", "m", 0.9144), ("500 mm", "m", 0.5)])
+def test_a_value_written_in_another_unit_of_the_same_kind_is_converted(a, unit, converted):
+    out = _calc(operator="add", a=a, b=1, a_unit=unit, b_unit=unit)
+    assert out["status"] == "success", out
+    assert out["result"]["result"] == pytest.approx(converted + 1)
+    assert out["result"]["result_unit"] == unit
+    conv = out["conversions"][0]
+    assert conv["parameter"] == "a" and conv["to_unit"] == unit
+    assert conv["value_out"] == pytest.approx(converted)
+
+
+@pytest.mark.parametrize("b,unit,given_dim", [("2 kg", "m", "mass"), ("2 m2", "nr", "area")])
+def test_a_value_written_in_another_kind_is_refused_naming_both(b, unit, given_dim):
+    out = _calc(operator="add", a=1, b=b, a_unit=unit, b_unit=unit)
+    assert out["status"] == "error" and "result" not in out
+    rejected = out["rejected"][0]
+    assert rejected["parameter"] == "b" and rejected["reason"] == "wrong_unit"
+    assert rejected["given_dimension"] == given_dim
+    assert b in out["error"] and unit in out["error"]
+
+
+@pytest.mark.parametrize("sibling", ["", "-", None])
+@pytest.mark.parametrize("a,unit,number", [("10.32256 d", "d", 10.32256), ("7.5 h", "h", 7.5)])
+def test_a_blank_unit_field_takes_the_unit_written_in_the_value(sibling, a, unit, number):
+    inputs = {"operator": "divide", "a": a, "b": 3, "b_unit": "count"}
+    if sibling is not None:
+        inputs["a_unit"] = sibling
+    out = _calc(**inputs)
+    assert out["status"] == "success", out
+    assert out["result"]["result"] == pytest.approx(number / 3)
+    assert out["result"]["result_unit"] == f"{unit}/count"
+
+
+@pytest.mark.parametrize("a,unit", [(4, "d"), ("6.25", "m")])
+def test_a_bare_value_keeps_the_unit_field_as_given(a, unit):
+    out = _calc(operator="multiply", a=a, b=2, a_unit=unit, b_unit="-")
+    assert out["status"] == "success", out
+    assert out["result"]["result"] == pytest.approx(float(a) * 2)
+    assert out["result"]["result_unit"] == unit and not out.get("conversions")
+
+
+def _one_step(givens, inputs):
+    s = _sheet(givens, [{"id": "s1", "entry": "formula:arithmetic_step", "inputs": inputs}])
+    return ws.run_step(s, "s1", "c1")["steps"][0]
+
+
+@pytest.mark.parametrize("unit_field", [{"a_unit": "d"}, {"a_unit": "-"}, {}])
+@pytest.mark.parametrize("a,unit,number", [("10.32256 d", "d", 10.32256), ("-2.5 m", "m", -2.5)])
+def test_a_sheet_literal_written_with_its_unit_runs(unit_field, a, unit, number):
+    if unit_field.get("a_unit") not in (None, "-"):
+        unit_field = {"a_unit": unit}
+    step = _one_step([], {"operator": "divide", "a": a, "b": 2, "b_unit": "count", **unit_field})
+    assert step["status"] == "done", step.get("error")
+    assert step["result"] == {"name": "result", "value": pytest.approx(number / 2), "unit": f"{unit}/count"}
+
+
+@pytest.mark.parametrize("value,unit", [(10.32256, "d"), (42.0, "m")])
+def test_a_sheet_given_with_its_unit_runs(value, unit):
+    step = _one_step([{"id": "g1", "value": value, "unit": unit}],
+                     {"operator": "divide", "a": "g1", "b": 4, "b_unit": "count"})
+    assert step["status"] == "done", step.get("error")
+    assert step["result"]["value"] == pytest.approx(value / 4)
+
+
+@pytest.mark.parametrize("a,unit", [("2 kg", "m"), ("3 m2", "d")])
+def test_a_sheet_literal_of_another_kind_fails_the_step(a, unit):
+    step = _one_step([], {"operator": "add", "a": a, "b": 1, "a_unit": unit, "b_unit": unit})
+    assert step["status"] == "failed" and "result" not in step
+    assert step["error"] == "first value: wrong_unit"
