@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from scripts.storage_check import (
+    POLICY_NOT_FOUND,
     check_backup_policy,
     check_durable_store,
     check_recovery_point,
@@ -21,6 +22,10 @@ from scripts.storage_check import (
 )
 
 NOW = datetime(2026, 11, 24, 21, 0, tzinfo=timezone.utc)
+
+
+def _check_points(points, fs_id, now, limit):
+    return check_recovery_point({"RecoveryPoints": list(points)}, fs_id, now, limit)
 
 
 def _described(
@@ -104,7 +109,8 @@ def test_durable_store_fails_without_an_efs_volume(volume, mount):
     ({"BackupPolicy": {"Status": "ENABLED"}}, True),
     ({"BackupPolicy": {"Status": "DISABLED"}}, False),
     ({"BackupPolicy": {"Status": "ENABLING"}}, False),
-    (None, False),
+    (POLICY_NOT_FOUND, False),
+    (None, None),
 ])
 def test_backup_policy_must_be_enabled(policy, ok):
     _, got, detail = check_backup_policy(policy, "fs-0bbb")
@@ -115,30 +121,30 @@ def test_backup_policy_must_be_enabled(policy, ok):
 @pytest.mark.parametrize("age_h,ok", [(2, True), (25.9, True), (26.1, False), (72, False)])
 def test_recovery_point_age_is_judged_against_the_limit(age_h, ok):
     points = [_point(NOW - timedelta(hours=age_h))]
-    _, got, _ = check_recovery_point(points, "fs-0aaa", NOW, 26.0)
+    _, got, _ = _check_points(points, "fs-0aaa", NOW, 26.0)
     assert got is ok
 
 
 @pytest.mark.parametrize("limit,ok", [(1.0, False), (48.0, True)])
 def test_the_limit_is_the_callers_not_a_constant(limit, ok):
     points = [_point(NOW - timedelta(hours=10))]
-    assert check_recovery_point(points, "fs-0aaa", NOW, limit)[1] is ok
+    assert _check_points(points, "fs-0aaa", NOW, limit)[1] is ok
 
 
 @pytest.mark.parametrize("fs_id,other", [("fs-0aaa", "fs-0bbb"), ("fs-1111", "fs-2222")])
 def test_another_volumes_backups_do_not_count(fs_id, other):
     fresh_foreign = [_point(NOW - timedelta(hours=1), arn=_arn(other)) for _ in range(3)]
-    _, ok, detail = check_recovery_point(fresh_foreign, fs_id, NOW, 26.0)
+    _, ok, detail = _check_points(fresh_foreign, fs_id, NOW, 26.0)
     assert not ok
     assert "own=0" in detail and "other_volumes=3" in detail
     own = fresh_foreign + [_point(NOW - timedelta(hours=1), arn=_arn(fs_id))]
-    assert check_recovery_point(own, fs_id, NOW, 26.0)[1] is True
+    assert _check_points(own, fs_id, NOW, 26.0)[1] is True
 
 
 @pytest.mark.parametrize("status", ["PARTIAL", "EXPIRED", "DELETING"])
 def test_only_completed_points_count(status):
     points = [_point(NOW - timedelta(hours=1), status=status)]
-    assert check_recovery_point(points, "fs-0aaa", NOW, 26.0)[1] is False
+    assert _check_points(points, "fs-0aaa", NOW, 26.0)[1] is False
 
 
 def test_the_newest_completed_point_is_judged():
@@ -147,18 +153,18 @@ def test_the_newest_completed_point_is_judged():
         _point(NOW - timedelta(hours=3)),
         _point(NOW - timedelta(hours=1), status="PARTIAL"),
     ]
-    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26.0)
+    _, ok, detail = _check_points(points, "fs-0aaa", NOW, 26.0)
     assert ok
     assert "age_h=3.0" in detail
 
 
 def test_no_points_at_all_fails():
-    _, ok, detail = check_recovery_point([], "fs-0aaa", NOW, 26.0)
+    _, ok, detail = _check_points([], "fs-0aaa", NOW, 26.0)
     assert not ok and "newest=<none>" in detail
 
 
 @pytest.mark.parametrize("fs_id,policy", [
-    ("fs-0ccc", None),
+    ("fs-0ccc", POLICY_NOT_FOUND),
     ("fs-0eee", {"BackupPolicy": {"Status": "DISABLED"}}),
 ])
 def test_mounted_but_unbacked_volume_fails_only_the_backup_checks(fs_id, policy):
@@ -183,8 +189,7 @@ def test_cli_exit_zero_only_when_every_check_is_ok(tmp_path, capsys, fs_id):
     out = capsys.readouterr().out
     assert "verdict=ok failed=none" in out and fs_id in out
 
-    empty = _write(tmp_path, "empty.json", None)
-    assert main([td, "--backup-policy", empty, "--recovery-points", rp, "--now", NOW.isoformat()]) == 1
+    assert main([td, "--no-backup-policy", "--recovery-points", rp, "--now", NOW.isoformat()]) == 1
     assert "verdict=FAIL failed=backup_policy" in capsys.readouterr().out
 
 
@@ -200,8 +205,8 @@ def test_cli_unreadable_input_is_exit_two(tmp_path, content):
 @pytest.mark.parametrize("raw", ["", "yesterday", None])
 def test_an_unreadable_date_is_counted_not_trusted(raw):
     points = [{"CreationDate": raw, "Status": "COMPLETED"}]
-    _, ok, detail = check_recovery_point(points, "fs-0aaa", NOW, 26.0)
-    assert not ok
+    _, ok, detail = _check_points(points, "fs-0aaa", NOW, 26.0)
+    assert ok is None
     assert "undated=1" in detail
 
 
@@ -212,21 +217,21 @@ def test_cli_unreadable_now_is_exit_two(tmp_path, now):
 
 
 @pytest.mark.parametrize("fs_id", ["", "   "])
-def test_an_efs_volume_without_a_file_system_id_fails_the_backup_checks(fs_id):
+def test_an_efs_volume_without_a_file_system_id_is_not_checked_for_backups(fs_id):
     checks = run_checks(_described(fs_id=fs_id), {"BackupPolicy": {"Status": "ENABLED"}},
                         {"RecoveryPoints": [_point(NOW - timedelta(hours=1))]}, NOW)
     assert [(n, ok, d) for n, ok, d in checks][1:] == [
-        ("backup_policy", False, "no_file_system_id"),
-        ("recovery_point", False, "no_file_system_id"),
+        ("backup_policy", None, "not_checked=described:no_file_system_id"),
+        ("recovery_point", None, "not_checked=described:no_file_system_id"),
     ]
 
 
 @pytest.mark.parametrize("limit", [26.0, 10.0])
 def test_a_point_exactly_at_the_limit_still_counts(limit):
     at_limit = [_point(NOW - timedelta(hours=limit))]
-    assert check_recovery_point(at_limit, "fs-0aaa", NOW, limit)[1] is True
+    assert _check_points(at_limit, "fs-0aaa", NOW, limit)[1] is True
     just_over = [_point(NOW - timedelta(hours=limit, seconds=36))]
-    assert check_recovery_point(just_over, "fs-0aaa", NOW, limit)[1] is False
+    assert _check_points(just_over, "fs-0aaa", NOW, limit)[1] is False
 
 
 @pytest.mark.parametrize("age_h,code", [(25.5, 0), (27.0, 1)])
@@ -243,7 +248,7 @@ def test_the_cli_default_limit_is_one_day_plus_the_backup_window(tmp_path, age_h
 ])
 def test_a_creation_date_without_a_zone_is_read_as_utc(created, ok):
     points = [{"CreationDate": created, "Status": "COMPLETED"}]
-    assert check_recovery_point(points, "fs-0aaa", NOW, 4.0)[1] is ok
+    assert _check_points(points, "fs-0aaa", NOW, 4.0)[1] is ok
 
 
 @pytest.mark.parametrize("rw_fs,ro_fs", [("fs-0aaa", "fs-0bbb"), ("fs-1111", "fs-2222")])
@@ -340,7 +345,7 @@ def test_cli_unverified_setting_is_exit_two_and_a_failure_still_wins(tmp_path, c
     assert "verdict=FAIL failed=backup_policy" in capsys.readouterr().out
 
 
-# --- A bad input file is the checker's input fault: exit 2, never 1 (fault 2) ---
+# --- A bad input file is the checker's input fault: not checked, exit 2, never 1 ---
 
 @pytest.mark.parametrize("which", ["described", "--backup-policy", "--recovery-points"])
 @pytest.mark.parametrize("content", [[{"a": 1}], "ENABLED", 3])
@@ -356,7 +361,8 @@ def test_cli_json_that_is_not_an_object_is_exit_two(tmp_path, capsys, which, con
             "--recovery-points", paths["--recovery-points"], "--now", NOW.isoformat()]
     assert main(argv) == 2
     captured = capsys.readouterr()
-    assert "unreadable_input" in captured.err and "verdict=" not in captured.out
+    assert f"unreadable_input {which.strip('-')} not_an_object" in captured.err
+    assert "verdict=UNVERIFIED" in captured.out and "=FAIL" not in captured.out
 
 
 @pytest.mark.parametrize("blank", ["", "   \n"])
@@ -364,28 +370,33 @@ def test_cli_empty_task_definition_is_exit_two_not_a_failed_check(tmp_path, caps
     td = tmp_path / "td.json"
     td.write_text(blank, encoding="utf-8")
     assert main([str(td)]) == 2
-    assert "verdict=" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.count("not_checked=described:empty_file") == 3
+    assert "verdict=UNVERIFIED" in out and "=FAIL" not in out
 
 
 @pytest.mark.parametrize("flag", ["--backup-policy", "--recovery-points"])
-def test_cli_an_empty_optional_file_is_still_a_missing_answer(tmp_path, capsys, flag):
+def test_cli_an_empty_optional_file_is_not_checked_not_failed(tmp_path, capsys, flag):
     td = _write(tmp_path, "td.json", _described())
     empty = _write(tmp_path, "empty.json", None)
-    assert main([td, flag, empty, "--now", NOW.isoformat()]) == 1
-    assert "verdict=FAIL" in capsys.readouterr().out
+    assert main([td, flag, empty, "--now", NOW.isoformat()]) == 2
+    out = capsys.readouterr().out
+    assert f"not_checked={flag.strip('-')}:empty_file" in out
+    assert "verdict=UNVERIFIED" in out and "=FAIL" not in out
 
 
 # --- Notes: a future-dated point and the limit flag ---
 
-@pytest.mark.parametrize("ahead_h", [1, 8760])
-def test_a_recovery_point_dated_in_the_future_fails(ahead_h):
-    _, ok, detail = check_recovery_point([_point(NOW + timedelta(hours=ahead_h))], "fs-0aaa", NOW, 26)
-    assert ok is False and "age_h=-" in detail
+@pytest.mark.parametrize("ahead", [timedelta(minutes=1), timedelta(minutes=30),
+                                   timedelta(hours=1), timedelta(hours=8760)])
+def test_a_recovery_point_dated_after_now_is_not_judged(ahead):
+    _, ok, detail = _check_points([_point(NOW + ahead)], "fs-0aaa", NOW, 26)
+    assert ok is None and "ahead=1" in detail and "age_h=-" not in detail
 
 
 def test_a_point_dated_exactly_now_counts():
-    assert check_recovery_point([_point(NOW)], "fs-0aaa", NOW, 26)[1] is True
-    assert check_recovery_point([_point(NOW)], "fs-0bbb", NOW, 1)[1] is True
+    assert _check_points([_point(NOW)], "fs-0aaa", NOW, 26)[1] is True
+    assert _check_points([_point(NOW)], "fs-0bbb", NOW, 1)[1] is True
 
 
 @pytest.mark.parametrize("limit", ["inf", "nan", "-5", "0"])
@@ -411,6 +422,220 @@ def test_cli_a_finite_positive_limit_is_used(tmp_path, limit, ok):
 def test_a_recovery_point_arn_that_only_ends_in_the_id_is_another_resource(fs_id):
     suffix = fs_id.split("-", 1)[1]
     other = f"arn:aws:backup:us-west-2:000000000000:recovery-point:xfs-{suffix}"
-    _, ok, detail = check_recovery_point([_point(NOW - timedelta(hours=1), arn=other)], fs_id, NOW, 26)
+    _, ok, detail = _check_points([_point(NOW - timedelta(hours=1), arn=other)], fs_id, NOW, 26)
     assert ok is False
     assert "own=0" in detail and "other_volumes=1" in detail
+
+
+# --- Every input is read and understood, or reported not checked (S721 grade 2) ---
+
+def _cli(tmp_path, described, policy, points, *extra):
+    argv = [_write(tmp_path, "td.json", described)]
+    if policy is not None:
+        argv += ["--backup-policy", _write(tmp_path, "pol.json", policy)]
+    if points is not None:
+        argv += ["--recovery-points", _write(tmp_path, "rp.json", points)]
+    return main(argv + list(extra) + ["--now", NOW.isoformat()])
+
+
+_ENABLED = {"BackupPolicy": {"Status": "ENABLED"}}
+
+
+def _fresh(fs_id: str, hours: float = 5) -> dict:
+    return {"RecoveryPoints": [_point(NOW - timedelta(hours=hours), arn=_arn(fs_id))]}
+
+
+def _add_container(described: dict, container: dict) -> dict:
+    described["taskDefinition"]["containerDefinitions"].append(container)
+    return described
+
+
+@pytest.mark.parametrize("fs_id,sidecar", [
+    ("fs-0aaa", {"name": "log_router", "firelensConfiguration": {"type": "fluentbit"}}),
+    ("fs-0ddd", {"name": "agent", "mountPoints": [], "environment": [{"name": "X", "value": "1"}]}),
+])
+def test_a_task_with_a_sidecar_is_read_through_the_container_that_mounts_efs(tmp_path, capsys, fs_id, sidecar):
+    described = _add_container(_described(fs_id=fs_id), sidecar)
+    assert _cli(tmp_path, described, _ENABLED, _fresh(fs_id)) == 0
+    assert "verdict=ok failed=none" in capsys.readouterr().out
+    # The same task still fails a disabled policy: the sidecar does not make it pass.
+    off = {"BackupPolicy": {"Status": "DISABLED"}}
+    assert _cli(tmp_path, described, off, _fresh(fs_id)) == 1
+    assert "backup_policy=FAIL" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fs_a,fs_b", [("fs-0aaa", "fs-0bbb"), ("fs-1111", "fs-2222")])
+def test_efs_mounted_in_two_containers_is_not_judged_for_the_store(fs_a, fs_b):
+    described = _described(fs_id=fs_a)
+    taskdef = described["taskDefinition"]
+    taskdef["volumes"].append({"name": "other", "efsVolumeConfiguration": {"fileSystemId": fs_b}})
+    _add_container(described, {"name": "second", "mountPoints": [
+        {"sourceVolume": "other", "containerPath": "/srv/other", "readOnly": False}]})
+    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW)
+    assert checks == [
+        ("durable_store", None, "not_checked=described:efs_mounts=2"),
+        ("backup_policy", None, "not_checked=described:efs_file_systems=2"),
+        ("recovery_point", None, "not_checked=described:efs_file_systems=2"),
+    ]
+    # Negative: both containers on ONE file system still have its backups checked.
+    taskdef["volumes"][-1]["efsVolumeConfiguration"]["fileSystemId"] = fs_a
+    checks = run_checks(described, _ENABLED, _fresh(fs_a), NOW)
+    assert [(n, ok) for n, ok, _ in checks] == [
+        ("durable_store", None), ("backup_policy", True), ("recovery_point", True)]
+
+
+@pytest.mark.parametrize("epoch_of", [
+    lambda when: when.timestamp(),             # CLI v1 default: float seconds
+    lambda when: int(when.timestamp()),        # whole seconds
+])
+def test_an_epoch_creation_date_is_read(epoch_of):
+    fresh = [{"CreationDate": epoch_of(NOW - timedelta(hours=11.8)), "Status": "COMPLETED"}]
+    _, ok, detail = _check_points(fresh, "fs-0aaa", NOW, 26)
+    assert ok is True and "age_h=11.8" in detail and "undated=0" in detail
+    stale = [{"CreationDate": epoch_of(NOW - timedelta(hours=40)), "Status": "COMPLETED"}]
+    assert _check_points(stale, "fs-0aaa", NOW, 26)[1] is False
+
+
+@pytest.mark.parametrize("raw", [True, float("nan"), {"t": 1}, 1e300])
+def test_a_date_that_is_not_a_time_is_undated_not_failed(raw):
+    _, ok, detail = _check_points([{"CreationDate": raw, "Status": "COMPLETED"}], "fs-0aaa", NOW, 26)
+    assert ok is None and "undated=1" in detail
+
+
+@pytest.mark.parametrize("stale_h", [30, 200])
+def test_an_undated_point_beside_a_stale_one_is_not_a_fail(stale_h):
+    points = [_point(NOW - timedelta(hours=stale_h)), {"CreationDate": "soon", "Status": "COMPLETED"}]
+    _, ok, detail = _check_points(points, "fs-0aaa", NOW, 26)
+    assert ok is None and "undated=1" in detail and f"age_h={stale_h}.0" in detail
+    # Negative: only stale points, all dated, is a real fail.
+    assert _check_points(points[:1], "fs-0aaa", NOW, 26)[1] is False
+    # Negative: a fresh dated point decides, whatever else cannot be dated.
+    assert _check_points(points + [_point(NOW - timedelta(hours=2))], "fs-0aaa", NOW, 26)[1] is True
+
+
+@pytest.mark.parametrize("ahead_min", [1, 30])
+def test_a_point_after_now_does_not_hide_a_fresh_one(ahead_min):
+    points = [_point(NOW + timedelta(minutes=ahead_min)), _point(NOW - timedelta(hours=3))]
+    _, ok, detail = _check_points(points, "fs-0aaa", NOW, 26)
+    assert ok is True and "ahead=1" in detail and "age_h=3.0" in detail
+
+
+@pytest.mark.parametrize("which,content,reason", [
+    ("policy", {"BackupPolicy": ["ENABLED"]}, "backup-policy:BackupPolicy_not_an_object"),
+    ("policy", {"BackupPolicy": {"Status": 1}}, "backup-policy:Status_not_text"),
+    ("policy", {"BackupPolicy": {}}, "backup-policy:no_Status"),
+    ("points", {"RecoveryPoints": {"a": 1}}, "recovery-points:RecoveryPoints_not_a_list"),
+    ("points", {"RecoveryPoints": ["x"]}, "recovery-points:RecoveryPoints_not_an_object"),
+    ("points", {"RecoveryPoints": [{"ResourceArn": 7}]}, "recovery-points:ResourceArn_not_text"),
+])
+def test_a_wrong_shape_inside_an_input_is_not_checked_not_a_crash(tmp_path, capsys, which, content, reason):
+    fs_id = "fs-0aaa"
+    policy = content if which == "policy" else _ENABLED
+    points = content if which == "points" else _fresh(fs_id)
+    assert _cli(tmp_path, _described(fs_id=fs_id), policy, points) == 2
+    out = capsys.readouterr().out
+    assert f"not_checked={reason}" in out and "=FAIL" not in out
+    assert "durable_store=ok" in out
+
+
+@pytest.mark.parametrize("described,reason", [
+    ({"taskDefinition": None}, "taskDefinition_not_an_object"),
+    ({"taskDefinition": {"containerDefinitions": "app"}}, "containerDefinitions_not_a_list"),
+    ({"taskDefinition": {"containerDefinitions": []}}, "no_containers"),
+    ({"services": [{"serviceName": "svc"}]}, "no_task_definition"),
+    ({}, "no_task_definition"),
+])
+def test_a_described_file_that_is_not_a_task_definition_checks_nothing(tmp_path, capsys, described, reason):
+    assert _cli(tmp_path, described, _ENABLED, _fresh("fs-0aaa")) == 2
+    out = capsys.readouterr().out
+    assert out.count(f"not_checked=described:{reason}") == 3 and "=FAIL" not in out
+
+
+@pytest.mark.parametrize("mutate,reason", [
+    (lambda c: c.update(environment=[{"name": "DOCUMENT_BYTE_STORE", "value": 1}]), "environment_value_not_text"),
+    (lambda c: c.update(environment="DOCUMENT_BYTE_STORE=efs"), "environment_not_a_list"),
+    (lambda c: c.update(secrets=[{"name": ["GUARD"]}]), "secret_name_not_text"),
+])
+def test_unreadable_settings_leave_the_store_unchecked_and_backups_judged(mutate, reason):
+    described = _described(fs_id="fs-0ccc")
+    mutate(described["taskDefinition"]["containerDefinitions"][0])
+    checks = run_checks(described, _ENABLED, _fresh("fs-0ccc"), NOW)
+    assert checks[0] == ("durable_store", None, f"not_checked=described:{reason}")
+    assert [(n, ok) for n, ok, _ in checks[1:]] == [("backup_policy", True), ("recovery_point", True)]
+
+
+@pytest.mark.parametrize("flag_value", ["false", 0])
+def test_a_read_only_flag_that_is_not_a_flag_is_not_read(flag_value):
+    described = _described()
+    described["taskDefinition"]["containerDefinitions"][0]["mountPoints"][0]["readOnly"] = flag_value
+    assert check_durable_store(described) == ("durable_store", None, "not_checked=described:readOnly_not_a_flag")
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0eee"])
+def test_an_input_not_given_is_named_not_failed(tmp_path, capsys, fs_id):
+    assert _cli(tmp_path, _described(fs_id=fs_id), _ENABLED, None) == 2
+    out = capsys.readouterr().out
+    assert f"recovery_point=UNVERIFIED file_system={fs_id} not_checked=recovery-points:not_given" in out
+    assert _cli(tmp_path, _described(fs_id=fs_id), None, _fresh(fs_id)) == 2
+    out = capsys.readouterr().out
+    assert f"backup_policy=UNVERIFIED file_system={fs_id} not_checked=backup-policy:not_given" in out
+    # Negative: the CLI's PolicyNotFound answer, given as such, is a real fail.
+    assert _cli(tmp_path, _described(fs_id=fs_id), None, _fresh(fs_id), "--no-backup-policy") == 1
+    assert f"backup_policy=FAIL file_system={fs_id} status=PolicyNotFound" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0bbb"])
+def test_a_policy_file_and_policy_not_found_together_are_refused(tmp_path, fs_id):
+    with pytest.raises(SystemExit) as exc:
+        _cli(tmp_path, _described(fs_id=fs_id), _ENABLED, _fresh(fs_id), "--no-backup-policy")
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("fs_id", ["fs-0aaa", "fs-0bbb"])
+def test_swapped_policy_and_points_files_are_not_checked(tmp_path, capsys, fs_id):
+    assert _cli(tmp_path, _described(fs_id=fs_id), _fresh(fs_id), _ENABLED) == 2
+    out = capsys.readouterr().out
+    assert "not_checked=backup-policy:no_BackupPolicy" in out
+    assert "not_checked=recovery-points:no_RecoveryPoints" in out
+    assert "=FAIL" not in out
+
+
+@pytest.mark.parametrize("missing", ["described", "pol", "rp"])
+def test_a_file_that_does_not_exist_is_named(tmp_path, capsys, missing):
+    paths = {
+        "described": _write(tmp_path, "td.json", _described()),
+        "pol": _write(tmp_path, "pol.json", _ENABLED),
+        "rp": _write(tmp_path, "rp.json", _fresh("fs-0aaa")),
+    }
+    paths[missing] = str(tmp_path / "absent.json")
+    code = main([paths["described"], "--backup-policy", paths["pol"],
+                 "--recovery-points", paths["rp"], "--now", NOW.isoformat()])
+    captured = capsys.readouterr()
+    assert code == 2 and "unreadable_file_FileNotFoundError" in captured.out
+    label = {"described": "described", "pol": "backup-policy", "rp": "recovery-points"}[missing]
+    assert f"unreadable_input {label} unreadable_file_FileNotFoundError" in captured.err
+
+
+@pytest.mark.parametrize("name", ["REQUIRE_DURABLE_DOCUMENT_STORE", "DOCUMENT_BYTE_STORE"])
+def test_a_setting_that_is_both_plain_and_secret_is_unverified(name):
+    described = _described()
+    described["taskDefinition"]["containerDefinitions"][0]["secrets"] = [
+        {"name": name, "valueFrom": "arn:aws:ssm:x:0:parameter/p"}]
+    _, ok, detail = check_durable_store(described)
+    assert ok is None and f"{name}=<secret>" in detail
+    # Negative: the same task without the secret is judged on its plain value.
+    assert check_durable_store(_described())[1] is True
+
+
+@pytest.mark.parametrize("root", ["/app/data", "/srv/x"])
+def test_a_task_with_no_backend_setting_at_all_fails(root):
+    env = {"DOCUMENT_STORE_ROOT": root, "REQUIRE_DURABLE_DOCUMENT_STORE": "1"}
+    _, ok, detail = check_durable_store(_described(mount=root, env=env))
+    assert ok is False and detail == "DOCUMENT_BYTE_STORE=<unset>"
+
+
+@pytest.mark.parametrize("fs_id", ["fs-1", "fs-2"])
+def test_a_resource_arn_with_a_trailing_slash_is_still_own(fs_id):
+    point = _point(NOW - timedelta(hours=1), arn=_arn(fs_id) + "/")
+    _, ok, detail = _check_points([point], fs_id, NOW, 26)
+    assert ok is True and "own=1" in detail
